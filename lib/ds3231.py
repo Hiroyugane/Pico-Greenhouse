@@ -24,7 +24,37 @@ class RTC:
             value = '0' + str(value)
         return str(value)
 
-    def ReadTime(self, mode=0):
+    def ReadTime(self, mode: int | str = 0):
+        """
+        Read current date and time from DS3231 RTC module.
+        
+        Supports multiple output formats for flexible timestamp representation.
+        
+        Args:
+            mode: Output format mode. Supported values:
+                - 0 or None (default): Returns tuple (second, minute, hour, weekday, day, month, year)
+                - 'DIN-1355-1': Returns string 'DD.MM.YYYY' (German date format)
+                - 'DIN-1355-1+time': Returns string 'DD.MM.YYYY HH:MM:SS' (German format with time)
+                - 'ISO-8601': Returns string 'YYYY-MM-DD' (ISO date only)
+                - 'timestamp': Returns string 'YYYY-MM-DD HH:MM:SS' (ISO 8601 with time)
+                - 'time': Returns string 'HH:MM:SS' (time only)
+                - 'weekday': Returns string with weekday name (German: Montag-Sonntag)
+                - 'localtime': Returns tuple (year, month, day, hour, minute, second, weekday, yearday)
+                - 'datetime': Returns tuple (year, month, day, weekday, hour, minute, second, 0)
+        
+        Returns:
+            Tuple or string depending on mode parameter.
+            Returns 'Error: Not connected to DS3231' if I2C communication fails.
+        
+        Example:
+            >>> rtc = RTC(sda_pin=0, scl_pin=1)
+            >>> rtc.ReadTime(1)  # Numeric mode (default)
+            (45, 23, 12, 3, 14, 7, 2024)
+            >>> rtc.ReadTime('timestamp')
+            '2024-07-14 12:23:45'
+            >>> rtc.ReadTime('DIN-1355-1+time')
+            '14.07.2024 12:23:45'
+        """
         try:
             buffer = self.i2c.readfrom_mem(self.rtc_address, self.rtc_register, 7)
         except:

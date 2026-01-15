@@ -44,17 +44,180 @@ spi=SPI(1,baudrate=40000000,sck=Pin(10),mosi=Pin(11),miso=Pin(12))
 sd=sdcard.SDCard(spi,Pin(13))
 os.mount(sd,'/sd')
 
+
+class EventLogger:
+    """
+    Centralized event logging system for Pi Greenhouse.
+    
+    Logs system events to both console (stdout) and SD card file with timestamps.
+    Supports three severity levels: info, warning, error.
+    Implements buffered writes for efficiency and automatic log rotation.
+    
+    Attributes:
+        logfile (str): Path to system log file on SD card
+        max_size (int): Maximum log file size before rotation (bytes)
+        buffer (list): In-memory buffer for log entries (flushed periodically)
+        flush_count (int): Counter of successful flush operations
+    """
+    def __init__(self, logfile='/sd/system.log', max_size=50000):
+        """
+        Initialize event logger with SD card file.
+        
+        Args:
+            logfile (str): Path to log file (default: '/sd/system.log')
+            max_size (int): Max file size before rotation in bytes (default: 50000)
+        """
+        self.logfile = logfile
+        self.max_size = max_size
+        self.buffer = []
+        self.flush_count = 0
+        
+        try:
+            # Initialize log file with header if new
+            if not self._file_exists():
+                with open(self.logfile, 'w') as f:
+                    f.write('=== Pi Greenhouse System Log ===\n')
+            print(f'[EventLogger] Initialized: {self.logfile}')
+        except OSError as e:
+            print(f'[EventLogger] WARNING: Could not initialize logfile: {e}')
+    
+    def _file_exists(self):
+        try:
+            with open(self.logfile, 'r'):
+                return True
+        except OSError:
+            return False
+    
+    def _get_timestamp(self):
+        """
+        Get formatted timestamp from RTC module.
+        
+        Returns:
+            str: Formatted timestamp 'DD.MM.YYYY HH:MM:SS' or 'TIME_ERROR' if RTC fails
+        """
+        try:
+            time_tuple = rtc.ReadTime(1)  # (sec, min, hour, wday, day, mon, year)
+            return f'{time_tuple[5]:02d}.{time_tuple[4]:02d}.{time_tuple[6]} {time_tuple[2]:02d}:{time_tuple[1]:02d}:{time_tuple[0]:02d}'
+        except:
+            return 'TIME_ERROR'
+    
+    def info(self, module, message):
+        """
+        Log informational message (severity: low).
+        
+        Args:
+            module (str): Module/component name generating the log
+            message (str): Log message content
+        """
+        timestamp = self._get_timestamp()
+        log_entry = f'[{timestamp}] [INFO] [{module}] {message}\n'
+        print(log_entry.rstrip())
+        self.buffer.append(log_entry)
+        if len(self.buffer) >= 5:
+            self.flush()
+    
+    def warning(self, module, message):
+        """Log warning message"""
+        timestamp = self._get_timestamp()
+        log_entry = f'[{timestamp}] [WARN] [{module}] {message}\n'
+        print(log_entry.rstrip())
+        self.buffer.append(log_entry)
+        if len(self.buffer) >= 3:
+            self.flush()
+    
+    def error(self, module, message):
+        """Log error message"""
+        timestamp = self._get_timestamp()
+        log_entry = f'[{timestamp}] [ERR] [{module}] {message}\n'
+        print(log_entry.rstrip())
+        self.buffer.append(log_entry)
+        self.flush()  # Flush errors immediately for persistence
+    
+    def flush(self):
+        """Write all buffered log entries to SD card file."""
+        if not self.buffer:
+            return
+        try:
+            with open(self.logfile, 'a') as f:
+                for entry in self.buffer:
+                    f.write(entry)
+            self.flush_count += 1
+        except OSError as e:
+            print(f'[EventLogger] ERROR writing to logfile: {e}')
+        finally:
+            self.buffer = []
+    
+    def check_size(self):
+        """
+        Check log file size and rotate if exceeds max_size.
+        
+        Renames current log to backup and creates new log file.
+        Called periodically to prevent excessive disk usage.
+        """
+        try:
+            stat = os.stat(self.logfile)
+            if stat[6] > self.max_size:
+                backup = self.logfile.replace('.log', '_backup.log')
+                os.rename(self.logfile, backup)
+                with open(self.logfile, 'w') as f:
+                    f.write('=== Pi Greenhouse System Log (rotated) ===\n')
+                self.info('EventLogger', f'Log rotated. Backup: {backup}')
+        except OSError:
+            pass
+
+
+# Global logger instance
+logger = EventLogger()
+
+
 class DHTLogger:
-    def __init__(self, pin, interval=60, filename='dht_log.csv'):
+    """
+    DHT22 temperature/humidity sensor data logger.
+    
+    Reads DHT22 sensor on specified GPIO pin with retry logic.
+    Logs timestamped readings to CSV file on SD card.
+    Provides LED feedback for operational status.
+    
+    Attributes:
+        dht_sensor: DHT22 sensor object
+        interval (int): Logging interval in seconds
+        filename (str): CSV file path on SD card
+        max_retries (int): Number of retry attempts on sensor read failure
+        read_failures (int): Counter of failed sensor reads
+        write_failures (int): Counter of failed file writes
+    """
+    
+    def __init__(self, pin, interval=60, filename='dht_log.csv', max_retries=3):
+        """
+        Initialize DHT22 logger.
+        
+        Args:
+            pin (int): GPIO pin number for DHT22 data line
+            interval (int): Seconds between log entries (default: 60)
+            filename (str): CSV filename on SD card (default: 'dht_log.csv')
+            max_retries (int): Sensor read retry attempts (default: 3)
+            
+        Raises:
+            OSError: If SD card file initialization fails
+        """
         self.dht_sensor = dht.DHT22(machine.Pin(pin))
         self.interval = interval
-        self.filename = filename
+        self.filename = filename if filename.startswith('/sd/') else f'/sd/{filename}'
+        self.max_retries = max_retries
+        self.read_failures = 0
+        self.write_failures = 0
         
-        # Check if the file exists, if not, create it and add the header
-        if not self.file_exists():
-            self.create_file()
+        # Validate file operations at init time
+        try:
+            if not self.file_exists():
+                self.create_file()
+            logger.info('DHTLogger', f'Initialized: {self.filename}')
+        except OSError as e:
+            logger.error('DHTLogger', f'Init error: {e}')
+            raise
     
     def file_exists(self):
+        """Check if CSV log file exists on SD card."""
         try:
             with open(self.filename, 'r'):
                 return True
@@ -62,57 +225,278 @@ class DHTLogger:
             return False
     
     def create_file(self):
-        with open(self.filename, 'w') as f:
-            f.write('Timestamp,Temperature,Humidity\n')
+        """
+        Create new CSV file with standard header.
+        
+        Header format: 'Timestamp,Temperature,Humidity\n'
+        
+        Raises:
+            OSError: If file creation fails on SD card
+        """
+        try:
+            with open(self.filename, 'w') as f:
+                f.write('Timestamp,Temperature,Humidity\n')
+            logger.info('DHTLogger', f'Created CSV file: {self.filename}')
+        except OSError as e:
+            logger.error('DHTLogger', f'Failed to create file: {e}')
+            raise
+    
+    def read_sensor(self):
+        """
+        Read temperature and humidity from DHT22 sensor.
+        
+        Implements retry logic with 0.5s delay between attempts.
+        Validates readings are within sensor operational range:
+        - Temperature: -40°C to 80°C
+        - Humidity: 0% to 100%
+        
+        Returns:
+            tuple: (temperature_C, humidity_%) on success, (None, None) on failure
+        """
+        for attempt in range(self.max_retries):
+            try:
+                self.dht_sensor.measure()
+                temp = self.dht_sensor.temperature()
+                hum = self.dht_sensor.humidity()
+                
+                # Validate sensor readings are in reasonable range
+                if -40 <= temp <= 80 and 0 <= hum <= 100:
+                    return temp, hum
+                else:
+                    logger.warning('DHTLogger', f'Reading out of range: {temp}C, {hum}%')
+            except OSError as e:
+                logger.warning('DHTLogger', f'Read attempt {attempt + 1}/{self.max_retries} failed: {e}')
+                if attempt < self.max_retries - 1:
+                    time.sleep(0.5)  # Brief delay before retry
+        
+        self.read_failures += 1
+        return None, None
     
     async def log_data(self):
+        """
+        Main async coroutine for continuous sensor logging.
+        
+        Runs in infinite loop with LED feedback:
+        - 1 pulse: Reading started
+        - 2 pulses: Read successful, data logged to CSV
+        - 3 pulses (0.15s): Sensor read failed, skipping
+        - 3 rapid pulses (0.5s): Unexpected error
+        
+        Periodically checks log file size for rotation.
+        """
         led = machine.Pin(25, machine.Pin.OUT)
 
         while True:
             try:
-                led.on()
-                await asyncio.sleep(1)
-                led.off()
+                # LED: Single pulse = reading started
+                await self._led_pulse(led, count=1, duration=0.1)
 
-                self.dht_sensor.measure()
-                temp = self.dht_sensor.temperature()
-                hum = self.dht_sensor.humidity()
-                #timestamp = rtc.ReadTime('timestamp')
-                timestamp = rtc.ReadTime(1)
+                temp, hum = self.read_sensor()
+                
+                if temp is not None and hum is not None:
+                    # LED: Double pulse = read successful
+                    await self._led_pulse(led, count=2, duration=0.1)
+                    
+                    timestamp = rtc.ReadTime('timestamp') # Get current timestamp from RTC 
+                    
+                    try:
+                        with open(self.filename, 'a') as f:
+                            f.write(f'{timestamp},{temp},{hum}\n')
+                        logger.info('DHTLogger', f'Logged: {timestamp}, {temp}C, {hum}%')
+                    except OSError as e:
+                        logger.error('DHTLogger', f'Failed to write to file: {e}')
+                        self.write_failures += 1
+                else:
+                    # LED: Triple pulse = sensor read failed
+                    await self._led_pulse(led, count=3, duration=0.15)
+                    logger.warning('DHTLogger', f'Sensor read failed (total failures: {self.read_failures})')
 
-                with open(self.filename, 'a') as f:
-                    f.write(f'{timestamp},{temp},{hum}\n')
+            except Exception as e:
+                logger.error('DHTLogger', f'Unexpected error: {e}')
+                await self._led_pulse(led, count=3, duration=0.5)
 
-                print(f'Logged: {timestamp}, {temp}C, {hum}%')
-            except OSError as e:
-                print('DHT error:', e)
-
+            logger.check_size()
             await asyncio.sleep(self.interval)
+    
+    async def _led_pulse(self, led, count=1, duration=0.1):
+        """
+        Non-blocking LED pulse pattern (async-safe).
+        
+        Produces distinct patterns for different operational states.
+        Each pulse is: ON for duration, OFF for duration.
+        
+        Args:
+            led: GPIO Pin object for LED
+            count (int): Number of pulses (default: 1)
+            duration (float): ON/OFF time per pulse in seconds (default: 0.1)
+        """
+        for _ in range(count):
+            led.on()
+            await asyncio.sleep(duration)
+            led.off()
+            await asyncio.sleep(duration)
+
 
 async def fan_control(pin_no, on_time=20, period=1800):
-    relay = Pin(pin_no, Pin.OUT)
-    relay.value(1)  # Relais AUS (HIGH)
-    print(f'Starting fan_control')
-
-    while True:
-        relay.value(0)      # Relais EIN (LOW)
-        await asyncio.sleep(on_time)
+    """
+    Async coroutine for automatic fan control via relay.
+    
+    Implements cyclic relay control with configurable duty cycle.
+    - Validates timing parameters (on_time > 0, period > 0, on_time <= period)
+    - Logs cycle start/stop events with cycle counter
+    - Handles relay GPIO failures gracefully with error recovery
+    - Supports clean shutdown via CancelledError
+    
+    Relay logic (inverted GPIO):
+    - relay.value(0) = LOW → Relais EIN (relay ON, fan running)
+    - relay.value(1) = HIGH → Relais AUS (relay OFF, fan stopped)
+    
+    Args:
+        pin_no (int): GPIO pin number for relay control (default: 16)
+        on_time (int): Fan ON duration in seconds (default: 20)
+        period (int): Total cycle duration in seconds (default: 1800 = 30min)
         
-        relay.value(1)      # Relais AUS
-        await asyncio.sleep(period)
+    Example:
+        # Fan runs 20 seconds, off 10 seconds, repeats 30s cycle
+        asyncio.create_task(fan_control(pin_no=16, on_time=20, period=30))
+    """
+    # Validate parameters
+    if on_time <= 0 or period <= 0:
+        logger.error('FanControl', f'Invalid timing: on_time={on_time}s, period={period}s')
+        return
+    if on_time > period:
+        logger.warning('FanControl', f'on_time ({on_time}s) > period ({period}s), clamping')
+        on_time = period
+    
+    off_time = period - on_time
+    cycle_count = 0
+    
+    try:
+        relay = Pin(pin_no, Pin.OUT)
+        relay.value(1)
+        logger.info('FanControl', f'Initialized: pin={pin_no}, on={on_time}s, period={period}s')
+    except Exception as e:
+        logger.error('FanControl', f'Failed to initialize relay on pin {pin_no}: {e}')
+        return
+    
+    while True:
+        try:
+            cycle_count += 1
+            
+            try:
+                relay.value(0)
+                logger.info('FanControl', f'Cycle {cycle_count}: Relay ON ({on_time}s)')
+            except Exception as e:
+                logger.error('FanControl', f'Cycle {cycle_count}: Failed to turn ON: {e}')
+                await asyncio.sleep(1)
+                continue
+            
+            await asyncio.sleep(on_time)
+            
+            try:
+                relay.value(1)
+                logger.info('FanControl', f'Cycle {cycle_count}: Relay OFF ({off_time}s)')
+            except Exception as e:
+                logger.error('FanControl', f'Cycle {cycle_count}: Failed to turn OFF: {e}')
+                await asyncio.sleep(1)
+                continue
+            
+            await asyncio.sleep(off_time)
+            
+        except asyncio.CancelledError:
+            logger.warning('FanControl', f'Cancelled at cycle {cycle_count}')
+            relay.value(1)
+            raise
+        except Exception as e:
+            logger.error('FanControl', f'Cycle {cycle_count}: Unexpected error: {e}')
+            await asyncio.sleep(1)
 
 
-# Example usage
+async def growlight_control(pin_no, dawn_time=(6, 0), sunset_time=(22, 0)):
+    """
+    Async coroutine for time-based grow light control.
+    
+    Controls lighting relay based on dawn/sunset times from RTC.
+    Provides automatic power-loss recovery (resumes correct state after reboot).
+    Checks time every 60 seconds and updates state as needed.
+    
+    Relay logic (inverted GPIO):
+    - light.value(0) = LOW → Relais EIN (relay ON, light ON)
+    - light.value(1) = HIGH → Relais AUS (relay OFF, light OFF)
+    
+    Args:
+        pin_no (int): GPIO pin number for grow light relay (default: 17)
+        dawn_time (tuple): (hour, minute) when light turns ON (default: 6:00 AM)
+        sunset_time (tuple): (hour, minute) when light turns OFF (default: 22:00 PM)
+        
+    Example:
+        # Light ON 5:30 AM to 9:30 PM
+        asyncio.create_task(growlight_control(pin_no=17, dawn_time=(5,30), sunset_time=(21,30)))
+    """
+    light = Pin(pin_no, Pin.OUT)
+    light.value(1)
+    logger.info('Growlight', f'Initialized: pin={pin_no}, dawn={dawn_time}, sunset={sunset_time}')
+    
+    last_state = None
+    
+    while True:
+        try:
+            # Get current time from RTC
+            time_tuple = rtc.ReadTime(1)  # (second, minute, hour, weekday, day, month, year)
+            current_hour = int(time_tuple[2])
+            current_minute = int(time_tuple[1])
+            current_time = (current_hour, current_minute)
+            
+            # Convert times to minutes for easier comparison
+            dawn_h, dawn_m = dawn_time
+            sunset_h, sunset_m = sunset_time
+            current_minutes = current_hour * 60 + current_minute
+            dawn_minutes = dawn_h * 60 + dawn_m
+            sunset_minutes = sunset_h * 60 + sunset_m
+            
+            # Determine if light should be ON (between dawn and sunset)
+            should_be_on = dawn_minutes <= current_minutes < sunset_minutes
+            
+            # Apply state change if needed (including power-loss recovery)
+            if should_be_on != last_state:
+                if should_be_on:
+                    light.value(0)
+                    logger.info('Growlight', f'ON at {current_time}')
+                else:
+                    light.value(1)
+                    logger.info('Growlight', f'OFF at {current_time}')
+                last_state = should_be_on
+            
+            await asyncio.sleep(60)  # Check every minute
+            
+        except Exception as e:
+            logger.error('Growlight', f'Unexpected error: {e}')
+            await asyncio.sleep(1)
+
+
 async def main():
-    # DHT22 connected to GPIO 14, log data every 60 seconds
-    logger = DHTLogger(pin=15, interval=30, filename='/sd/dht_log.csv')
+    """
+    Main async entry point for Pi Greenhouse system.
+    
+    Initializes all concurrent tasks:
+    - DHTLogger.log_data(): Temperature/humidity logging (every 30s)
+    - fan_control(): Automatic fan relay cycling
+    - growlight_control(): Time-based grow light control
+    
+    Maintains event loop with minimal sleep between iterations.
+    All tasks run concurrently via uasyncio event loop.
+    """
+    logger.info('Main', 'System startup')
+    dht_logger = DHTLogger(pin=15, interval=30, filename='/sd/dht_log.csv')
 
-    asyncio.create_task(logger.log_data())
+    asyncio.create_task(dht_logger.log_data())
     asyncio.create_task(fan_control(pin_no=16))
+    asyncio.create_task(growlight_control(pin_no=17, dawn_time=(6, 0), sunset_time=(22, 0)))
 
     while True:
         await asyncio.sleep(1)
-# Running the asyncio event loop
+
+
 if __name__ == '__main__':
     asyncio.run(main())
 

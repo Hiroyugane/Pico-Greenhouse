@@ -68,6 +68,14 @@ Fan Thermostat Logic → Relay GPIO → Physical fan
 - `sdcard` module: SD card driver for SPI interface
 - `dht`, `machine`, `uasyncio`: MicroPython core libraries
 
+## RTC Time Format Modes
+
+The `ds3231.ReadTime()` method supports multiple output modes:
+- **String Formats**: `'DIN-1355-1'` (DD.MM.YYYY), `'DIN-1355-1+time'` (DD.MM.YYYY HH:MM:SS), `'ISO-8601'`, `'time'`, `'weekday'`, `'timestamp'`
+- **Tuple Formats**: `'localtime'`, `'datetime'`, `'weekday'`
+- **Numeric Mode** (default/1): Returns raw tuple `(second, minute, hour, weekday, day, month, year)`
+- **Current Usage**: `main.py` uses `ReadTime(1)` for numeric format; conversion may be needed for CSV output
+
 ## Project-Specific Notes
 
 - **Language**: MicroPython (not standard Python — no f-string formatting in some contexts, limited memory)
@@ -75,11 +83,20 @@ Fan Thermostat Logic → Relay GPIO → Physical fan
 - **Author**: Dennis Hiro (2024-06-08)
 - **Data Persistence**: All logging persists to physical SD card; no cloud sync
 - **Multilingual Comments**: Code contains German comments (relay states, debug messages) — preserve when editing
+- **Known Issues**: Check `fan_control()` loop completion; ensure relay timing logic is fully implemented
 
 ## Common Tasks for Agents
 
 1. **Adding a new sensor**: Create async method in new task, mount appropriate I2C/SPI interface
-2. **Tuning fan timing**: Modify `on_time` and `period` parameters in `fan_control()` call
-3. **Changing logging interval**: Update `DHTLogger` instantiation `interval` parameter (seconds)
+2. **Tuning fan timing**: Modify `on_time` and `period` parameters in `fan_control()` call (default: 20s on, 1800s total cycle)
+3. **Changing logging interval**: Update `DHTLogger` instantiation `interval` parameter (seconds, default 30s in main.py)
 4. **Debugging sensor failures**: Check GPIO wiring against pin map, verify I2C/SPI initialization
 5. **SD card issues**: Ensure `/sd` mount succeeds; check `os.mount()` before file operations
+6. **Timestamp formatting**: When modifying CSV logging, consider switching from `ReadTime(1)` to `ReadTime('timestamp')` for ISO-8601 format
+
+## Key File Reference
+
+- [main.py](main.py): Entry point with `DHTLogger` class and async tasks (logger, fan control)
+- [rtc_set_time.py](rtc_set_time.py): One-time setup script using Zeller's Congruence & BCD conversion
+- [lib/ds3231.py](lib/ds3231.py): RTC driver with multiple time format modes (8 supported formats)
+- [lib/sdcard.py](lib/sdcard.py): SPI-based SD card filesystem driver (310 lines, third-party library)

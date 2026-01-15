@@ -1,6 +1,6 @@
 import machine
 import time
-import ds3231
+import lib.ds3231 as ds3231
 
 rtc = ds3231.RTC(sda_pin=0, scl_pin=1)
 rtc_time = rtc.ReadTime('DIN-1355-1+time')

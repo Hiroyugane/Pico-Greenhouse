@@ -34,7 +34,7 @@ import dht
 import machine
 import time
 import os
-import ds3231
+import lib.ds3231 as ds3231
 from machine import Pin, SPI
 from lib import sdcard
 

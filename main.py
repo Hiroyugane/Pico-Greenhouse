@@ -308,7 +308,7 @@ class DHTLogger:
                         self.write_failures += 1
                 else:
                     # LED: Triple pulse = sensor read failed
-                    await self._led_pulse(led, count=3, duration=0.15)
+                    await self._led_pulse(led, count=5, duration=1)
                     logger.warning('DHTLogger', f'Sensor read failed (total failures: {self.read_failures})')
 
             except Exception as e:
@@ -490,7 +490,7 @@ async def main():
     dht_logger = DHTLogger(pin=15, interval=30, filename='/sd/dht_log.csv')
 
     asyncio.create_task(dht_logger.log_data())
-    asyncio.create_task(fan_control(pin_no=16))
+    asyncio.create_task(fan_control(pin_no=16, on_time=20, period=1800))
     asyncio.create_task(growlight_control(pin_no=17, dawn_time=(6, 0), sunset_time=(22, 0)))
 
     while True:

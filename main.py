@@ -77,6 +77,7 @@ class DHTLogger:
                 self.dht_sensor.measure()
                 temp = self.dht_sensor.temperature()
                 hum = self.dht_sensor.humidity()
+                #timestamp = rtc.ReadTime('timestamp')
                 timestamp = rtc.ReadTime(1)
 
                 with open(self.filename, 'a') as f:

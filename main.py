@@ -39,10 +39,27 @@ from machine import Pin, SPI
 from lib import sdcard
 
 
+# Initialize RTC
 rtc = ds3231.RTC(sda_pin=0, scl_pin=1)
+
+# Initialize SD Card with error handling
 spi=SPI(1,baudrate=40000000,sck=Pin(10),mosi=Pin(11),miso=Pin(12))
 sd=sdcard.SDCard(spi,Pin(13))
-os.mount(sd,'/sd')
+try:
+    os.mount(sd,'/sd')
+    sd_mounted = True
+    print('[STARTUP] SD card mounted successfully')
+except OSError as e:
+    sd_mounted = False
+    # Blink LED 3 times to indicate SD card error
+    led = machine.Pin(25, machine.Pin.OUT)
+    for _ in range(3):
+        led.on()
+        time.sleep(0.3)
+        led.off()
+        time.sleep(0.3)
+    print(f'[STARTUP ERROR] Failed to mount SD card: {e}')
+    print('[STARTUP ERROR] Please insert SD card and restart the device.')
 
 
 class EventLogger:
@@ -392,7 +409,6 @@ class DHTLogger:
                         try:
                             with open(self.filename, 'a') as f:
                                 f.write(f'{timestamp},{temp:.1f},{hum:.1f}\n')
-                            logger.info('DHTLogger', f'Logged: {timestamp}, {temp}C, {hum}%')
                             sd_was_available = True
                         except OSError as e:
                             logger.error('DHTLogger', f'Failed to write to file: {e}')
@@ -589,6 +605,11 @@ async def main():
     Maintains event loop with minimal sleep between iterations.
     All tasks run concurrently via uasyncio event loop.
     """
+    if not sd_mounted:
+        logger.error('Main', 'SD card not mounted. System cannot start.')
+        logger.error('Main', 'Please insert SD card and restart the device.')
+        return
+    
     logger.info('Main', 'System startup')
     dht_logger = DHTLogger(pin=15, interval=30, filename='/sd/dht_log.csv')
 

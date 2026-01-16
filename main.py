@@ -245,13 +245,14 @@ class DHTLogger:
         """
         Check if SD card is accessible without blocking.
         
-        Performs minimal filesystem operation to detect disconnection.
+        Performs actual file access operation to detect physical disconnection.
+        Uses listdir() instead of just stat() to catch removed cards.
         
         Returns:
             bool: True if SD card is mounted and accessible, False otherwise
         """
         try:
-            os.stat('/sd')
+            os.listdir('/sd')
             return True
         except OSError:
             return False

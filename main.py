@@ -76,7 +76,7 @@ class EventLogger:
         buffer (list): In-memory buffer for log entries (flushed periodically)
         flush_count (int): Counter of successful flush operations
     """
-    def __init__(self, logfile='/sd/system.log', max_size=50000):
+    def __init__(self, logfile='/system.log', max_size=50000):
         """
         Initialize event logger with SD card file.
         
@@ -245,14 +245,18 @@ class DHTLogger:
         """
         Check if SD card is accessible without blocking.
         
-        Performs actual file access operation to detect physical disconnection.
-        Uses listdir() instead of just stat() to catch removed cards.
+        Performs actual write/delete I/O operation to detect physical disconnection.
+        Tests SD card availability independent of whether the CSV file exists.
         
         Returns:
             bool: True if SD card is mounted and accessible, False otherwise
         """
         try:
-            os.listdir('/sd')
+            # Try temporary write to force actual hardware I/O
+            test_file = '/sd/.test'
+            with open(test_file, 'w') as f:
+                f.write('')
+            os.remove(test_file)
             return True
         except OSError:
             return False

@@ -172,10 +172,11 @@ logger = EventLogger()
 
 class DHTLogger:
     """
-    DHT22 temperature/humidity sensor data logger.
+    DHT22 temperature/humidity sensor data logger with SD card hot-swap support.
     
     Reads DHT22 sensor on specified GPIO pin with retry logic.
     Logs timestamped readings to CSV file on SD card.
+    Implements in-memory buffering when SD card is unavailable.
     Provides LED feedback for operational status.
     
     Attributes:
@@ -183,19 +184,23 @@ class DHTLogger:
         interval (int): Logging interval in seconds
         filename (str): CSV file path on SD card
         max_retries (int): Number of retry attempts on sensor read failure
+        buffer (list): In-memory buffer for readings when SD unavailable
+        max_buffer_size (int): Maximum readings to buffer (overflow protection)
         read_failures (int): Counter of failed sensor reads
         write_failures (int): Counter of failed file writes
+        sd_disconnected_count (int): Counter of SD card unavailability events
     """
     
-    def __init__(self, pin, interval=60, filename='dht_log.csv', max_retries=3):
+    def __init__(self, pin, interval=60, filename='dht_log.csv', max_retries=3, max_buffer_size=200):
         """
-        Initialize DHT22 logger.
+        Initialize DHT22 logger with hot-swap SD card support.
         
         Args:
             pin (int): GPIO pin number for DHT22 data line
             interval (int): Seconds between log entries (default: 60)
             filename (str): CSV filename on SD card (default: 'dht_log.csv')
             max_retries (int): Sensor read retry attempts (default: 3)
+            max_buffer_size (int): Max readings to buffer in-memory (default: 200)
             
         Raises:
             OSError: If SD card file initialization fails
@@ -204,17 +209,35 @@ class DHTLogger:
         self.interval = interval
         self.filename = filename if filename.startswith('/sd/') else f'/sd/{filename}'
         self.max_retries = max_retries
+        self.max_buffer_size = max_buffer_size
+        self.buffer = []  # In-memory buffer for SD-unavailable periods
         self.read_failures = 0
         self.write_failures = 0
+        self.sd_disconnected_count = 0
         
         # Validate file operations at init time
         try:
             if not self.file_exists():
                 self.create_file()
-            logger.info('DHTLogger', f'Initialized: {self.filename}')
+            logger.info('DHTLogger', f'Initialized: {self.filename} (buffer_size={max_buffer_size})')
         except OSError as e:
             logger.error('DHTLogger', f'Init error: {e}')
             raise
+    
+    def _is_sd_available(self):
+        """
+        Check if SD card is accessible without blocking.
+        
+        Performs minimal filesystem operation to detect disconnection.
+        
+        Returns:
+            bool: True if SD card is mounted and accessible, False otherwise
+        """
+        try:
+            os.stat('/sd')
+            return True
+        except OSError:
+            return False
     
     def file_exists(self):
         """Check if CSV log file exists on SD card."""
@@ -272,19 +295,76 @@ class DHTLogger:
         self.read_failures += 1
         return None, None
     
+    def _add_to_buffer(self, timestamp, temp, hum):
+        """
+        Add reading to in-memory buffer when SD card unavailable.
+        
+        Implements overflow protection by removing oldest entry if buffer full.
+        
+        Args:
+            timestamp (str): Timestamp string from RTC
+            temp (float): Temperature reading in Celsius
+            hum (float): Humidity reading in percentage
+        """
+        self.buffer.append((timestamp, temp, hum))
+        
+        if len(self.buffer) > self.max_buffer_size:
+            removed = self.buffer.pop(0)
+            logger.warning('DHTLogger', f'Buffer overflow: dropped oldest entry {removed[0]}')
+    
+    async def _flush_buffer(self):
+        """
+        Flush all buffered readings to SD card file.
+        
+        Called when SD card becomes available after disconnection.
+        Writes all buffered entries in order, then clears buffer.
+        Logs summary of flush operation.
+        
+        Returns:
+            bool: True if flush successful, False if SD still unavailable
+        """
+        if not self.buffer:
+            return True
+        
+        if not self._is_sd_available():
+            return False
+        
+        buffered_count = len(self.buffer)
+        
+        try:
+            with open(self.filename, 'a') as f:
+                for timestamp, temp, hum in self.buffer:
+                    f.write(f'{timestamp},{temp:.1f},{hum:.1f}\n')
+            
+            logger.info('DHTLogger', f'Buffer flushed: {buffered_count} entries written to SD')
+            self.buffer = []
+            return True
+            
+        except OSError as e:
+            logger.error('DHTLogger', f'Failed to flush buffer: {e}')
+            self.write_failures += 1
+            return False
+    
     async def log_data(self):
         """
-        Main async coroutine for continuous sensor logging.
+        Main async coroutine for continuous sensor logging with SD hot-swap support.
         
         Runs in infinite loop with LED feedback:
         - 1 pulse: Reading started
-        - 2 pulses: Read successful, data logged to CSV
+        - 2 pulses: Read successful, data logged to CSV or buffered
         - 3 pulses (0.15s): Sensor read failed, skipping
-        - 3 rapid pulses (0.5s): Unexpected error
+        - 4 pulses (0.2s): SD card disconnected, buffering
+        - 5 pulses (0.2s): Buffer flushed successfully
         
-        Periodically checks log file size for rotation.
+        SD Card Hot-Swap Behavior:
+        - If SD unavailable: readings stored in in-memory buffer
+        - If SD becomes available: automatic flush of buffered data
+        - If buffer full: oldest entries discarded with warning
+        
+        Periodically checks log file size for rotation and SD card availability.
         """
         led = machine.Pin(25, machine.Pin.OUT)
+        sd_was_available = True
 
         while True:
             try:
@@ -297,18 +377,41 @@ class DHTLogger:
                     # LED: Double pulse = read successful
                     await self._led_pulse(led, count=2, duration=0.1)
                     
-                    timestamp = rtc.ReadTime('timestamp') # Get current timestamp from RTC 
+                    timestamp = rtc.ReadTime('timestamp')
                     
-                    try:
-                        with open(self.filename, 'a') as f:
-                            f.write(f'{timestamp},{temp},{hum}\n')
-                        logger.info('DHTLogger', f'Logged: {timestamp}, {temp}C, {hum}%')
-                    except OSError as e:
-                        logger.error('DHTLogger', f'Failed to write to file: {e}')
-                        self.write_failures += 1
+                    # Check SD availability
+                    sd_available = self._is_sd_available()
+                    
+                    if sd_available:
+                        # SD is accessible: write directly and flush any buffered data
+                        if not sd_was_available and self.buffer:
+                            # SD reconnected: flush buffer first
+                            await self._flush_buffer()
+                            await self._led_pulse(led, count=5, duration=0.2)
+                        
+                        try:
+                            with open(self.filename, 'a') as f:
+                                f.write(f'{timestamp},{temp:.1f},{hum:.1f}\n')
+                            logger.info('DHTLogger', f'Logged: {timestamp}, {temp}C, {hum}%')
+                            sd_was_available = True
+                        except OSError as e:
+                            logger.error('DHTLogger', f'Failed to write to file: {e}')
+                            self.write_failures += 1
+                            sd_was_available = False
+                    else:
+                        # SD disconnected: buffer the reading
+                        if sd_was_available:
+                            # First disconnection event
+                            self.sd_disconnected_count += 1
+                            logger.warning('DHTLogger', f'SD card disconnected (event #{self.sd_disconnected_count})')
+                            sd_was_available = False
+                        
+                        self._add_to_buffer(timestamp, temp, hum)
+                        await self._led_pulse(led, count=4, duration=0.2)
+                        logger.info('DHTLogger', f'Buffered (SD unavailable): {timestamp}, {temp}C, {hum}% [buffer_size={len(self.buffer)}]')
                 else:
                     # LED: Triple pulse = sensor read failed
-                    await self._led_pulse(led, count=5, duration=1)
+                    await self._led_pulse(led, count=3, duration=0.15)
                     logger.warning('DHTLogger', f'Sensor read failed (total failures: {self.read_failures})')
 
             except Exception as e:

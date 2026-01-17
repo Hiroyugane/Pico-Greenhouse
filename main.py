@@ -701,6 +701,19 @@ async def growlight_control(pin_no, dawn_time=(6, 0), sunset_time=(22, 0)):
             logger.error('Growlight', f'Unexpected error: {e}')
             await asyncio.sleep(1)
 
+def print_time():
+    """
+    Print current time from RTC module in formatted string.
+    
+    Output format: 'HH:MM:SS'
+    Returns 'TIME_ERROR' if RTC read fails.
+    """
+    try:
+        time_tuple = rtc.ReadTime(1)  # (sec, min, hour, weekday, day, month, year)
+        return f'{time_tuple[2]:02d}:{time_tuple[1]:02d}:{time_tuple[0]:02d}'
+    except Exception as e:
+        logger.error('PrintTime', f'Failed to read RTC: {e}')
+        return 'TIME_ERROR'
 
 async def main():
     """
@@ -730,6 +743,7 @@ async def main():
 
     while True:
         await asyncio.sleep(1)
+
 
 
 if __name__ == '__main__':

@@ -228,6 +228,8 @@ class DHTLogger:
         self.max_retries = max_retries
         self.max_buffer_size = max_buffer_size
         self.buffer = []  # In-memory buffer for SD-unavailable periods
+        self.last_temperature = None  # Cache last temperature reading
+        self.last_humidity = None  # Cache last humidity reading
         self.read_failures = 0
         self.write_failures = 0
         self.sd_disconnected_count = 0
@@ -399,6 +401,10 @@ class DHTLogger:
                     # LED: Double pulse = read successful
                     await self._led_pulse(led, count=2, duration=0.1)
                     
+                    # Cache temperature for thermostat queries
+                    self.last_temperature = temp
+                    self.last_humidity = hum
+                    
                     timestamp = rtc.ReadTime('timestamp')
                     
                     # Check SD availability
@@ -514,25 +520,8 @@ async def fan_control(dht_logger, pin_no, on_time=20, period=1800, max_temp=24.0
     
     while True:
         try:
-            # Check current temperature for thermostat override
-            current_temp = None
-            try:
-                if dht_logger._is_sd_available():
-                    with open(dht_logger.filename, 'r') as f:
-                        lines = f.readlines()
-                        if len(lines) > 1:  # Skip header
-                            last_line = lines[-1].strip()
-                            parts = last_line.split(',')
-                            if len(parts) >= 2:
-                                current_temp = float(parts[1])
-                                last_temp = current_temp
-                elif dht_logger.buffer:
-                    current_temp = dht_logger.buffer[-1][1]
-                    last_temp = current_temp
-                else:
-                    current_temp = last_temp
-            except (ValueError, OSError):
-                current_temp = last_temp
+            # Get current temperature from DHTLogger's cached value (memory efficient)
+            current_temp = dht_logger.last_temperature
             
             # Thermostat logic with priority over periodic schedule
             if current_temp is not None:
@@ -565,20 +554,8 @@ async def fan_control(dht_logger, pin_no, on_time=20, period=1800, max_temp=24.0
                 
                 await asyncio.sleep(on_time)
                 
-                # Re-check temperature before turning off
-                try:
-                    if dht_logger._is_sd_available():
-                        with open(dht_logger.filename, 'r') as f:
-                            lines = f.readlines()
-                            if len(lines) > 1:
-                                last_line = lines[-1].strip()
-                                parts = last_line.split(',')
-                                if len(parts) >= 2:
-                                    current_temp = float(parts[1])
-                    elif dht_logger.buffer:
-                        current_temp = dht_logger.buffer[-1][1]
-                except (ValueError, OSError):
-                    pass
+                # Re-check cached temperature before turning off
+                current_temp = dht_logger.last_temperature
                 
                 # If temperature reached threshold, activate thermostat instead of continuing periodic off
                 if current_temp is not None and current_temp >= max_temp:

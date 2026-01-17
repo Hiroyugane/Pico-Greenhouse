@@ -1,12 +1,10 @@
-import machine
-import time
+import asyncio
 import lib.ds3231 as ds3231
+import time 
 
 rtc = ds3231.RTC(sda_pin=0, scl_pin=1)
 rtc_time = rtc.ReadTime('DIN-1355-1+time') # type: ignore
 print('Alt:', rtc_time)
-
-import time
 
 def dec_to_bcd(val):
     return (val // 10) << 4 | (val % 10)
@@ -47,6 +45,7 @@ time_data = bytes([
 # Angenommen rtc.SetTime() ist eine Methode des RTC-Chips
 rtc.SetTime(time_data)
 
+time.sleep(2)  # Kurze Pause, um sicherzustellen, dass die Zeit gesetzt wurde
 print('Neu:', rtc_time)
 print('current Time:', time.localtime())
 print("Zeit erfolgreich auf RTC-Chip gesetzt.")

@@ -536,6 +536,110 @@ async def fan_control(pin_no, on_time=20, period=1800):
             await asyncio.sleep(1)
 
 
+async def fan_thermostat_control(dht_logger, pin_no, max_temp=24.0, temp_hysteresis=1.0, check_interval=5):
+    """
+    Async coroutine for temperature-based fan thermostat control.
+    
+    Monitors temperature readings and automatically turns on the fan when
+    maximum temperature threshold is reached. Fan remains on until temperature
+    drops by at least the hysteresis threshold, preventing fan chatter.
+    
+    Thermostat Logic:
+    - Compares latest temperature reading from DHTLogger to max_temp threshold
+    - ON condition: temp >= max_temp → relay.value(0) = LOW (fan running)
+    - OFF condition: temp < (max_temp - hysteresis) → relay.value(1) = HIGH (fan off)
+    - Hysteresis prevents rapid cycling at threshold boundary
+    
+    Relay logic (inverted GPIO):
+    - relay.value(0) = LOW → Relais EIN (relay ON, fan running)
+    - relay.value(1) = HIGH → Relais AUS (relay OFF, fan stopped)
+    
+    Args:
+        dht_logger (DHTLogger): DHTLogger instance to read current temperature
+        pin_no (int): GPIO pin number for relay control (default: 16)
+        max_temp (float): Temperature threshold to trigger fan ON in °C (default: 28)
+        temp_hysteresis (float): Temperature drop required to turn fan OFF in °C (default: 1.0)
+        check_interval (int): Interval between temperature checks in seconds (default: 5)
+        
+    Attributes:
+        last_temp (float): Last successfully read temperature for threshold comparison
+        fan_active (bool): Current fan state (True=running, False=stopped)
+        on_count (int): Counter of times fan turned ON
+        off_count (int): Counter of times fan turned OFF
+        
+    Example:
+        # Fan turns ON when temp >= 28°C, OFF when temp < 27°C
+        asyncio.create_task(fan_thermostat_control(dht_logger, pin_no=16, max_temp=28, temp_hysteresis=1.0))
+    """
+    try:
+        relay = Pin(pin_no, Pin.OUT)
+        relay.value(1)  # Initialize relay to OFF
+        logger.info('FanThermostat', f'Initialized: pin={pin_no}, max={max_temp}°C, hysteresis={temp_hysteresis}°C, interval={check_interval}s')
+    except Exception as e:
+        logger.error('FanThermostat', f'Failed to initialize relay on pin {pin_no}: {e}')
+        return
+    
+    fan_active = False
+    on_count = 0
+    off_count = 0
+    last_temp = None
+    
+    while True:
+        try:
+            # Get latest temperature from DHTLogger's internal state
+            # by reading the most recent CSV entry
+            try:
+                if dht_logger._is_sd_available():
+                    with open(dht_logger.filename, 'r') as f:
+                        lines = f.readlines()
+                        if len(lines) > 1:  # Skip header
+                            last_line = lines[-1].strip()
+                            parts = last_line.split(',')
+                            if len(parts) >= 2:
+                                current_temp = float(parts[1])
+                                last_temp = current_temp
+                        else:
+                            current_temp = last_temp
+                    
+                # If SD unavailable, check DHTLogger's buffer for latest reading
+                elif dht_logger.buffer:
+                    current_temp = dht_logger.buffer[-1][1]  # Get latest buffered temp
+                    last_temp = current_temp
+                else:
+                    current_temp = last_temp
+                
+                if current_temp is not None:
+                    # Thermostat logic with hysteresis
+                    if not fan_active and current_temp >= max_temp:
+                        # Temperature threshold reached: turn fan ON
+                        fan_active = True
+                        on_count += 1
+                        relay.value(0)
+                        logger.info('FanThermostat', f'FAN ON: Temp {current_temp}°C >= {max_temp}°C (activation #{on_count})')
+                    
+                    elif fan_active and current_temp < (max_temp - temp_hysteresis):
+                        # Temperature dropped below threshold: turn fan OFF
+                        fan_active = False
+                        off_count += 1
+                        relay.value(1)
+                        logger.info('FanThermostat', f'FAN OFF: Temp {current_temp}°C < {max_temp - temp_hysteresis}°C (deactivation #{off_count})')
+            
+            except ValueError as e:
+                logger.warning('FanThermostat', f'Failed to parse temperature data: {e}')
+            except OSError as e:
+                logger.warning('FanThermostat', f'Failed to read temperature data: {e}')
+            
+            await asyncio.sleep(check_interval)
+        
+        except asyncio.CancelledError:
+            logger.warning('FanThermostat', f'Cancelled (activations={on_count}, deactivations={off_count})')
+            relay.value(1)  # Ensure fan is OFF on shutdown
+            raise
+        except Exception as e:
+            logger.error('FanThermostat', f'Unexpected error: {e}')
+            await asyncio.sleep(1)
+
+
 async def growlight_control(pin_no, dawn_time=(6, 0), sunset_time=(22, 0)):
     """
     Async coroutine for time-based grow light control.
@@ -604,7 +708,8 @@ async def main():
     
     Initializes all concurrent tasks:
     - DHTLogger.log_data(): Temperature/humidity logging (every 30s)
-    - fan_control(): Automatic fan relay cycling
+    - fan_control(): Automatic fan relay cycling (time-based)
+    - fan_thermostat_control(): Temperature-based fan control (thermostat mode)
     - growlight_control(): Time-based grow light control
     
     Maintains event loop with minimal sleep between iterations.
@@ -620,6 +725,7 @@ async def main():
 
     asyncio.create_task(dht_logger.log_data())
     asyncio.create_task(fan_control(pin_no=16, on_time=20, period=1800))
+    asyncio.create_task(fan_thermostat_control(dht_logger, pin_no=16, max_temp=23.8, temp_hysteresis=1.0, check_interval=10))
     asyncio.create_task(growlight_control(pin_no=17, dawn_time=(6, 0), sunset_time=(22, 0)))
 
     while True:

@@ -210,12 +210,12 @@ class DHTLogger:
     
     def __init__(self, pin, interval=60, filename='dht_log.csv', max_retries=3, max_buffer_size=200):
         """
-        Initialize DHT22 logger with hot-swap SD card support.
+        Initialize DHT22 logger with hot-swap SD card support and date-based logging.
         
         Args:
             pin (int): GPIO pin number for DHT22 data line
             interval (int): Seconds between log entries (default: 60)
-            filename (str): CSV filename on SD card (default: 'dht_log.csv')
+            filename (str): CSV filename base on SD card (default: 'dht_log.csv')
             max_retries (int): Sensor read retry attempts (default: 3)
             max_buffer_size (int): Max readings to buffer in-memory (default: 200)
             
@@ -224,7 +224,7 @@ class DHTLogger:
         """
         self.dht_sensor = dht.DHT22(machine.Pin(pin))
         self.interval = interval
-        self.filename = filename if filename.startswith('/sd/') else f'/sd/{filename}'
+        self.filename_base = filename if filename.startswith('/sd/') else f'/sd/{filename}'
         self.max_retries = max_retries
         self.max_buffer_size = max_buffer_size
         self.buffer = []  # In-memory buffer for SD-unavailable periods
@@ -233,6 +233,10 @@ class DHTLogger:
         self.read_failures = 0
         self.write_failures = 0
         self.sd_disconnected_count = 0
+        self.current_date = None  # Track current date for log switching
+        
+        # Initialize filename with current date
+        self._update_filename_for_date()
         
         # Validate file operations at init time
         try:
@@ -242,6 +246,28 @@ class DHTLogger:
         except OSError as e:
             logger.error('DHTLogger', f'Init error: {e}')
             raise
+    
+    def _update_filename_for_date(self):
+        """
+        Update log filename based on current RTC date.
+        
+        Format: dht_log_YYYY-MM-DD.csv
+        Called at initialization and when date changes.
+        """
+        try:
+            time_tuple = rtc.ReadTime(1)  # (sec, min, hour, wday, day, mon, year)
+            year = int(time_tuple[6])
+            month = int(time_tuple[5])
+            day = int(time_tuple[4])
+            self.current_date = (year, month, day)
+            
+            # Construct filename with date: dht_log_2026-01-21.csv
+            base = self.filename_base.replace('.csv', '')
+            self.filename = f'{base}_{year:04d}-{month:02d}-{day:02d}.csv'
+        except Exception as e:
+            logger.error('DHTLogger', f'Error updating filename: {e}')
+            # Fallback to base filename
+            self.filename = self.filename_base
     
     def _is_sd_available(self):
         """
@@ -369,9 +395,40 @@ class DHTLogger:
             self.write_failures += 1
             return False
     
+    def _check_date_changed(self):
+        """
+        Check if date has changed since last log write.
+        
+        If date has changed, updates filename to use new date and creates file if needed.
+        
+        Returns:
+            bool: True if date changed and filename updated, False otherwise
+        """
+        try:
+            time_tuple = rtc.ReadTime(1)  # (sec, min, hour, wday, day, mon, year)
+            current_date = (int(time_tuple[6]), int(time_tuple[5]), int(time_tuple[4]))  # (year, month, day)
+            
+            if current_date != self.current_date:
+                # Date has changed: update filename to new date
+                old_filename = self.filename
+                self._update_filename_for_date()
+                
+                if not self.file_exists():
+                    self.create_file()
+                
+                logger.info('DHTLogger', f'Date changed - switched from {old_filename} to {self.filename}')
+                return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error('DHTLogger', f'Error during date check: {e}')
+            return False
+
+    
     async def log_data(self):
         """
-        Main async coroutine for continuous sensor logging with SD hot-swap support.
+        Main async coroutine for continuous sensor logging with SD hot-swap support and date-based logging.
         
         Runs in infinite loop with LED feedback:
         - 1 pulse: Reading started
@@ -385,6 +442,11 @@ class DHTLogger:
         - If SD becomes available: automatic flush of buffered data
         - If buffer full: oldest entries discarded with warning
         
+        Date-Based Logging:
+        - Filename automatically updates when date changes (dht_log_YYYY-MM-DD.csv)
+        - Creates new log file at midnight with no file renaming needed
+        - All historical data preserved in dated files
+        
         Periodically checks log file size for rotation and SD card availability.
         """
         led = machine.Pin(25, machine.Pin.OUT)
@@ -392,6 +454,9 @@ class DHTLogger:
 
         while True:
             try:
+                # Check if date has changed and switch log file if needed
+                self._check_date_changed()
+                
                 # LED: Single pulse = reading started
                 await self._led_pulse(led, count=1, duration=0.1)
 
@@ -676,7 +741,8 @@ async def main():
     dht_logger = DHTLogger(pin=15, interval=30, filename='/sd/dht_log.csv')
 
     asyncio.create_task(dht_logger.log_data())
-    asyncio.create_task(fan_control(dht_logger, pin_no=16, interval=1800, on_time=20, max_temp=23.8, temp_hysteresis=0.5))
+    asyncio.create_task(fan_control(dht_logger, pin_no=16, interval=600, on_time=20, max_temp=23.8, temp_hysteresis=0.5))
+    asyncio.create_task(fan_control(dht_logger, pin_no=18, interval=500, on_time=20, max_temp=27.0, temp_hysteresis=0.5))
     asyncio.create_task(growlight_control(pin_no=17, dawn_time=(6, 0), sunset_time=(22, 0)))
 
     while True:

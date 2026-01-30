@@ -1,10 +1,10 @@
-.venv\*
-.vscode\*
-.github\*
-*venv*
-*vscode
-*github*
+.venv/
+venv/
+env/
+.vscode/
+.github/
 *.log
 *.pyc
 __pycache__/
 .env
+.main_original.py

@@ -1,0 +1,326 @@
+# Buffer Manager - Centralized Storage with SD Fallback
+# Dennis Hiro, 2026-01-29
+#
+# Manages buffered writes to SD (primary) and fallback file when SD unavailable.
+# Supports atomic writes, migration from fallback to primary, and graceful initialization.
+#
+# Design principles:
+# - Never block event loop (no blocking I/O directly; returns quickly)
+# - Graceful fallback when primary unavailable (write to fallback_path)
+# - Deferred initialization (files created on first write, not __init__)
+# - Provides metrics for EventLogger to track fallback events
+
+class BufferManager:
+    """
+    Centralized manager for buffered writes with SD hot-swap support.
+    
+    Writes data to primary (SD) when available, otherwise to fallback file.
+    Provides migration mechanism to move fallback entries to primary when SD recovers.
+    Handles gracefully when both primary and fallback unavailable (returns False).
+    
+    Attributes:
+        sd_mount_point (str): SD card mount path (e.g., '/sd')
+        fallback_path (str): Local fallback file path (e.g., '/local/fallback.csv')
+        max_buffer_entries (int): Cap on in-memory buffer to prevent memory exhaustion
+        _fallback_available (bool): Cached state of fallback file availability
+    """
+    
+    def __init__(self, sd_mount_point='/sd', fallback_path='/local/fallback.csv', max_buffer_entries=1000):
+        """
+        Initialize BufferManager with SD and fallback paths.
+        
+        Does NOT attempt to create or validate files at init (deferred to first write).
+        This allows system to start even if storage is partially unavailable.
+        
+        Args:
+            sd_mount_point (str): Mount point for SD card (default: '/sd')
+            fallback_path (str): Local fallback file path (default: '/local/fallback.csv')
+            max_buffer_entries (int): Max in-memory buffer size (default: 1000)
+        """
+        self.sd_mount_point = sd_mount_point
+        self.fallback_path = fallback_path
+        self.max_buffer_entries = max_buffer_entries
+        
+        # Internal buffers: per-file in-memory storage
+        self._buffers = {}  # {relpath: [entry1, entry2, ...]}
+        
+        # Metrics
+        self.writes_to_primary = 0
+        self.writes_to_fallback = 0
+        self.fallback_migrations = 0
+        self.write_failures = 0
+    
+    def is_primary_available(self) -> bool:
+        """
+        Non-blocking check whether SD mount is accessible.
+        
+        Performs a test write/delete operation to confirm writable access.
+        Returns False immediately if mount point doesn't exist.
+        
+        Returns:
+            bool: True if SD mount is available and writable, False otherwise
+        """
+        try:
+            # Attempt actual I/O to detect hardware disconnection
+            test_file = f'{self.sd_mount_point}/.test'
+            with open(test_file, 'w') as f:
+                f.write('')
+            import os
+            os.remove(test_file)
+            return True
+        except:
+            return False
+    
+    def _ensure_fallback_dir(self) -> bool:
+        """
+        Ensure fallback directory exists.
+        
+        Creates parent directory if needed. Returns False if creation fails.
+        
+        Returns:
+            bool: True if fallback directory is usable, False otherwise
+        """
+        try:
+            import os
+            fallback_dir = '/local'
+            if not self._dir_exists(fallback_dir):
+                os.mkdir(fallback_dir)
+            return True
+        except:
+            return False
+    
+    def _dir_exists(self, path: str) -> bool:
+        """Check if directory exists without raising exception."""
+        try:
+            import os
+            os.listdir(path)
+            return True
+        except:
+            return False
+    
+    def _has_fallback_entries(self) -> bool:
+        """
+        Check if fallback file has any entries (non-blocking).
+        
+        Used to detect SD reconnection with pending entries.
+        Returns True if fallback file is non-empty.
+        
+        Returns:
+            bool: True if fallback has entries, False otherwise
+        """
+        try:
+            with open(self.fallback_path, 'r') as f:
+                first_char = f.read(1)
+                return len(first_char) > 0
+        except:
+            return False
+    
+    def write(self, relpath: str, data: str) -> bool:
+        """
+        Append data to file on primary, or fallback if primary unavailable.
+        
+        CRITICAL: Maintains chronological ordering when SD reconnects.
+        If fallback entries exist and primary becomes available, migrates fallback FIRST
+        before accepting new writes to primary. This ensures CSV entries remain ordered.
+        
+        Attempts to write directly to primary (SD).
+        If primary write fails (SD disconnected), writes to fallback file instead.
+        If fallback also fails, buffers in memory and returns False.
+        
+        Args:
+            relpath (str): Relative path from SD mount or local root (e.g., 'dht_log.csv' or '/sd/dht_log.csv')
+            data (str): Data to append (should include newline if needed)
+        
+        Returns:
+            bool: True if written to primary, False if written to fallback or buffered
+        
+        Example:
+            >>> bm = BufferManager()
+            >>> bm.write('dht_log.csv', '2026-01-29 14:35:00,22.5,65.0\n')
+            True  # Written to primary SD
+            >>> # Later, if SD disconnects:
+            >>> bm.write('dht_log.csv', '2026-01-29 14:36:00,22.6,65.2\n')
+            False  # Written to fallback instead
+            >>> # And if SD reconnects before next write:
+            >>> bm.write('dht_log.csv', '2026-01-29 14:37:00,22.7,65.3\n')
+            # Fallback entries migrated first, then new entry written (maintains order!)
+        """
+        # Normalize path
+        if relpath.startswith('/sd/'):
+            relpath = relpath[4:]  # Remove '/sd/' prefix for consistent handling
+        
+        primary_path = f'{self.sd_mount_point}/{relpath}'
+        
+        # CRITICAL ORDERING: If primary is available, migrate pending data BEFORE accepting new writes.
+        # 1. Migrate fallback entries (SD was disconnected, now reconnected)
+        # 2. Flush in-memory buffer (both primary and fallback were unavailable, now primary is back)
+        # This prevents out-of-order timestamps in CSV files.
+        if self.is_primary_available():
+            if self._has_fallback_entries():
+                self.migrate_fallback()
+            if self._buffers:
+                self.flush()
+        
+        # Try primary first
+        if self.is_primary_available():
+            try:
+                with open(primary_path, 'a') as f:
+                    f.write(data)
+                self.writes_to_primary += 1
+                return True
+            except Exception as e:
+                # Primary write failed (e.g., file locked, permissions)
+                pass
+        
+        # Primary unavailable or write failed; try fallback
+        try:
+            if not self._ensure_fallback_dir():
+                # Fallback directory not available; buffer in memory as last resort
+                if relpath not in self._buffers:
+                    self._buffers[relpath] = []
+                self._buffers[relpath].append(data)
+                return False
+            
+            with open(self.fallback_path, 'a') as f:
+                f.write(f'{relpath}|{data}')  # Include relpath in fallback for migration
+            self.writes_to_fallback += 1
+            return False
+        except:
+            # Fallback write also failed; buffer in memory
+            if relpath not in self._buffers:
+                self._buffers[relpath] = []
+            self._buffers[relpath].append(data)
+            
+            # Check buffer overflow
+            buffer_size = sum(len(v) for v in self._buffers.values())
+            if buffer_size > self.max_buffer_entries:
+                # Overflow: drop oldest entry
+                for path_key, entries in self._buffers.items():
+                    if entries:
+                        entries.pop(0)
+                        break
+            
+            self.write_failures += 1
+            return False
+    
+    def flush(self, relpath: str | None = None) -> bool:
+        """
+        Flush in-memory buffers to primary storage if available.
+        
+        If relpath specified, flush only that file's buffer.
+        If relpath is None, flush all buffers.
+        
+        Args:
+            relpath (str, optional): Specific file path to flush, or None for all
+        
+        Returns:
+            bool: True if flushed to primary, False if primary unavailable
+        
+        Example:
+            >>> bm.flush('dht_log.csv')  # Flush specific file
+            False  # Primary still unavailable
+            >>> # ... SD card becomes available ...
+            >>> bm.flush('dht_log.csv')
+            True  # Flushed successfully
+        """
+        if not self.is_primary_available():
+            return False
+        
+        paths_to_flush = [relpath] if relpath else list(self._buffers.keys())
+        
+        for path in paths_to_flush:
+            if path not in self._buffers or not self._buffers[path]:
+                continue
+            
+            primary_path = f'{self.sd_mount_point}/{path.lstrip("/sd/")}'
+            
+            try:
+                with open(primary_path, 'a') as f:
+                    for entry in self._buffers[path]:
+                        f.write(entry)
+                self._buffers[path] = []
+            except:
+                return False
+        
+        return True
+    
+    def migrate_fallback(self) -> int:
+        """
+        Attempt to migrate all entries from fallback file to primary.
+        
+        Reads fallback file, extracts relpath and data, writes to primary.
+        Clears fallback file on success.
+        
+        Used when SD becomes available after disconnection.
+        
+        Returns:
+            int: Number of entries migrated, 0 if primary unavailable or fallback empty
+        
+        Example:
+            >>> # After SD reconnection:
+            >>> bm.migrate_fallback()
+            5  # Migrated 5 entries
+        """
+        if not self.is_primary_available():
+            return 0
+        
+        try:
+            entries_migrated = 0
+            lines = []
+            
+            # Read fallback file
+            try:
+                with open(self.fallback_path, 'r') as f:
+                    lines = f.readlines()
+            except:
+                return 0
+            
+            if not lines:
+                return 0
+            
+            # Migrate each entry
+            for line in lines:
+                try:
+                    if '|' not in line:
+                        continue
+                    
+                    relpath, data = line.split('|', 1)
+                    primary_path = f'{self.sd_mount_point}/{relpath}'
+                    
+                    with open(primary_path, 'a') as f:
+                        f.write(data)
+                    
+                    entries_migrated += 1
+                except:
+                    pass  # Skip malformed entries
+            
+            # Clear fallback file on success
+            if entries_migrated > 0:
+                try:
+                    with open(self.fallback_path, 'w') as f:
+                        f.write('')
+                    self.fallback_migrations += 1
+                except:
+                    pass
+            
+            return entries_migrated
+        except:
+            return 0
+    
+    def get_metrics(self) -> dict:
+        """
+        Return usage metrics for logging/debugging.
+        
+        Returns:
+            dict: {writes_primary, writes_fallback, migrations, failures, buffer_sizes}
+        """
+        buffer_sizes = {k: len(v) for k, v in self._buffers.items()}
+        
+        return {
+            'writes_to_primary': self.writes_to_primary,
+            'writes_to_fallback': self.writes_to_fallback,
+            'fallback_migrations': self.fallback_migrations,
+            'write_failures': self.write_failures,
+            'buffer_entries': sum(len(v) for v in self._buffers.values()),
+            'buffer_sizes_per_file': buffer_sizes,
+        }

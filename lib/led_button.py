@@ -50,7 +50,7 @@ class LED:
         else:
             self.pin.on()
     
-    async def blink_pattern_async(self, pattern_ms: list) -> None:
+    async def blink_pattern_async(self, pattern_ms: list, repeats: int = 1) -> None:
         """
         Play a blink pattern (async, non-blocking).
         
@@ -58,20 +58,25 @@ class LED:
         
         Args:
             pattern_ms (list): [on_ms, off_ms, on_ms, off_ms, ...] durations
+            repeats (int): Number of times to repeat the pattern (default: 1)
         
         Example:
             >>> led = LED(25)
             >>> await led.blink_pattern_async([200, 200, 200, 800])  # SOS: dot-dot-dash
         """
-        for i, duration_ms in enumerate(pattern_ms):
-            is_on_phase = (i % 2) == 0  # Even indices are ON
-            
-            if is_on_phase:
-                self.on()
-            else:
-                self.off()
-            
-            await asyncio.sleep(duration_ms / 1000.0)
+        if repeats < 1:
+            return
+
+        for _ in range(repeats):
+            for i, duration_ms in enumerate(pattern_ms):
+                is_on_phase = (i % 2) == 0  # Even indices are ON
+                
+                if is_on_phase:
+                    self.on()
+                else:
+                    self.off()
+                
+                await asyncio.sleep(duration_ms / 1000.0)
         
         # Ensure LED is OFF at end of pattern
         self.off()
@@ -169,14 +174,15 @@ class LEDButtonHandler:
                 except Exception as e:
                     print(f'[LEDButtonHandler] Button callback error: {e}')
     
-    async def blink_pattern_async(self, pattern_ms: list) -> None:
+    async def blink_pattern_async(self, pattern_ms: list, repeats: int = 1) -> None:
         """
         Play a blink pattern via LED (async, non-blocking).
         
         Args:
             pattern_ms (list): [on_ms, off_ms, on_ms, off_ms, ...] durations
+            repeats (int): Number of times to repeat the pattern (default: 1)
         """
-        await self.led.blink_pattern_async(pattern_ms)
+        await self.led.blink_pattern_async(pattern_ms, repeats)
     
     async def blink_continuous_async(self, on_ms: int, off_ms: int, stop_event=None) -> None:
         """

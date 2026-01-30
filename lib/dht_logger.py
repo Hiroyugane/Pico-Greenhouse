@@ -12,6 +12,7 @@ import os
 import posixpath as path
 import sys
 from lib.led_button import LED
+from config import DEVICE_CONFIG
 
 
 class DHTLogger:
@@ -204,7 +205,7 @@ class DHTLogger:
         - 2 pulses (0.1s): Read successful, data logged
         - 3 pulses (0.15s): Sensor read failed
         """
-        led = LED(25)
+        led = LED(DEVICE_CONFIG['pins']['status_led'])
         
         while True:
             try:

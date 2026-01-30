@@ -97,20 +97,36 @@ class TimeProvider:
         # Fixpoints: astronomical / politically meaningful
         # Format: (day_of_year, sunrise_min, sunset_min)
         POINTS = [
-            (355, 508, 986),   # 21 Dec – Winter solstice
-            (79,  448, 1135),  # 20 Mar – Spring equinox
-            (87,  418, 1215),  # DST start (last Sun Mar, typical)
-            (172, 330, 1227),  # 21 Jun – Summer solstice
-            (265, 427, 1186),  # 22 Sep – Autumn equinox
-            (304, 456, 1100),  # DST end (last Sun Oct, typical)
-            (365+355, 508, 986),  # Repeat for year wrap
+            (1,   475, 1035),  # 1 Jan
+            (20,  466, 1060),  # 20 Jan
+            (34,  448, 1083),  # 4 Feb
+            (50,  421, 1110),  # 19 Feb
+            (79,  360, 1159),  # 20 Mar – Equinox
+            (82,  353, 1164),  # DST start (min)
+            (89,  397, 1236),  # DST start (max)
+            (109, 351, 1271),  # 20 Apr
+            (139, 294, 1324),  # 20 May
+            (154, 276, 1345),  # 4 Jun
+            (172, 271, 1356),  # 21 Jun – Solstice
+            (185, 279, 1353),  # 5 Jul
+            (200, 298, 1337),  # 19 Jul
+            (214, 321, 1314),  # 3 Aug
+            (231, 350, 1279),  # 18 Aug
+            (267, 410, 1196),  # 22 Sep – Equinox
+            (296, 456, 1135),  # DST end (min)
+            (304, 409, 1061),  # DST end (max)
+            (323, 439, 1035),  # 16 Nov
+            (342, 463, 1025),  # 9 Dec
+            (358, 474, 1029),  # 21 Dec – Solstice
+            (365, 475, 1034),  # 31 Dec
         ]
 
         def day_of_year(year, month, day):
-            mdays = [31,28,31,30,31,30,31,31,30,31,30,31]
-            leap = (year%4==0 and (year%100!=0 or year%400==0))
-            if leap: mdays[1] = 29
-            return day + sum(mdays[:month-1])
+            days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+            leap = (year % 4 == 0 and (year % 100 != 0 or year % 400 == 0))
+            if leap:
+                days_per_month[1] = 29
+            return day + sum(days_per_month[:month - 1])
         try:
             doy = day_of_year(year, month, day)
             if doy < POINTS[0][0]:
@@ -118,19 +134,45 @@ class TimeProvider:
                 leap_prev = (prev_year % 4 == 0 and (prev_year % 100 != 0 or prev_year % 400 == 0))
                 doy += 366 if leap_prev else 365  # Year wrap with leap year correction
 
-            for i in range(len(POINTS)-1):
+            for i in range(len(POINTS) - 1):
                 d0, r0, s0 = POINTS[i]
-                d1, r1, s1 = POINTS[i+1]
+                d1, r1, s1 = POINTS[i + 1]
                 if d0 <= doy <= d1:
-                    t = (doy - d0) / (d1 - d0)
-                    r = int(r0 + t * (r1 - r0))
-                    s = int(s0 + t * (s1 - s0))
-                    return (r//60, r%60), (s//60, s%60)
-        except Exception:
+                    interpolation_factor = (doy - d0) / (d1 - d0)
+                    r = int(r0 + interpolation_factor * (r1 - r0))
+                    s = int(s0 + interpolation_factor * (s1 - s0))
+                    sunrise = (r // 60, r % 60)
+                    sunset = (s // 60, s % 60)
+                    return (sunrise, sunset)
+        except Exception as exc:
+            # Log error while still returning a safe fallback value.
+            # This keeps the provider from raising, but surfaces issues for debugging.
+            print("TimeProvider.sunrise_sunset error:", exc)
             pass
 
         return ((0, 0), (0, 0)) # error fallback
 
+    def export_sunrise_sunset_2026_csv(self, csv_path: str = "sunrise_sunset_2026.csv") -> None:
+        """
+        Generate a CSV with sunrise/sunset values for every day in 2026.
+
+        Columns: date, sunrise_hhmm, sunset_hhmm, sunrise_minutes, sunset_minutes
+        """
+        provider = TimeProvider()
+        year = 2026
+        days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+
+        with open(csv_path, "w") as f:
+            f.write("date,sunrise_hhmm,sunset_hhmm,sunrise_minutes,sunset_minutes\n")
+            for month in range(1, 13):
+                for day in range(1, days_per_month[month - 1] + 1):
+                    (sr_h, sr_m), (ss_h, ss_m) = provider.sunrise_sunset(year, month, day)
+                    sr_min = sr_h * 60 + sr_m
+                    ss_min = ss_h * 60 + ss_m
+                    sr_hhmm = f"{sr_h:02d}:{sr_m:02d}"
+                    ss_hhmm = f"{ss_h:02d}:{ss_m:02d}"
+                    date_str = f"{year:04d}-{month:02d}-{day:02d}"
+                    f.write(f"{date_str},{sr_hhmm},{ss_hhmm},{sr_min},{ss_min}\n")
 
 class RTCTimeProvider(TimeProvider):
     """
@@ -282,3 +324,6 @@ class RTCTimeProvider(TimeProvider):
             pass
         
         return (0, 0, 0, 0, 0, 0, 0)  # Error fallback
+
+
+

@@ -22,6 +22,12 @@
 # 2. Run this main.py via Thonny
 # 3. Check /sd/dht_log_YYYY-MM-DD.csv for data
 
+import sys
+from pathlib import Path
+
+if sys.implementation.name != 'micropython':
+    sys.path.insert(0, str(Path(__file__).resolve().parent / 'host_shims'))
+
 import uasyncio as asyncio
 from config import DEVICE_CONFIG, validate_config
 from lib.hardware_factory import HardwareFactory

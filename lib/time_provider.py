@@ -152,6 +152,52 @@ class RTCTimeProvider(TimeProvider):
             time_provider = RTCTimeProvider(rtc_hw)
         """
         self.rtc = rtc
+        self._sync_interval_s = 3600
+        self._last_sync_epoch = None
+        self._sync_from_rtc(force=True)
+
+    def _sync_from_rtc(self, force: bool = False) -> None:
+        """Sync Pico time from RTC at startup and once per hour."""
+        now = None
+        try:
+            now = time.time()
+        except Exception:
+            pass
+
+        if not force and self._last_sync_epoch is not None and now is not None:
+            try:
+                if (now - self._last_sync_epoch) < self._sync_interval_s:
+                    return
+            except Exception:
+                pass
+
+        try:
+            time_tuple = self.rtc.ReadTime(1)  # (sec, min, hour, wday, day, mon, year)
+            if isinstance(time_tuple, tuple) and len(time_tuple) >= 7:
+                sec, minute, hour, wday, day, month, year = (
+                    int(time_tuple[0]),
+                    int(time_tuple[1]),
+                    int(time_tuple[2]),
+                    int(time_tuple[3]),
+                    int(time_tuple[4]),
+                    int(time_tuple[5]),
+                    int(time_tuple[6]),
+                )
+                try:
+                    import machine
+                    machine.RTC().datetime((year, month, day, wday, hour, minute, sec, 0))
+                except Exception:
+                    pass
+                try:
+                    self._last_sync_epoch = time.time()
+                except Exception:
+                    self._last_sync_epoch = now
+                return
+        except Exception:
+            pass
+
+        if now is not None:
+            self._last_sync_epoch = now
     
     def now_timestamp(self) -> str:
         """
@@ -166,20 +212,11 @@ class RTCTimeProvider(TimeProvider):
         Raises:
             Exception: If RTC communication fails (returns error string)
         """
+        self._sync_from_rtc()
         try:
-            result = self.rtc.ReadTime('timestamp')
-            if isinstance(result, str) and 'Error' not in result:
-                return result
-        except:
-            pass
-        
-        # Fallback: format numeric tuple
-        try:
-            time_tuple = self.rtc.ReadTime(1)  # (sec, min, hour, wday, day, mon, year)
-            if isinstance(time_tuple, tuple) and len(time_tuple) >= 7:
-                sec, minute, hour, _, day, month, year = time_tuple[0], time_tuple[1], time_tuple[2], time_tuple[3], time_tuple[4], time_tuple[5], time_tuple[6]
-                return f'{year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}:{sec:02d}'
-        except:
+            t = time.localtime()
+            return f'{t[0]:04d}-{t[1]:02d}-{t[2]:02d} {t[3]:02d}:{t[4]:02d}:{t[5]:02d}'
+        except Exception:
             pass
         
         return 'TIME_ERROR'
@@ -197,14 +234,11 @@ class RTCTimeProvider(TimeProvider):
         Example:
             (2026, 1, 29)
         """
+        self._sync_from_rtc()
         try:
-            time_tuple = self.rtc.ReadTime(1)  # (sec, min, hour, wday, day, mon, year)
-            if isinstance(time_tuple, tuple) and len(time_tuple) >= 7:
-                year = int(time_tuple[6])
-                month = int(time_tuple[5])
-                day = int(time_tuple[4])
-                return (year, month, day)
-        except:
+            t = time.localtime()
+            return (int(t[0]), int(t[1]), int(t[2]))
+        except Exception:
             pass
         
         return (0, 0, 0)  # Error fallback
@@ -221,14 +255,11 @@ class RTCTimeProvider(TimeProvider):
         Example:
             At 14:35:42 (2:35:42 PM) returns: 52542
         """
+        self._sync_from_rtc()
         try:
-            time_tuple = self.rtc.ReadTime(1)  # (sec, min, hour, wday, day, mon, year)
-            if isinstance(time_tuple, tuple) and len(time_tuple) >= 7:
-                sec = int(time_tuple[0])
-                minute = int(time_tuple[1])
-                hour = int(time_tuple[2])
-                return sec + minute * 60 + hour * 3600
-        except:
+            t = time.localtime()
+            return int(t[5]) + int(t[4]) * 60 + int(t[3]) * 3600
+        except Exception:
             pass
         
         return 0  # Error fallback (midnight)
@@ -243,11 +274,11 @@ class RTCTimeProvider(TimeProvider):
         Returns:
             tuple: (sec, min, hour, wday, day, mon, year) or (0,0,0,0,0,0,0) on error
         """
+        self._sync_from_rtc()
         try:
-            result = self.rtc.ReadTime(1)
-            if isinstance(result, tuple):
-                return result
-        except:
+            t = time.localtime()
+            return (int(t[5]), int(t[4]), int(t[3]), int(t[6]), int(t[2]), int(t[1]), int(t[0]))
+        except Exception:
             pass
         
         return (0, 0, 0, 0, 0, 0, 0)  # Error fallback

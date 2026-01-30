@@ -1,3 +1,26 @@
+.venv/
+venv/
+env/
+.vscode/
+.github/
+*.log
+*.pyc
+__pycache__/
+.env
+.main_original.py
+sd/
+
+
+
+
+
+
+
+
+
+
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -215,16 +238,6 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-.venv/
-venv/
-env/
-.vscode/
-.github/
-*.log
-*.pyc
-__pycache__/
-.env
-.main_original.py
 
 
 

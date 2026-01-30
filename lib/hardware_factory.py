@@ -11,6 +11,7 @@
 
 import os
 import time
+import sys
 import machine
 from machine import Pin, SPI, I2C
 
@@ -149,6 +150,15 @@ class HardwareFactory:
         Returns True if mounted, False otherwise (non-fatal; system can run with fallback).
         """
         try:
+            if sys.implementation.name != 'micropython':
+                # Simulate SD availability on host
+                mount_point = self.config.get('spi', {}).get('mount_point', '/sd')
+                try:
+                    os.makedirs(mount_point, exist_ok=True)
+                except Exception:
+                    pass
+                self.sd_mounted = True
+                return True
             if not self.spi:
                 self.errors.append('SPI not initialized; skipping SD init')
                 return False

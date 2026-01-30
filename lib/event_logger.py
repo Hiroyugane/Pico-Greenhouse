@@ -124,8 +124,8 @@ class EventLogger:
             return
         
         try:
-            # Normalize logfile path
-            relpath = self.logfile.lstrip('/sd/')
+            # Normalize logfile path (strip only '/sd/' prefix)
+            relpath = self._strip_sd_prefix(self.logfile)
             
             for entry in self.buffer:
                 self.buffer_manager.write(relpath, entry)
@@ -146,8 +146,8 @@ class EventLogger:
         if self._log_size > self.max_size:
             try:
                 backup_path = self.logfile.replace('.log', '_backup.log')
-                relpath = self.logfile.lstrip('/sd/')
-                backup_relpath = backup_path.lstrip('/sd/')
+                relpath = self._strip_sd_prefix(self.logfile)
+                backup_relpath = self._strip_sd_prefix(backup_path)
                 
                 # Note: File rotation on SD requires filesystem support for rename
                 # Current implementation is simplified; full rotation would need os.rename()
@@ -155,3 +155,9 @@ class EventLogger:
                 self.info('EventLogger', f'Log rotated. Backup: {backup_path}')
             except Exception as e:
                 print(f'[EventLogger] WARNING: Log rotation failed: {e}')
+
+    @staticmethod
+    def _strip_sd_prefix(path: str) -> str:
+        if path.startswith('/sd/'):
+            return path[4:]
+        return path

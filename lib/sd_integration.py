@@ -5,6 +5,7 @@
 # Used by hardware_factory and buffer_manager.
 
 import os
+import sys
 
 
 def mount_sd(spi, cs_pin, mount_point: str = '/sd') -> bool:
@@ -20,6 +21,10 @@ def mount_sd(spi, cs_pin, mount_point: str = '/sd') -> bool:
         bool: True if mounted successfully, False on error
     """
     try:
+        if sys.implementation.name != 'micropython':
+            os.makedirs(mount_point, exist_ok=True)
+            print(f'[SD] Host mount simulated at {mount_point}')
+            return True
         from lib import sdcard
         from machine import Pin
         
@@ -43,6 +48,8 @@ def is_mounted(sd) -> bool:
     reinitializing hardware and contending with active mounts.
     """
     try:
+        if sys.implementation.name != 'micropython':
+            return True
         from config import DEVICE_CONFIG
         from machine import Pin, SPI
         from lib import sdcard

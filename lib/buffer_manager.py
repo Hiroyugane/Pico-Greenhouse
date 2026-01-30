@@ -10,6 +10,9 @@
 # - Deferred initialization (files created on first write, not __init__)
 # - Provides metrics for EventLogger to track fallback events
 
+import os
+import sys
+
 class BufferManager:
     """
     Centralized manager for buffered writes with SD hot-swap support.
@@ -37,9 +40,20 @@ class BufferManager:
             fallback_path (str): Local fallback file path (default: '/local/fallback.csv')
             max_buffer_entries (int): Max in-memory buffer size (default: 1000)
         """
+        # Host compatibility: map /sd and /local to local folders on CPython
+        if self._is_host():
+            sd_mount_point = self._normalize_host_path(sd_mount_point, 'sd')
+            fallback_path = self._normalize_host_path(fallback_path, os.path.join('local', 'fallback.csv'))
+
         self.sd_mount_point = sd_mount_point
         self.fallback_path = fallback_path
         self.max_buffer_entries = max_buffer_entries
+
+        if self._is_host():
+            try:
+                os.makedirs(self.sd_mount_point, exist_ok=True)
+            except Exception:
+                pass
         
         # Internal buffers: per-file in-memory storage
         self._buffers = {}  # {relpath: [entry1, entry2, ...]}
@@ -81,10 +95,9 @@ class BufferManager:
             bool: True if fallback directory is usable, False otherwise
         """
         try:
-            import os
-            fallback_dir = '/local'
+            fallback_dir = os.path.dirname(self.fallback_path) or '.'
             if not self._dir_exists(fallback_dir):
-                os.mkdir(fallback_dir)
+                os.makedirs(fallback_dir, exist_ok=True)
             return True
         except:
             return False
@@ -92,11 +105,21 @@ class BufferManager:
     def _dir_exists(self, path: str) -> bool:
         """Check if directory exists without raising exception."""
         try:
-            import os
-            os.listdir(path)
-            return True
+            return os.path.isdir(path)
         except:
             return False
+
+    def _is_host(self) -> bool:
+        return sys.implementation.name != 'micropython'
+
+    def _normalize_host_path(self, path: str, default_rel: str) -> str:
+        if not path:
+            return os.path.join(os.getcwd(), default_rel)
+        if path.startswith('/sd'):
+            return os.path.join(os.getcwd(), 'sd')
+        if path.startswith('/local'):
+            return os.path.join(os.getcwd(), 'local', os.path.basename(path))
+        return path
     
     def _has_fallback_entries(self) -> bool:
         """

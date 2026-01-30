@@ -8,6 +8,9 @@
 import dht
 import machine
 import uasyncio as asyncio
+import os
+import posixpath as path
+import sys
 from lib.led_button import LED
 
 
@@ -103,10 +106,17 @@ class DHTLogger:
     def _file_exists(self) -> bool:
         """Check if CSV file exists on primary storage."""
         try:
-            with open(self.filename, 'r'):
+            with open(self._resolve_path(self.filename), 'r'):
                 return True
         except:
             return False
+
+    def _resolve_path(self, file_path: str) -> str:
+        if sys.implementation.name == 'micropython':
+            return file_path
+        if file_path.startswith('/sd/'):
+            return path.join(self.buffer_manager.sd_mount_point, file_path[4:])
+        return file_path
     
     def _create_file(self) -> None:
         """
@@ -115,7 +125,7 @@ class DHTLogger:
         Header: 'Timestamp,Temperature,Humidity'
         """
         try:
-            self.buffer_manager.write(self.filename.lstrip('/sd/'), 'Timestamp,Temperature,Humidity\n')
+            self.buffer_manager.write(self._strip_sd_prefix(self.filename), 'Timestamp,Temperature,Humidity\n')
             self.logger.info('DHTLogger', f'Created CSV file: {self.filename}')
         except Exception as e:
             self.logger.error('DHTLogger', f'Failed to create file: {e}')
@@ -216,7 +226,7 @@ class DHTLogger:
                     self.last_humidity = hum
                     
                     timestamp = self.time_provider.now_timestamp()
-                    relpath = self.filename.lstrip('/sd/')
+                    relpath = self._strip_sd_prefix(self.filename)
                     row = f'{timestamp},{temp:.1f},{hum:.1f}\n'
                     
                     # Write to storage via BufferManager
@@ -241,3 +251,9 @@ class DHTLogger:
                 self.logger.error('DHTLogger', f'Unexpected error: {e}')
                 await led.blink_pattern_async([500, 500, 500, 500, 500, 500])
                 await asyncio.sleep(1)
+
+    @staticmethod
+    def _strip_sd_prefix(path: str) -> str:
+        if path.startswith('/sd/'):
+            return path[4:]
+        return path

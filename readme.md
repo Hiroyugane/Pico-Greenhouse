@@ -42,6 +42,24 @@ python rtc_set_time.py  # Run in Thonny
 python main.py  # Run in Thonny
 ```
 
+### 2b. Run on Windows (Host Simulation)
+
+You can run the system on a Windows PC without GPIO hardware. The project includes
+host shims that print GPIO actions to the console and write logs to local folders.
+
+```bash
+# Run on Windows (standard Python 3)
+python main.py
+```
+
+Host paths created in the repo:
+
+- `./sd/` — simulated SD mount (CSV + logs)
+- `./local/` — fallback buffer file
+
+Note: The host shims live in `host_shims/` and are only loaded on Windows/CPython.
+They are not used on the Pico.
+
 ### 3. Verify Data
 
 Unplug device and check SD card:

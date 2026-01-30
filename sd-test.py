@@ -44,11 +44,19 @@ async def check_sd_card():
                 await asyncio.sleep(5)
                 continue
             
-            # Check 2: Folder structure
+            # Check 2: Raw block read (MBR)
+            try:
+                buf = bytearray(512)
+                sd.readblocks(0, buf)
+                print("✓ MBR Read: SUCCESS (512 bytes)")
+            except Exception as e:
+                print(f"✗ MBR Read: FAILED - {e}")
+
+            # Check 3: Folder structure
             sd_contents = os.listdir('/sd')
             print(f"✓ Root Directory Contents: {sd_contents if sd_contents else '(empty)'}")
             
-            # Check 3: Test write capability
+            # Check 4: Test write capability
             test_file = '/sd/test_write.txt'
             try:
                 with open(test_file, 'w') as f:
@@ -57,7 +65,7 @@ async def check_sd_card():
             except Exception as e:
                 print(f"✗ Write Test: FAILED - {e}")
             
-            # Check 4: Test read capability
+            # Check 5: Test read capability
             try:
                 with open(test_file, 'r') as f:
                     content = f.read()
@@ -65,7 +73,7 @@ async def check_sd_card():
             except Exception as e:
                 print(f"✗ Read Test: FAILED - {e}")
             
-            # Check 5: Check dht_log.csv
+            # Check 6: Check dht_log.csv
             try:
                 stat_info = os.stat('/sd/dht_log.csv')
                 print(f"✓ dht_log.csv exists: {stat_info[6]} bytes")

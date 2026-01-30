@@ -11,6 +11,7 @@
 # - Provides metrics for EventLogger to track fallback events
 
 import os
+import stat
 import sys
 
 class BufferManager:
@@ -43,7 +44,7 @@ class BufferManager:
         # Host compatibility: map /sd and /local to local folders on CPython
         if self._is_host():
             sd_mount_point = self._normalize_host_path(sd_mount_point, 'sd')
-            fallback_path = self._normalize_host_path(fallback_path, os.path.join('local', 'fallback.csv'))
+            fallback_path = self._normalize_host_path(fallback_path, 'local/fallback.csv')
 
         self.sd_mount_point = sd_mount_point
         self.fallback_path = fallback_path
@@ -95,7 +96,7 @@ class BufferManager:
             bool: True if fallback directory is usable, False otherwise
         """
         try:
-            fallback_dir = os.path.dirname(self.fallback_path) or '.'
+            fallback_dir = self._path_dirname(self.fallback_path) or '.'
             if not self._dir_exists(fallback_dir):
                 os.makedirs(fallback_dir, exist_ok=True)
             return True
@@ -105,20 +106,55 @@ class BufferManager:
     def _dir_exists(self, path: str) -> bool:
         """Check if directory exists without raising exception."""
         try:
-            return os.path.isdir(path)
+            st = os.stat(path)
+            mode = st[0] if isinstance(st, tuple) else st.st_mode
+            return stat.S_ISDIR(mode)
         except:
             return False
+
+    def _path_sep(self) -> str:
+        return getattr(os, 'sep', '/')
+
+    def _path_join(self, *parts: str) -> str:
+        sep = self._path_sep()
+        cleaned = []
+        for part in parts:
+            if part is None:
+                continue
+            part = str(part)
+            if not part:
+                continue
+            part = part.replace('\\', '/')
+            if cleaned:
+                part = part.lstrip('/')
+            cleaned.append(part.rstrip('/'))
+        if not cleaned:
+            return ''
+        joined = '/'.join(cleaned)
+        if sep != '/':
+            joined = joined.replace('/', sep)
+        return joined
+
+    def _path_dirname(self, path: str) -> str:
+        normalized = str(path).replace('\\', '/')
+        if '/' not in normalized:
+            return ''
+        return normalized.rsplit('/', 1)[0] or '/'
+
+    def _path_basename(self, path: str) -> str:
+        normalized = str(path).replace('\\', '/')
+        return normalized.rsplit('/', 1)[-1]
 
     def _is_host(self) -> bool:
         return sys.implementation.name != 'micropython'
 
     def _normalize_host_path(self, path: str, default_rel: str) -> str:
         if not path:
-            return os.path.join(os.getcwd(), default_rel)
+            return self._path_join(os.getcwd(), default_rel)
         if path.startswith('/sd'):
-            return os.path.join(os.getcwd(), 'sd')
+            return self._path_join(os.getcwd(), 'sd')
         if path.startswith('/local'):
-            return os.path.join(os.getcwd(), 'local', os.path.basename(path))
+            return self._path_join(os.getcwd(), 'local', self._path_basename(path))
         return path
     
     def _has_fallback_entries(self) -> bool:

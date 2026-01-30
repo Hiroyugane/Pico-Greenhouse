@@ -10,6 +10,13 @@ import time
 from typing import Optional
 
 
+def _ticks_ms() -> int:
+    """Return monotonic milliseconds on MicroPython or host."""
+    if hasattr(time, 'ticks_ms'):
+        return time.ticks_ms()
+    return int(time.time() * 1000)
+
+
 class LED:
     """
     Simple LED abstraction for on/off/blink control.
@@ -151,7 +158,7 @@ class LEDButtonHandler:
     
     def _button_isr(self, pin) -> None:
         """Interrupt handler with debouncing."""
-        current_time = time.ticks_ms()
+        current_time = _ticks_ms()
         
         if current_time - self._last_press_time > self.debounce_ms:
             self._last_press_time = current_time

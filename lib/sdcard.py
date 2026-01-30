@@ -24,6 +24,13 @@ from micropython import const
 import time
 
 
+if not hasattr(time, 'sleep_ms'):
+    def _sleep_ms(ms: int) -> None:
+        time.sleep(ms / 1000.0)
+
+    time.sleep_ms = _sleep_ms
+
+
 _CMD_TIMEOUT = const(100)
 
 _R1_IDLE_STATE = const(1 << 0)

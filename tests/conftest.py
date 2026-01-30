@@ -5,7 +5,10 @@
 import sys
 from pathlib import Path
 
-# Add project root to path so imports work
+# Add test stubs and project root to path so imports work
+tests_dir = Path(__file__).resolve().parent
+stubs_dir = tests_dir / 'stubs'
+sys.path.insert(0, str(stubs_dir))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # Mock MicroPython modules before any imports
@@ -21,12 +24,6 @@ sys.modules['dht'] = MagicMock()
 import asyncio
 sys.modules['uasyncio'] = asyncio
 
-# Create mock for 'lib.ds3231' module
-sys.modules['lib'] = MagicMock()
-sys.modules['lib.ds3231'] = MagicMock()
-
-# Create mock for 'lib.sdcard' module
-sys.modules['lib.sdcard'] = MagicMock()
 
 
 # Optional: Configuration for pytest

@@ -222,23 +222,23 @@ class TestFanController:
 
 
 # ============================================================================
-# TESTS: CleaningReminder
+# TESTS: ServiceReminder
 # ============================================================================
 
-class TestCleaningReminder:
-    """Tests for CleaningReminder task."""
+class TestServiceReminder:
+    """Tests for ServiceReminder task."""
     
-    def test_cleaning_reminder_initialization(self, time_provider):
-        """Test CleaningReminder initializes with correct state."""
+    def test_Service_reminder_initialization(self, time_provider):
+        """Test ServiceReminder initializes with correct state."""
         with patch('machine.Pin'):
             import lib.led_button as led_button
             
             LEDButtonHandler = led_button.LEDButtonHandler
-            CleaningReminder = getattr(led_button, 'CleaningReminder', None) or getattr(led_button, 'CleaningReminderTask', None)
-            assert CleaningReminder is not None
+            ServiceReminder = getattr(led_button, 'ServiceReminder', None) or getattr(led_button, 'ServiceReminderTask', None)
+            assert ServiceReminder is not None
             
             led_handler = LEDButtonHandler(24, 23)
-            reminder = CleaningReminder(
+            reminder = ServiceReminder(
                 time_provider,
                 led_handler,
                 days_interval=7,
@@ -246,23 +246,23 @@ class TestCleaningReminder:
             )
             
             assert reminder.days_interval == 7
-            assert reminder.last_cleaned_timestamp is not None
+            assert reminder.last_serviced_timestamp is not None
     
-    def test_cleaning_reminder_reset(self, time_provider):
-        """Test CleaningReminder.reset() updates timestamp."""
+    def test_Service_reminder_reset(self, time_provider):
+        """Test ServiceReminder.reset() updates timestamp."""
         with patch('machine.Pin'):
             import lib.led_button as led_button
             
             LEDButtonHandler = led_button.LEDButtonHandler
-            CleaningReminder = getattr(led_button, 'CleaningReminder', None) or getattr(led_button, 'CleaningReminderTask', None)
-            assert CleaningReminder is not None
+            ServiceReminder = getattr(led_button, 'ServiceReminder', None) or getattr(led_button, 'ServiceReminderTask', None)
+            assert ServiceReminder is not None
             
             led_handler = LEDButtonHandler(24, 23)
-            reminder = CleaningReminder(time_provider, led_handler)
+            reminder = ServiceReminder(time_provider, led_handler)
             
-            old_timestamp = reminder.last_cleaned_timestamp
+            old_timestamp = reminder.last_serviced_timestamp
             reminder.reset()
-            new_timestamp = reminder.last_cleaned_timestamp
+            new_timestamp = reminder.last_serviced_timestamp
             
             # Should have updated (may be same in tests due to mocked time)
             assert isinstance(new_timestamp, str)

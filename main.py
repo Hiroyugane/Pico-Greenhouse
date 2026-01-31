@@ -22,11 +22,12 @@
 # 2. Run this main.py via Thonny
 # 3. Check /sd/dht_log_YYYY-MM-DD.csv for data
 
+import os
 import sys
-from pathlib import Path
 
 if sys.implementation.name != 'micropython':
-    sys.path.insert(0, str(Path(__file__).resolve().parent / 'host_shims'))
+    host_shims_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'host_shims') # pyright: ignore[reportAttributeAccessIssue]
+    sys.path.insert(0, host_shims_path)
 
 import uasyncio as asyncio
 from config import DEVICE_CONFIG, validate_config

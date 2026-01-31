@@ -7,7 +7,6 @@
 import machine
 import uasyncio as asyncio
 import time
-from typing import Optional
 
 
 def _ticks_ms() -> int:
@@ -218,8 +217,8 @@ class ServiceReminder:
         last_serviced_date: Date tuple (year, month, day) for elapsed days calc
     """
     
-    def __init__(self, time_provider, led_handler, last_serviced_timestamp: Optional[str] = None,
-                 days_interval: int = 7, blink_pattern_ms: Optional[list] = None,
+    def __init__(self, time_provider, led_handler, last_serviced_timestamp = None,
+                 days_interval: int = 7, blink_pattern_ms = None,
                  storage_path: str = '/service_reminder.txt'):
         """
         Initialize Service reminder.
@@ -264,7 +263,7 @@ class ServiceReminder:
         
         print(f'[ServiceReminder] Initialized: {self.days_interval} days, last_serviced={self.last_serviced_timestamp}')
 
-    def _parse_date_from_timestamp(self, timestamp: str) -> Optional[tuple]:
+    def _parse_date_from_timestamp(self, timestamp: str):
         """
         Parse date tuple (year, month, day) from 'YYYY-MM-DD HH:MM:SS' timestamp.
         """
@@ -275,7 +274,7 @@ class ServiceReminder:
         except:
             return None
 
-    def _load_last_serviced_timestamp(self) -> Optional[str]:
+    def _load_last_serviced_timestamp(self):
         """
         Load last serviced timestamp from storage file.
         """

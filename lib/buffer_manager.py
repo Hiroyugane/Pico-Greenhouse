@@ -11,7 +11,6 @@
 # - Provides metrics for EventLogger to track fallback events
 
 import os
-import stat
 import sys
 
 class BufferManager:
@@ -108,7 +107,8 @@ class BufferManager:
         try:
             st = os.stat(path)
             mode = st[0] if isinstance(st, tuple) else st.st_mode
-            return stat.S_ISDIR(mode)
+            # MicroPython doesn't expose stat.S_ISDIR; use POSIX dir bit 0x4000
+            return bool(mode & 0x4000)
         except:
             return False
 

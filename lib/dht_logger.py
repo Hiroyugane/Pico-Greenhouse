@@ -9,7 +9,6 @@ import dht
 import machine
 import uasyncio as asyncio
 import os
-import posixpath as path
 import sys
 from lib.led_button import LED
 from config import DEVICE_CONFIG
@@ -116,7 +115,7 @@ class DHTLogger:
         if sys.implementation.name == 'micropython':
             return file_path
         if file_path.startswith('/sd/'):
-            return path.join(self.buffer_manager.sd_mount_point, file_path[4:])
+            return os.path.join(self.buffer_manager.sd_mount_point, file_path[4:])
         return file_path
     
     def _create_file(self) -> None:

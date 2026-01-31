@@ -7,7 +7,6 @@
 
 import uasyncio as asyncio
 from machine import Pin
-from typing import Optional
 
 
 class RelayController:
@@ -24,7 +23,7 @@ class RelayController:
         _state: Current relay state (True=on, False=off)
     """
     
-    def __init__(self, pin: int, invert: bool = True, name: Optional[str] = None):
+    def __init__(self, pin: int, invert: bool = True, name = None):
         """
         Initialize relay controller.
         
@@ -103,7 +102,7 @@ class FanController(RelayController):
     def __init__(self, pin: int, time_provider, dht_logger, logger, 
                  interval_s: int = 1800, on_time_s: int = 20,
                  max_temp: float = 24.0, temp_hysteresis: float = 1.0,
-                 name: Optional[str] = None):
+                 name = None):
         """
         Initialize FanController with dual-mode scheduling.
         
@@ -236,9 +235,9 @@ class GrowlightController(RelayController):
     """
     
     def __init__(self, pin: int, time_provider, logger,
-                 dawn_hour: Optional[int] = None, dawn_minute: Optional[int] = None,
-                 sunset_hour: Optional[int] = None, sunset_minute: Optional[int] = None,
-                 name: Optional[str] = None):
+                 dawn_hour = None, dawn_minute = None,
+                 sunset_hour = None, sunset_minute = None,
+                 name = None):
         """
         Initialize GrowlightController with schedule.
         

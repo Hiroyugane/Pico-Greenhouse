@@ -26,7 +26,7 @@ import os
 import sys
 
 if sys.implementation.name != 'micropython':
-    host_shims_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'host_shims') # pyright: ignore[reportAttributeAccessIssue]
+    host_shims_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'host_shims')
     sys.path.insert(0, host_shims_path)
 
 import uasyncio as asyncio

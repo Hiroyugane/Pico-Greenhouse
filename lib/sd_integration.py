@@ -6,6 +6,7 @@
 
 import os
 import sys
+import time
 
 
 def mount_sd(spi, cs_pin, mount_point: str = '/sd') -> bool:
@@ -40,7 +41,7 @@ def mount_sd(spi, cs_pin, mount_point: str = '/sd') -> bool:
         return False
 
 
-def is_mounted(sd) -> bool:
+def is_mounted(sd, spi=None, return_instances: bool = False):
     """
     Check if SD card is inserted in reader.
 
@@ -49,39 +50,63 @@ def is_mounted(sd) -> bool:
     """
     try:
         if sys.implementation.name != 'micropython':
-            return True
+            return (True, sd, spi) if return_instances else True
         from config import DEVICE_CONFIG
         from machine import Pin, SPI
         from lib import sdcard
+
+        spi_config = DEVICE_CONFIG.get('spi', {})
+        spi_id = spi_config.get('id', 1)
+        baudrate = spi_config.get('baudrate', 40000000)
+        sck = spi_config.get('sck', 10)
+        mosi = spi_config.get('mosi', 11)
+        miso = spi_config.get('miso', 12)
+        cs = spi_config.get('cs', 13)
+        mount_point = spi_config.get('mount_point', '/sd')
+
+        def _init_sd_local():
+            if isinstance(cs, int):
+                cs_pin = Pin(cs)
+            else:
+                cs_pin = cs
+            spi = SPI(
+                spi_id,
+                baudrate=baudrate,
+                sck=Pin(sck),
+                mosi=Pin(mosi),
+                miso=Pin(miso)
+            )
+            sd_local = sdcard.SDCard(spi, cs_pin)
+            os.mount(sd_local, mount_point)
+            return sd_local, spi
+
+        def _safe_umount():
+            try:
+                os.umount(mount_point)
+            except Exception:
+                pass
+
+        def _read_mbr(sd_obj):
+            buf = bytearray(512)
+            sd_obj.readblocks(0, buf)
+
         if sd is None:
-            """ 
-            if spi is None:
-                spi_config = DEVICE_CONFIG.get('spi', {})
-                spi_id = spi_config.get('id', 1)
-                baudrate = spi_config.get('baudrate', 40000000)
-                sck = spi_config.get('sck', 10)
-                mosi = spi_config.get('mosi', 11)
-                miso = spi_config.get('miso', 12)
+            sd, spi = _init_sd_local()
 
-                spi = SPI(
-                    spi_id,
-                    baudrate=baudrate,
-                    sck=Pin(sck),
-                    mosi=Pin(mosi),
-                    miso=Pin(miso)
-                )
-
-            if cs_pin is None:
-                cs_pin = DEVICE_CONFIG.get('spi', {}).get('cs', 13)
-
-            if isinstance(cs_pin, int):
-                cs_pin = Pin(cs_pin)
-
-            sd = sdcard.SDCard(spi, cs_pin)
-            """
-        buf = bytearray(512)
-        sd.readblocks(0, buf)
-        return True
+        try:
+            _read_mbr(sd)
+            return (True, sd, spi) if return_instances else True
+        except Exception:
+            _safe_umount()
+            try:
+                if spi is not None:
+                    spi.deinit()
+            except Exception:
+                pass
+            time.sleep_ms(200)
+            sd, spi = _init_sd_local()
+            _read_mbr(sd)
+            return (True, sd, spi) if return_instances else True
     except Exception as e:
         print(f'[SD] SD card not accessible: {e}')
-        return False
+        return (False, sd, spi) if return_instances else False

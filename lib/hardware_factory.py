@@ -240,6 +240,28 @@ class HardwareFactory:
     def is_sd_mounted(self) -> bool:
         """Return whether SD card is currently mounted."""
         return self.sd_mounted
+
+    def refresh_sd(self) -> bool:
+        """
+        Re-check SD availability and refresh SD/SPI instances if reinitialized.
+
+        Returns True if SD is accessible after refresh, False otherwise.
+        """
+        try:
+            result = is_mounted(self.sd, self.spi, return_instances=True)
+            if isinstance(result, tuple) and len(result) == 3:
+                ok, sd, spi = result
+                self.sd = sd
+                self.spi = spi
+                self.sd_mounted = ok
+                return ok
+
+            self.sd_mounted = bool(result)
+            return self.sd_mounted
+        except Exception as e:
+            self.errors.append(f'SD refresh failed: {e}')
+            self.sd_mounted = False
+            return False
     
     def get_errors(self) -> list:
         """Return list of initialization errors encountered."""

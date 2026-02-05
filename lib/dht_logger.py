@@ -106,7 +106,10 @@ class DHTLogger:
     def _file_exists(self) -> bool:
         """Check if CSV file exists on primary storage."""
         try:
-            with open(self._resolve_path(self.filename), 'r'):
+            # Use same path construction as BufferManager.write() for consistency
+            relpath = self._strip_sd_prefix(self.filename)
+            primary_path = f'{self.buffer_manager.sd_mount_point}/{relpath}'
+            with open(primary_path, 'r'):
                 return True
         except:
             return False

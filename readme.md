@@ -129,3 +129,26 @@ Note: Timestamp is raw RTC tuple; convert for human-readable format
 | SD card not mounting | Verify GPIO 10-13 connections, check baudrate |
 | Sensor read failures | Check DHT22 wiring on GPIO 15, allow retries |
 | Relay not switching | Confirm GPIO levels (HIGH=off, LOW=on) |
+
+## Planned Enhancements
+
+- **Sensor Upgrades**
+  - Replace DHT22 with SHT31-D sensor for improved accuracy
+  - Add CO2 monitoring via SenseAir S8 004-0-0053 with TTL-to-RS485 interface
+  - Use CO2 levels to automate exhaust fan control
+
+- **User Interface & Feedback**
+  - Enhanced LED status indicators for physical casing
+  - OLED display driver (SSD1306) with real-time information screen
+
+- **Control System Improvements**
+  - PWM-based fan speed control (variable instead of on/off)
+  - Variable MarsHydro grow light intensity control
+  - Adaptive environmental adjustments via mathematical algorithms
+
+- **Hardware & Integration**
+  - Custom enclosure design with assembly instructions
+  - Optional: upgrade to self-charging RTC module for improved reliability
+
+- **Preset Configurations**
+  - Growing scenario templates: Vegetables, Household Plants, Flowers, Mycology

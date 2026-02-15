@@ -140,6 +140,14 @@ Note: Timestamp is raw RTC tuple; convert for human-readable format
 - **User Interface & Feedback**
   - Enhanced LED status indicators for physical casing
   - OLED display driver (SSD1306) with real-time information screen
+    - Temp / Humidity
+    - CO₂
+    - Fan Status
+    - SD-Status (Mounted, % full, fallback size)
+    - Uptime
+    - Time & Date
+    - Errors
+  - Button for cycling through display info
 
 - **Control System Improvements**
   - PWM-based fan speed control (variable instead of on/off)
@@ -149,6 +157,10 @@ Note: Timestamp is raw RTC tuple; convert for human-readable format
 - **Hardware & Integration**
   - Custom enclosure design with assembly instructions
   - Optional: upgrade to self-charging RTC module for improved reliability
+  - Temperature Sensor for enclosure, incl. temp-based fan activation
 
 - **Preset Configurations**
   - Growing scenario templates: Vegetables, Household Plants, Flowers, Mycology
+
+- **Bugfixes**
+  - Correct dht_log (not being saved right now)

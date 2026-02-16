@@ -366,6 +366,45 @@ class BufferManager:
         except:
             return 0
     
+    def rename(self, old_relpath: str, new_relpath: str) -> bool:
+        """
+        Rename a file on the primary (SD) storage.
+
+        Resolves relative paths against the SD mount point and performs
+        a rename operation. Used by EventLogger for log rotation.
+        MicroPython fallback: copy content then delete original.
+
+        Args:
+            old_relpath (str): Current relative path (e.g., 'system.log')
+            new_relpath (str): Desired relative path (e.g., 'system_2026-02-16_143022.log')
+
+        Returns:
+            bool: True if rename succeeded, False otherwise
+        """
+        if old_relpath.startswith('/sd/'):
+            old_relpath = old_relpath[4:]
+        if new_relpath.startswith('/sd/'):
+            new_relpath = new_relpath[4:]
+
+        old_path = self._path_join(self.sd_mount_point, old_relpath)
+        new_path = self._path_join(self.sd_mount_point, new_relpath)
+
+        try:
+            # Try os.rename first (CPython/most systems)
+            if hasattr(os, 'rename'):
+                os.rename(old_path, new_path) # type: ignore
+            else:
+                # MicroPython fallback: copy then delete
+                with open(old_path, 'r') as src:
+                    content = src.read()
+                with open(new_path, 'w') as dst:
+                    dst.write(content)
+                os.remove(old_path)
+            return True
+        except Exception as e:
+            print(f'[BufferManager] WARNING: rename failed {old_path} -> {new_path}: {e}')
+            return False
+
     def get_metrics(self) -> dict:
         """
         Return usage metrics for logging/debugging.

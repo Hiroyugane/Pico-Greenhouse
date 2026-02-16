@@ -141,18 +141,31 @@ class EventLogger:
         """
         Check log file size and rotate if needed.
         
-        Creates backup file and starts new log when max_size exceeded.
+        When the log exceeds max_size the current file is renamed with a
+        timestamp (e.g. system_2026-02-16_143022.log) and a fresh
+        system.log is started on the next write — similar to Linux logrotate.
         """
         if self._log_size > self.max_size:
             try:
-                backup_path = self.logfile.replace('.log', '_backup.log')
+                # Flush any pending entries so the rotated file is complete
+                self.flush()
+
+                # Build a filesystem-safe timestamp for the archive name
+                ts = self._get_timestamp().replace(' ', '_').replace(':', '')
+                # e.g. 'system.log' -> 'system_2026-02-16_143022.log'
+                rotated_name = self.logfile.replace('.log', f'_{ts}.log')
+
                 relpath = self._strip_sd_prefix(self.logfile)
-                backup_relpath = self._strip_sd_prefix(backup_path)
-                
-                # Note: File rotation on SD requires filesystem support for rename
-                # Current implementation is simplified; full rotation would need os.rename()
+                rotated_relpath = self._strip_sd_prefix(rotated_name)
+
+                renamed = self.buffer_manager.rename(relpath, rotated_relpath)
+
                 self._log_size = 0
-                self.info('EventLogger', f'Log rotated. Backup: {backup_path}')
+
+                if renamed:
+                    self.info('EventLogger', f'Log rotated -> {rotated_name}')
+                else:
+                    self.info('EventLogger', 'Log rotation rename failed; size counter reset')
             except Exception as e:
                 print(f'[EventLogger] WARNING: Log rotation failed: {e}')
 

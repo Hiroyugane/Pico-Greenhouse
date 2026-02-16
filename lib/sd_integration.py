@@ -9,7 +9,7 @@ import sys
 import time
 
 
-def mount_sd(spi, cs_pin, mount_point: str = '/sd') -> bool:
+def mount_sd(spi, cs_pin, mount_point: str = '/sd'):
     """
     Attempt to mount SD card on specified mount point.
     
@@ -19,13 +19,13 @@ def mount_sd(spi, cs_pin, mount_point: str = '/sd') -> bool:
         mount_point (str): Mount point path (default: '/sd')
     
     Returns:
-        bool: True if mounted successfully, False on error
+        tuple: (bool, SDCard | None) -- success flag and the SDCard instance
     """
     try:
         if sys.implementation.name != 'micropython':
             os.makedirs(mount_point, exist_ok=True)
             print(f'[SD] Host mount simulated at {mount_point}')
-            return True
+            return True, None
         from lib import sdcard
         from machine import Pin
         
@@ -35,10 +35,10 @@ def mount_sd(spi, cs_pin, mount_point: str = '/sd') -> bool:
         
         sd = sdcard.SDCard(spi, cs_pin)
         os.mount(sd, mount_point)
-        return True
+        return True, sd
     except Exception as e:
         print(f'[SD] Mount failed at {mount_point}: {e}')
-        return False
+        return False, None
 
 
 def is_mounted(sd, spi=None, return_instances: bool = False):

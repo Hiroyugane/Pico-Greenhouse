@@ -147,6 +147,9 @@ class HardwareFactory:
         """
         Initialize and mount SD card.
         
+        Adds a power-up stabilization delay and retry logic for cold boot
+        scenarios where the SD card may not be ready immediately.
+        
         Returns True if mounted, False otherwise (non-fatal; system can run with fallback).
         """
         try:
@@ -167,14 +170,25 @@ class HardwareFactory:
             cs = spi_config.get('cs', 13)
             mount_point = spi_config.get('mount_point', '/sd')
             
-            self.sd = sdcard.SDCard(self.spi, Pin(cs))
-            self.sd_mounted = mount_sd(self.spi, cs, mount_point)
+            # Allow the SD card to stabilize after power-on before
+            # attempting SPI initialization (cold-boot timing).
+            time.sleep_ms(250)
             
-            if self.sd_mounted:
-                return True
-            else:
-                self.errors.append('SD card mount failed (will use fallback buffering)')
-                return False
+            # Retry mount up to 3 times for cards that need extra
+            # power-up time on standalone (non-Thonny) boot.
+            max_retries = 3
+            for attempt in range(max_retries):
+                ok, sd = mount_sd(self.spi, cs, mount_point)
+                if ok:
+                    self.sd = sd
+                    self.sd_mounted = True
+                    return True
+                if attempt < max_retries - 1:
+                    print(f'[HardwareFactory] SD mount attempt {attempt + 1} failed, retrying...')
+                    time.sleep_ms(500)
+            
+            self.errors.append('SD card mount failed after retries (will use fallback buffering)')
+            return False
         except Exception as e:
             self.errors.append(f'SD init failed: {e}')
             return False

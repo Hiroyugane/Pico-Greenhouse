@@ -175,6 +175,13 @@ async def main():
         if metrics['buffer_entries'] > 0:
             logger.warning('MAIN', f'Buffer has {metrics["buffer_entries"]} entries (SD may be unavailable)')
         
+        # Hot-swap recovery: if SD is not accessible, attempt remount
+        # via HardwareFactory so the VFS mount is re-established after
+        # a card removal + reinsertion cycle.
+        if not buffer_manager.is_primary_available():
+            if hardware.refresh_sd():
+                logger.info('MAIN', 'SD card re-mounted after hot-swap')
+        
         # Attempt to migrate fallback entries if primary became available
         if metrics['writes_to_fallback'] > metrics['fallback_migrations']:
             migrated = buffer_manager.migrate_fallback()

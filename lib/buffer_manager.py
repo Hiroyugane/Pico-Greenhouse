@@ -261,14 +261,22 @@ class BufferManager:
         # 1. Migrate fallback entries (SD was disconnected, now reconnected)
         # 2. Flush in-memory buffer (both primary and fallback were unavailable, now primary is back)
         # This prevents out-of-order timestamps in CSV files.
-        if self.is_primary_available():
+        #
+        # Cache the availability check: is_primary_available() performs a
+        # full create-write-read-delete cycle on /sd/.test over SPI.
+        # Calling it once per write() instead of 2-4 times dramatically
+        # reduces SD I/O and avoids timing-related false negatives that
+        # silently route data to fallback.
+        primary_ok = self.is_primary_available()
+        
+        if primary_ok:
             if self._has_fallback_entries():
                 self.migrate_fallback()
             if self._buffers:
                 self.flush()
         
         # Try primary first
-        if self.is_primary_available():
+        if primary_ok:
             try:
                 with open(primary_path, 'a') as f:
                     f.write(data)

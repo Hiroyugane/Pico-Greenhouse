@@ -92,16 +92,29 @@ async def main():
     # Step 6: Create DHTLogger
     dht_config = DEVICE_CONFIG.get('dht_logger', {})
     files_config = DEVICE_CONFIG.get('files', {})
-    dht_logger = DHTLogger(
-        pin=DEVICE_CONFIG['pins']['dht22'],
-        time_provider=time_provider,
-        buffer_manager=buffer_manager,
-        logger=logger,
-        interval=dht_config.get('interval_s', 60),
-        filename=f'/sd/{files_config.get("dht_log_base", "dht_log.csv")}',
-        max_retries=dht_config.get('max_retries', 3),
-        status_led_pin=DEVICE_CONFIG['pins']['status_led'],
-    )
+    try:
+        dht_logger = DHTLogger(
+            pin=DEVICE_CONFIG['pins']['dht22'],
+            time_provider=time_provider,
+            buffer_manager=buffer_manager,
+            logger=logger,
+            interval=dht_config.get('interval_s', 60),
+            filename=f'/sd/{files_config.get("dht_log_base", "dht_log.csv")}',
+            max_retries=dht_config.get('max_retries', 3),
+            status_led_pin=DEVICE_CONFIG['pins']['status_led'],
+        )
+    except Exception as e:
+        logger.error('MAIN', f'DHTLogger init failed: {e}')
+        # Create a minimal DHTLogger without status LED to keep system running
+        dht_logger = DHTLogger(
+            pin=DEVICE_CONFIG['pins']['dht22'],
+            time_provider=time_provider,
+            buffer_manager=buffer_manager,
+            logger=logger,
+            interval=dht_config.get('interval_s', 60),
+            filename=f'/sd/{files_config.get("dht_log_base", "dht_log.csv")}',
+            max_retries=dht_config.get('max_retries', 3),
+        )
     
     # Step 7: Create relay controllers with dependency injection
     fan_configs = [

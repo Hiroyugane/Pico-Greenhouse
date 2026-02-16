@@ -405,3 +405,77 @@ class TestDHTLoggerLogLoop:
         with patch('asyncio.sleep', side_effect=asyncio.CancelledError):
             with pytest.raises(asyncio.CancelledError):
                 await dht.log_loop()
+
+    async def test_log_loop_data_written_to_sd_file(self, time_provider, buffer_manager, mock_event_logger, tmp_path):
+        """log_loop writes CSV rows to the actual SD file (not just cache)."""
+        from lib.dht_logger import DHTLogger
+
+        sensor = Mock()
+        sensor.measure = Mock()
+        sensor.temperature = Mock(return_value=22.5)
+        sensor.humidity = Mock(return_value=65.0)
+
+        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+            with patch('dht.DHT22', return_value=sensor):
+                dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger, interval=1)
+
+        loop_count = 0
+        async def limited_sleep(duration):
+            nonlocal loop_count
+            if duration >= 1:
+                loop_count += 1
+                if loop_count >= 2:
+                    raise asyncio.CancelledError()
+
+        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+            with patch('asyncio.sleep', side_effect=limited_sleep):
+                with pytest.raises(asyncio.CancelledError):
+                    await dht.log_loop()
+
+        # Verify that the CSV file exists on the SD mount and contains data rows
+        relpath = dht._strip_sd_prefix(dht.filename)
+        sd_file = tmp_path / "sd" / relpath
+        assert sd_file.exists(), f'DHT log file was not created on SD: {sd_file}'
+        content = sd_file.read_text()
+        lines = content.strip().split('\n')
+        assert lines[0] == 'Timestamp,Temperature,Humidity', f'Missing CSV header'
+        assert len(lines) >= 2, f'No data rows written (only header)'
+        assert '22.5' in lines[1] and '65.0' in lines[1], f'Data row missing sensor values'
+
+    async def test_log_loop_fallback_write_logs_warning(self, time_provider, buffer_manager, mock_event_logger):
+        """When write returns False (fallback), log_loop logs a warning."""
+        from lib.dht_logger import DHTLogger
+
+        sensor = Mock()
+        sensor.measure = Mock()
+        sensor.temperature = Mock(return_value=22.5)
+        sensor.humidity = Mock(return_value=65.0)
+
+        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+            with patch('dht.DHT22', return_value=sensor):
+                dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger, interval=1)
+
+        # Make buffer_manager.write return False (simulating fallback)
+        original_write = buffer_manager.write
+        def fallback_write(relpath, data):
+            if 'Timestamp' not in data:
+                return False  # Simulate fallback for data rows
+            return original_write(relpath, data)
+        buffer_manager.write = fallback_write
+
+        loop_count = 0
+        async def limited_sleep(duration):
+            nonlocal loop_count
+            if duration >= 1:
+                loop_count += 1
+                if loop_count >= 1:
+                    raise asyncio.CancelledError()
+
+        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+            with patch('asyncio.sleep', side_effect=limited_sleep):
+                with pytest.raises(asyncio.CancelledError):
+                    await dht.log_loop()
+
+        # Should have warned about fallback write
+        warn_calls = [str(c) for c in mock_event_logger.warning.call_args_list]
+        assert any('fallback' in c.lower() for c in warn_calls), f'No fallback warning logged: {warn_calls}'

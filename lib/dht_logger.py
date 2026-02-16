@@ -236,10 +236,20 @@ class DHTLogger:
                     relpath = self._strip_sd_prefix(self.filename)
                     row = f'{timestamp},{temp:.1f},{hum:.1f}\n'
                     
+                    # Ensure CSV file exists on SD (recreate header if
+                    # init-time creation failed, e.g. SD timing issues).
+                    if not self._file_exists():
+                        try:
+                            self._create_file()
+                        except Exception:
+                            pass  # write() below will route to fallback
+                    
                     # Write to storage via BufferManager
                     # BufferManager handles: primary → fallback → in-memory buffer
                     try:
-                        self.buffer_manager.write(relpath, row)
+                        wrote_primary = self.buffer_manager.write(relpath, row)
+                        if not wrote_primary:
+                            self.logger.warning('DHTLogger', f'Write went to fallback (SD unavailable?) for {relpath}')
                     except Exception as e:
                         self.logger.error('DHTLogger', f'Failed to write: {e}')
                         self.write_failures += 1

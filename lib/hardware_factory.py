@@ -104,10 +104,11 @@ class HardwareFactory:
         """
         try:
             pins = self.config.get('pins', {})
+            i2c_port = pins.get('rtc_i2c_port', 0)
             sda = pins.get('rtc_sda', 0)
             scl = pins.get('rtc_scl', 1)
             
-            self.rtc = ds3231.RTC(sda_pin=sda, scl_pin=scl)
+            self.rtc = ds3231.RTC(sda_pin=sda, scl_pin=scl, port=i2c_port)
             
             # Verify RTC is responding
             result = self.rtc.ReadTime(1)

@@ -12,11 +12,15 @@ DEVICE_CONFIG = {
         'status_led': 25,               # Status LED (feedback)
         'reminder_led': 24,             # Service reminder LED
         'button_reminder': 23,          # Button to reset Service reminder
+        'rtc_i2c_port': 1,              # I2C peripheral (0 or 1)
         'rtc_sda': 2,                   # RTC I2C SDA
         'rtc_scl': 3,                   # RTC I2C SCL
         'relay_fan_1': 16,              # Fan relay 1 (primary cycle)
         'relay_fan_2': 18,              # Fan relay 2 (secondary cycle)
         'relay_growlight': 17,          # Grow light relay
+        'co2_sda': 0,                   # CO2 sensor I2C SDA
+        'co2_scl': 1,                   # CO2 sensor I2C SCL
+        'co2_i2c_port': 0,              # CO2 sensor I2C port
     },
     
     # SPI Configuration (SD Card)
@@ -119,7 +123,7 @@ def validate_config():
     """
     required_keys = {
         'pins': ['dht22', 'status_led', 'reminder_led', 'button_reminder', 
-                 'rtc_sda', 'rtc_scl', 'relay_fan_1', 'relay_fan_2', 'relay_growlight'],
+                 'rtc_i2c_port', 'rtc_sda', 'rtc_scl', 'relay_fan_1', 'relay_fan_2', 'relay_growlight'],
         'spi': ['id', 'baudrate', 'sck', 'mosi', 'miso', 'cs', 'mount_point'],
         'files': ['dht_log_base', 'system_log', 'fallback_path'],
         'dht_logger': ['interval_s', 'max_retries', 'max_buffer_size'],

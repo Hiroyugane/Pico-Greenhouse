@@ -1,52 +1,74 @@
-import asyncio
-import lib.ds3231 as ds3231
-import time 
+import time
 
-rtc = ds3231.RTC(sda_pin=0, scl_pin=1)
-rtc_time = rtc.ReadTime('DIN-1355-1+time') # type: ignore
-print('Alt:', rtc_time)
 
 def dec_to_bcd(val):
+    """Convert a decimal value (0-99) to BCD encoding."""
     return (val // 10) << 4 | (val % 10)
 
+
 def get_weekday(year, month, day):
-    # Zeller's Congruence Algorithm to find the day of the week
+    """Return weekday (0=Sun … 6=Sat) using Zeller's Congruence."""
     if month < 3:
         month += 12
         year -= 1
     K = year % 100
     J = year // 100
-    f = day + 13*(month + 1)//5 + K + K//4 + J//4 + 5*J
+    f = day + 13 * (month + 1) // 5 + K + K // 4 + J // 4 + 5 * J
     return (f % 7 + 6) % 7
 
-# Aktuelle Zeit vom Pi Pico auslesen
-current_time = time.localtime()
 
-# Zeit auf dem RTC Chip setzen
-year = current_time[0] - 2000  # RTC erwartet Jahr im Format '00 - 99'
-month = current_time[1]
-day = current_time[2]
-hour = current_time[3]
-minute = current_time[4]
-second = current_time[5]
-weekday = get_weekday(current_time[0], month, day)
+def build_time_data(localtime_tuple):
+    """Build the 7-byte BCD time payload for ds3231.SetTime().
 
-# Zeitdaten in BCD-Format umwandeln
-time_data = bytes([
-    dec_to_bcd(second),
-    dec_to_bcd(minute),
-    dec_to_bcd(hour),
-    dec_to_bcd(weekday),  # +1 weil RTC-Chips oft Montag=1, Dienstag=2, etc. haben
-    dec_to_bcd(day),
-    dec_to_bcd(month),
-    dec_to_bcd(year)
-])
+    Parameters
+    ----------
+    localtime_tuple : tuple
+        A ``time.localtime()``-style 9-tuple
+        (year, month, day, hour, minute, second, weekday, yearday, dst).
 
-# Angenommen rtc.SetTime() ist eine Methode des RTC-Chips
-rtc.SetTime(time_data)
+    Returns
+    -------
+    bytes
+        7-byte BCD payload: [sec, min, hour, wday, day, month, year].
+    """
+    year_full = localtime_tuple[0]
+    month = localtime_tuple[1]
+    day = localtime_tuple[2]
+    hour = localtime_tuple[3]
+    minute = localtime_tuple[4]
+    second = localtime_tuple[5]
+    weekday = get_weekday(year_full, month, day)
+    year_short = year_full - 2000  # RTC expects 00-99
 
-time.sleep(2)  # Kurze Pause, um sicherzustellen, dass die Zeit gesetzt wurde
-print('Neu:', rtc_time)
-print('current Time:', time.localtime())
-print("Zeit erfolgreich auf RTC-Chip gesetzt.")
+    return bytes([
+        dec_to_bcd(second),
+        dec_to_bcd(minute),
+        dec_to_bcd(hour),
+        dec_to_bcd(weekday),
+        dec_to_bcd(day),
+        dec_to_bcd(month),
+        dec_to_bcd(year_short),
+    ])
+
+
+def main():  # pragma: no cover
+    """Sync the ds3231 RTC to the system clock (run on-device via Thonny)."""
+    import lib.ds3231 as ds3231
+
+    rtc = ds3231.RTC(sda_pin=0, scl_pin=1)
+    rtc_time = rtc.ReadTime('DIN-1355-1+time')  # type: ignore
+    print('Alt:', rtc_time)
+
+    current_time = time.localtime()
+    time_data = build_time_data(current_time)
+    rtc.SetTime(time_data)
+
+    time.sleep(2)
+    print('Neu:', rtc.ReadTime('DIN-1355-1+time'))  # type: ignore
+    print('current Time:', time.localtime())
+    print("Zeit erfolgreich auf RTC-Chip gesetzt.")
+
+
+if __name__ == "__main__":  # pragma: no cover
+    main()
 

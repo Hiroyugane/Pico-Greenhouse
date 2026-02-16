@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch, MagicMock
 from tests.conftest import FAKE_LOCALTIME
 
 
+@pytest.mark.asyncio
 class TestMainStartup:
     """Tests for main() startup sequence."""
 
@@ -84,6 +85,7 @@ class TestMainStartup:
         assert len(created_tasks) > 0
 
 
+@pytest.mark.asyncio
 class TestMainHealthCheck:
     """Tests for main loop health-check logic."""
 

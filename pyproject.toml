@@ -10,7 +10,7 @@ filterwarnings = [
 ]
 
 [tool.coverage.run]
-source = ["lib", "config"]
+source = ["lib", "config", "rtc_set_time", "sd_test"]
 omit = [
     "tests/*",
     "host_shims/*",

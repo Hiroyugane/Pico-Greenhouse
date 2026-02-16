@@ -231,6 +231,7 @@ class TestDHTLoggerFileOps:
         assert DHTLogger._strip_sd_prefix('dht_log.csv') == 'dht_log.csv'
 
 
+@pytest.mark.asyncio
 class TestDHTLoggerLogLoop:
     """Tests for the async log_loop."""
 

@@ -79,6 +79,7 @@ class TestLED:
         led.toggle()
         led.pin.off.assert_called()
 
+    @pytest.mark.asyncio
     async def test_blink_pattern_async(self):
         """blink_pattern_async plays ON/OFF pattern."""
         from lib.led_button import LED
@@ -91,6 +92,7 @@ class TestLED:
         assert led.pin.on.call_count >= 1
         assert led.pin.off.call_count >= 1
 
+    @pytest.mark.asyncio
     async def test_blink_pattern_zero_repeats(self):
         """repeats=0 returns immediately without blinking."""
         from lib.led_button import LED
@@ -100,6 +102,7 @@ class TestLED:
             await led.blink_pattern_async([100, 200], repeats=0)
         sleep_mock.assert_not_called()
 
+    @pytest.mark.asyncio
     async def test_blink_pattern_led_off_at_end(self):
         """LED is OFF after blink pattern completes."""
         from lib.led_button import LED
@@ -111,6 +114,7 @@ class TestLED:
         # Last call should be off()
         led.pin.off.assert_called()
 
+    @pytest.mark.asyncio
     async def test_blink_continuous_stop_event(self):
         """blink_continuous_async stops when stop_event is set."""
         from lib.led_button import LED
@@ -188,6 +192,7 @@ class TestLEDButtonHandler:
             # Should not raise
             handler._button_isr(None)
 
+    @pytest.mark.asyncio
     async def test_blink_pattern_delegates(self, led_handler):
         """blink_pattern_async delegates to LED."""
         with patch('asyncio.sleep', return_value=None):
@@ -290,6 +295,7 @@ class TestServiceReminder:
             reminder = ServiceReminder(time_provider, handler)
         assert reminder._parse_date_from_timestamp('invalid') is None
 
+    @pytest.mark.asyncio
     async def test_monitor_triggers_blink_when_due(self, time_provider):
         """When days_interval=0, monitor triggers blink."""
         from lib.led_button import LEDButtonHandler, ServiceReminder
@@ -324,6 +330,7 @@ class TestServiceReminder:
 
         assert blink_called
 
+    @pytest.mark.asyncio
     async def test_monitor_cancelled_error(self, time_provider):
         """CancelledError in monitor turns off LED and re-raises."""
         from lib.led_button import LEDButtonHandler, ServiceReminder
@@ -335,6 +342,7 @@ class TestServiceReminder:
             with pytest.raises(asyncio.CancelledError):
                 await reminder.monitor()
 
+    @pytest.mark.asyncio
     async def test_monitor_clears_after_reset_during_blink(self, time_provider):
         """Monitor clears reminder when reset() is called between blink and re-check."""
         from lib.led_button import LEDButtonHandler, ServiceReminder
@@ -372,6 +380,7 @@ class TestServiceReminder:
         # Blink was called at least once before clearing
         assert blink_count >= 1
 
+    @pytest.mark.asyncio
     async def test_monitor_not_due_to_due_transition(self, time_provider):
         """Monitor detects transition from not-due to due."""
         from lib.led_button import LEDButtonHandler, ServiceReminder
@@ -407,6 +416,7 @@ class TestServiceReminder:
 
         assert blink_called
 
+    @pytest.mark.asyncio
     async def test_monitor_error_continues_after_sleep(self, time_provider):
         """Generic exception in monitor is caught, loop continues after 60s sleep."""
         from lib.led_button import LEDButtonHandler, ServiceReminder

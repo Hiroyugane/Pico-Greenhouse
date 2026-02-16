@@ -15,7 +15,7 @@ pytest tests/ --cov=lib --cov=config --cov-report=term-missing
 ## Test Files
 
 | File | Module Under Test | Tests |
-|---|---|---|
+| --- | --- | --- |
 | `test_time_provider.py` | `lib/time_provider.py` | Base & RTC TimeProvider, sunrise/sunset interpolation, error fallbacks |
 | `test_buffer_manager.py` | `lib/buffer_manager.py` | Primary/fallback/in-memory writes, flush, migration, rename, metrics |
 | `test_event_logger.py` | `lib/event_logger.py` | INFO/WARN/ERR logging, flush thresholds, log rotation, timestamps |
@@ -36,7 +36,7 @@ pytest tests/ --cov=lib --cov=config --cov-report=term-missing
 
 ## Architecture
 
-```
+```.
 tests/
 ├── conftest.py              # MagicMock module patches + shared fixtures
 ├── test_time_provider.py    # TimeProvider, RTCTimeProvider, sunrise_sunset
@@ -66,7 +66,8 @@ Generate HTML report:
 pytest tests/ --cov=lib --cov=config --cov-report=html
 open htmlcov/index.html
 ```
-5. **Fallback Testing**: Remove SD card during operation and verify `/local/fallback.csv` captures data
+
+1. **Fallback Testing**: Remove SD card during operation and verify `/local/fallback.csv` captures data
 
 ## Expected Initialization Sequence (from main.py)
 

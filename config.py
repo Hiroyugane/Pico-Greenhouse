@@ -30,15 +30,15 @@ DEVICE_CONFIG = {
         'error_led': 8,                 # Status LED 5 (system/error)
         'button_menu': 9,               # Menu button (short=cycle menu, long≥3s=action)
         'button_reserved': 14,          # Reserved button (future use)
-        'rtc_i2c_port': 1,              # I2C1 peripheral (shared: RTC + OLED)
-        'rtc_sda': 2,                   # I2C1 SDA
-        'rtc_scl': 3,                   # I2C1 SCL
+        'rtc_i2c_port': 0,              # I2C1 peripheral (shared: RTC + OLED)
+        'rtc_sda': 0,                   # I2C1 SDA
+        'rtc_scl': 1,                   # I2C1 SCL
         'relay_fan_1': 16,              # Fan relay 1 (primary cycle)
         'relay_fan_2': 18,              # Fan relay 2 (secondary cycle)
         'relay_growlight': 17,          # Grow light relay
-        'co2_uart_id': 0,               # CO2 sensor UART peripheral
-        'co2_uart_tx': 0,               # CO2 sensor UART TX (GP0)
-        'co2_uart_rx': 1,               # CO2 sensor UART RX (GP1)
+        'co2_uart_id': 1,               # CO2 sensor UART peripheral
+        'co2_uart_tx': 2,               # CO2 sensor UART TX (GP0)
+        'co2_uart_rx': 3,               # CO2 sensor UART RX (GP1)
         'co2_baudrate': 9600,           # CO2 sensor UART baudrate
     },
     

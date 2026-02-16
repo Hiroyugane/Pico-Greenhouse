@@ -187,6 +187,23 @@ class TestBufferManagerUtilities:
         """is_primary_available() returns True when SD directory is writable."""
         assert buffer_manager.is_primary_available() is True
 
+    def test_is_primary_available_verifies_readback(self, buffer_manager, tmp_path):
+        """is_primary_available() write+read-verifies actual data, not empty string."""
+        # Sabotage reads to return wrong data (simulates ghost writes on removed card)
+        import builtins
+        real_open = builtins.open
+        call_count = [0]
+        def fake_open(path, *args, **kwargs):
+            f = real_open(path, *args, **kwargs)
+            mode = args[0] if args else kwargs.get('mode', 'r')
+            if '.test' in str(path) and 'r' in mode:
+                # Return wrong data to simulate read-back failure
+                from io import StringIO
+                return StringIO('garbage')
+            return f
+        with patch('builtins.open', side_effect=fake_open):
+            assert buffer_manager.is_primary_available() is False
+
     def test_is_primary_available_false(self, tmp_path):
         """is_primary_available() returns False when SD doesn't exist."""
         import shutil

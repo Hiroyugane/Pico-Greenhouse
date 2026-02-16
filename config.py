@@ -101,7 +101,7 @@ DEVICE_CONFIG = {
     'buffer_manager': {
         'sd_mount_point': '/sd',
         'fallback_path': '/local/fallback.csv',
-        'max_buffer_entries': 1000,
+        'max_buffer_entries': 200,     # Reduced from 1000 to limit RAM on Pico (264KB)
     },
     
     # Event Logger Configuration

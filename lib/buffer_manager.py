@@ -68,20 +68,26 @@ class BufferManager:
         """
         Non-blocking check whether SD mount is accessible.
         
-        Performs a test write/delete operation to confirm writable access.
-        Returns False immediately if mount point doesn't exist.
+        Performs a write-then-read-verify to confirm writable access.
+        Writing an empty string is not enough: MicroPython's FAT VFS can
+        satisfy a zero-byte create/delete from cached directory entries even
+        after the physical SD card has been removed.  Writing real data and
+        reading it back forces actual block-level I/O.
         
         Returns:
             bool: True if SD mount is available and writable, False otherwise
         """
         try:
-            # Attempt actual I/O to detect hardware disconnection
             test_file = f'{self.sd_mount_point}/.test'
+            test_data = 'SDok'
+            # Write real data to force block I/O
             with open(test_file, 'w') as f:
-                f.write('')
-            import os
+                f.write(test_data)
+            # Read back and verify to catch ghost writes on removed card
+            with open(test_file, 'r') as f:
+                readback = f.read()
             os.remove(test_file)
-            return True
+            return readback == test_data
         except:
             return False
     

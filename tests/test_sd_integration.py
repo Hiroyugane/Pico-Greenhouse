@@ -203,7 +203,7 @@ class TestIsMounted:
         assert result[0] is True
 
     def test_is_mounted_device_total_failure(self):
-        """Device path: both MBR reads fail → graceful False."""
+        """Device path: both MBR reads fail → graceful False with None sd/spi."""
         import lib.sd_integration as sd_mod
 
         bad_sd = Mock()
@@ -235,3 +235,75 @@ class TestIsMounted:
 
         # Total failure returns False (from the except block)
         assert result is False
+
+    def test_is_mounted_device_total_failure_returns_none_instances(self):
+        """Device path: total failure returns (False, None, None) for return_instances."""
+        import lib.sd_integration as sd_mod
+
+        bad_sd = Mock()
+        bad_sd.readblocks = Mock(side_effect=OSError('card dead'))
+
+        mock_sdcard_mod = MagicMock()
+        mock_sdcard_mod.SDCard.return_value = bad_sd
+        mock_spi_instance = Mock()
+        mock_spi_class = MagicMock(return_value=mock_spi_instance)
+
+        mock_device_config = {
+            'spi': {'id': 1, 'baudrate': 40000000, 'sck': 10, 'mosi': 11,
+                    'miso': 12, 'cs': 13, 'mount_point': '/sd'}
+        }
+        mock_machine = MagicMock()
+        mock_machine.Pin = MagicMock(return_value=Mock())
+        mock_machine.SPI = mock_spi_class
+
+        with patch.object(sd_mod, '_IS_DEVICE', True):
+            with _patch_lib_sdcard(mock_sdcard_mod):
+                with patch.dict('sys.modules', {
+                    'config': MagicMock(DEVICE_CONFIG=mock_device_config),
+                    'machine': mock_machine,
+                }):
+                    with patch('os.mount', create=True):
+                        with patch('os.umount', create=True):
+                            with patch('time.sleep_ms'):
+                                result = sd_mod.is_mounted(bad_sd, Mock(), return_instances=True)
+
+        assert isinstance(result, tuple)
+        assert result[0] is False
+        assert result[1] is None
+        assert result[2] is None
+
+    def test_init_sd_local_deinits_spi_on_mount_failure(self):
+        """When mount fails in reinit, the newly created SPI is deinited."""
+        import lib.sd_integration as sd_mod
+
+        first_sd = Mock()
+        first_sd.readblocks = Mock(side_effect=OSError('read error'))
+
+        new_spi_instance = Mock()
+        mock_spi_class = MagicMock(return_value=new_spi_instance)
+
+        mock_sdcard_mod = MagicMock()
+        mock_sdcard_mod.SDCard.side_effect = OSError('no card')
+
+        mock_device_config = {
+            'spi': {'id': 1, 'baudrate': 40000000, 'sck': 10, 'mosi': 11,
+                    'miso': 12, 'cs': 13, 'mount_point': '/sd'}
+        }
+        mock_machine = MagicMock()
+        mock_machine.Pin = MagicMock(return_value=Mock())
+        mock_machine.SPI = mock_spi_class
+
+        with patch.object(sd_mod, '_IS_DEVICE', True):
+            with _patch_lib_sdcard(mock_sdcard_mod):
+                with patch.dict('sys.modules', {
+                    'config': MagicMock(DEVICE_CONFIG=mock_device_config),
+                    'machine': mock_machine,
+                }):
+                    with patch('os.mount', create=True, side_effect=OSError('mount fail')):
+                        with patch('os.umount', create=True):
+                            with patch('time.sleep_ms'):
+                                result = sd_mod.is_mounted(first_sd, Mock(), return_instances=True)
+
+        assert result[0] is False
+        # The SPI created during _init_sd_local should have been deinited
+        new_spi_instance.deinit.assert_called()

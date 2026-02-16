@@ -176,6 +176,53 @@ class TestMainHealthCheck:
 
         mock_hw.refresh_sd.assert_called()
 
+    async def test_sd_hot_swap_recovery_on_buffer_growth(self, monkeypatch):
+        """When primary reports available but buffer is growing, still attempt refresh_sd."""
+        import main as main_module
+
+        monkeypatch.setattr(main_module, 'validate_config', lambda: True)
+
+        mock_hw = Mock()
+        mock_hw.setup.return_value = True
+        mock_hw.get_rtc.return_value = Mock()
+        mock_hw.refresh_sd.return_value = True
+        monkeypatch.setattr(main_module, 'HardwareFactory', lambda *a, **kw: mock_hw)
+
+        mock_buffer = Mock()
+        mock_buffer.get_metrics.return_value = {
+            'buffer_entries': 10, 'writes_to_fallback': 0, 'fallback_migrations': 0
+        }
+        # Primary claims available but buffer is growing (ghost writes)
+        mock_buffer.is_primary_available.return_value = True
+        monkeypatch.setattr(main_module, 'BufferManager', lambda *a, **kw: mock_buffer)
+
+        mock_logger = Mock()
+        monkeypatch.setattr(main_module, 'EventLogger', lambda *a, **kw: mock_logger)
+        monkeypatch.setattr(main_module, 'DHTLogger', lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, 'FanController', lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, 'GrowlightController', lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, 'LEDButtonHandler', lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, 'ServiceReminder', lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module.asyncio, 'create_task', lambda t: Mock())
+
+        call_count = 0
+        async def limited_sleep(duration):
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 2:
+                raise asyncio.CancelledError()
+
+        monkeypatch.setattr(main_module.asyncio, 'sleep', limited_sleep)
+
+        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+            with pytest.raises(asyncio.CancelledError):
+                await main_module.main()
+
+        # refresh_sd should be called even though is_primary_available is True
+        mock_hw.refresh_sd.assert_called()
+        # flush should also be called after successful refresh
+        mock_buffer.flush.assert_called()
+
     async def test_fallback_migration_attempt(self, monkeypatch):
         """When fallback writes exceed migrations, attempt migration."""
         import main as main_module

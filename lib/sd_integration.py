@@ -78,16 +78,23 @@ def is_mounted(sd, spi=None, return_instances: bool = False):
                 cs_pin = Pin(cs)
             else:
                 cs_pin = cs
-            spi = SPI(
+            new_spi = SPI(
                 spi_id,
                 baudrate=baudrate,
                 sck=Pin(sck),
                 mosi=Pin(mosi),
                 miso=Pin(miso)
             )
-            sd_local = sdcard.SDCard(spi, cs_pin)
-            os.mount(sd_local, mount_point)  # type: ignore[attr-defined]
-            return sd_local, spi
+            try:
+                sd_local = sdcard.SDCard(new_spi, cs_pin)
+                os.mount(sd_local, mount_point)  # type: ignore[attr-defined]
+                return sd_local, new_spi
+            except Exception:
+                try:
+                    new_spi.deinit()
+                except Exception:
+                    pass
+                raise
 
         def _safe_umount():
             try:
@@ -118,4 +125,4 @@ def is_mounted(sd, spi=None, return_instances: bool = False):
             return (True, sd, spi) if return_instances else True
     except Exception as e:
         print(f'[SD] SD card not accessible: {e}')
-        return (False, sd, spi) if return_instances else False
+        return (False, None, None) if return_instances else False

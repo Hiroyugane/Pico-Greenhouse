@@ -193,12 +193,19 @@ async def main():
         if metrics['buffer_entries'] > 0:
             logger.warning('MAIN', f'Buffer has {metrics["buffer_entries"]} entries (SD may be unavailable)')
         
-        # Hot-swap recovery: if SD is not accessible, attempt remount
-        # via HardwareFactory so the VFS mount is re-established after
-        # a card removal + reinsertion cycle.
-        if not buffer_manager.is_primary_available():
+        # Hot-swap recovery: attempt SD refresh when primary is
+        # reported down OR when the in-memory buffer is growing.
+        # The second condition catches the case where is_primary_available()
+        # returns True (cached VFS metadata) but real writes are failing.
+        # refresh_sd() performs a block-level readblocks check and is
+        # cheap when the card is actually present.
+        sd_needs_check = (not buffer_manager.is_primary_available()
+                          or metrics['buffer_entries'] > 0)
+        if sd_needs_check:
             if hardware.refresh_sd():
                 logger.info('MAIN', 'SD card re-mounted after hot-swap')
+                # Flush in-memory buffer now that primary is back
+                buffer_manager.flush()
         
         # Attempt to migrate fallback entries if primary became available
         if metrics['writes_to_fallback'] > metrics['fallback_migrations']:

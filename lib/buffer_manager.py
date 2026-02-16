@@ -237,21 +237,27 @@ class BufferManager:
                 # Primary write failed (e.g., file locked, permissions)
                 pass
         
-        # Primary unavailable or write failed; try fallback
+        # Primary unavailable or write failed; try fallback file first,
+        # RAM buffer only as absolute last resort.
         try:
             if not self._ensure_fallback_dir():
-                # Fallback directory not available; buffer in memory as last resort
-                if relpath not in self._buffers:
-                    self._buffers[relpath] = []
-                self._buffers[relpath].append(data)
-                return False
+                raise OSError('fallback dir unavailable')
+            
+            # Drain any existing RAM entries to fallback before the new
+            # entry so chronological ordering is preserved.
+            if relpath in self._buffers and self._buffers[relpath]:
+                with open(self.fallback_path, 'a') as f:
+                    for buffered in self._buffers[relpath]:
+                        f.write(f'{relpath}|{buffered}')
+                self.writes_to_fallback += len(self._buffers[relpath])
+                self._buffers[relpath] = []
             
             with open(self.fallback_path, 'a') as f:
                 f.write(f'{relpath}|{data}')  # Include relpath in fallback for migration
             self.writes_to_fallback += 1
             return False
         except:
-            # Fallback write also failed; buffer in memory
+            # Both primary and fallback failed; buffer in RAM as last resort
             if relpath not in self._buffers:
                 self._buffers[relpath] = []
             self._buffers[relpath].append(data)
@@ -270,7 +276,12 @@ class BufferManager:
     
     def flush(self, relpath: str | None = None) -> bool:
         """
-        Flush in-memory buffers to primary storage if available.
+        Flush in-memory buffers to persistent storage.
+        
+        Tries primary (SD) first.  When primary is unavailable, drains
+        in-memory entries to the local fallback file so that RAM is freed
+        as quickly as possible.  RAM should only hold data while *both*
+        primary and fallback are unreachable.
         
         If relpath specified, flush only that file's buffer.
         If relpath is None, flush all buffers.
@@ -279,35 +290,48 @@ class BufferManager:
             relpath (str, optional): Specific file path to flush, or None for all
         
         Returns:
-            bool: True if flushed to primary, False if primary unavailable
+            bool: True if flushed to primary, False if flushed to fallback or
+                  still in memory
         
         Example:
             >>> bm.flush('dht_log.csv')  # Flush specific file
-            False  # Primary still unavailable
+            False  # Primary still unavailable (went to fallback)
             >>> # ... SD card becomes available ...
             >>> bm.flush('dht_log.csv')
-            True  # Flushed successfully
+            True  # Flushed to primary
         """
-        if not self.is_primary_available():
-            return False
-        
         paths_to_flush = [relpath] if relpath else list(self._buffers.keys())
+        flushed_to_primary = False
+        primary_available = self.is_primary_available()
         
         for path in paths_to_flush:
             if path not in self._buffers or not self._buffers[path]:
                 continue
             
-            primary_path = f'{self.sd_mount_point}/{path.lstrip("/sd/")}'
+            if primary_available:
+                primary_path = f'{self.sd_mount_point}/{path.lstrip("/sd/")}'
+                try:
+                    with open(primary_path, 'a') as f:
+                        for entry in self._buffers[path]:
+                            f.write(entry)
+                    self._buffers[path] = []
+                    flushed_to_primary = True
+                    continue
+                except:
+                    pass  # Fall through to fallback
             
-            try:
-                with open(primary_path, 'a') as f:
-                    for entry in self._buffers[path]:
-                        f.write(entry)
-                self._buffers[path] = []
-            except:
-                return False
+            # Primary unavailable or write failed — drain to fallback file
+            if self._ensure_fallback_dir():
+                try:
+                    with open(self.fallback_path, 'a') as f:
+                        for entry in self._buffers[path]:
+                            f.write(f'{path}|{entry}')
+                    self.writes_to_fallback += len(self._buffers[path])
+                    self._buffers[path] = []
+                except:
+                    pass  # Entries stay in RAM as last resort
         
-        return True
+        return flushed_to_primary
     
     def migrate_fallback(self) -> int:
         """

@@ -94,12 +94,57 @@ class TestBufferManagerFlush:
         assert (tmp_path / "sd" / "b.csv").read_text() == 'B\n'
 
     def test_flush_returns_false_when_primary_down(self, tmp_path):
-        """flush() returns False when primary is unavailable."""
+        """flush() returns False when primary is unavailable but drains to fallback."""
         from lib.buffer_manager import BufferManager
-        bm = BufferManager(sd_mount_point=str(tmp_path / "nope"))
+        fallback_dir = tmp_path / "local"
+        fallback_dir.mkdir()
+        fallback_file = fallback_dir / "fallback.csv"
+        bm = BufferManager(
+            sd_mount_point=str(tmp_path / "nope"),
+            fallback_path=str(fallback_file),
+        )
         bm.is_primary_available = lambda: False
         bm._buffers['test.csv'] = ['data\n']
         assert bm.flush() is False
+        # RAM should be drained to fallback
+        assert bm._buffers['test.csv'] == []
+        content = fallback_file.read_text()
+        assert 'test.csv|data\n' in content
+
+    def test_flush_to_fallback_when_primary_down(self, tmp_path):
+        """flush() drains multiple RAM entries to fallback when SD unavailable."""
+        from lib.buffer_manager import BufferManager
+        fallback_dir = tmp_path / "local"
+        fallback_dir.mkdir()
+        fallback_file = fallback_dir / "fallback.csv"
+        bm = BufferManager(
+            sd_mount_point=str(tmp_path / "nope"),
+            fallback_path=str(fallback_file),
+        )
+        bm.is_primary_available = lambda: False
+        bm._buffers['a.csv'] = ['row1\n', 'row2\n']
+        bm._buffers['b.csv'] = ['rowX\n']
+        bm.flush()
+        assert bm._buffers['a.csv'] == []
+        assert bm._buffers['b.csv'] == []
+        content = fallback_file.read_text()
+        assert 'a.csv|row1\n' in content
+        assert 'a.csv|row2\n' in content
+        assert 'b.csv|rowX\n' in content
+
+    def test_flush_stays_in_ram_when_both_fail(self, tmp_path):
+        """flush() keeps entries in RAM only when both primary and fallback fail."""
+        from lib.buffer_manager import BufferManager
+        bm = BufferManager(
+            sd_mount_point=str(tmp_path / "nope"),
+            fallback_path=str(tmp_path / "also_nope" / "deep" / "fb.csv"),
+        )
+        bm.is_primary_available = lambda: False
+        bm._ensure_fallback_dir = lambda: False
+        bm._buffers['test.csv'] = ['data\n']
+        bm.flush()
+        # Still in RAM since both targets failed
+        assert bm._buffers['test.csv'] == ['data\n']
 
 
 class TestBufferManagerMigration:
@@ -141,6 +186,28 @@ class TestBufferManagerMigration:
     def test_migrate_returns_zero_when_no_entries(self, buffer_manager):
         """migrate_fallback returns 0 when fallback is empty."""
         assert buffer_manager.migrate_fallback() == 0
+
+    def test_write_drains_ram_to_fallback_before_new_entry(self, tmp_path):
+        """When primary is down and RAM has entries, write() drains RAM to fallback first."""
+        from lib.buffer_manager import BufferManager
+        fallback_dir = tmp_path / "local"
+        fallback_dir.mkdir()
+        fallback_file = fallback_dir / "fallback.csv"
+        bm = BufferManager(
+            sd_mount_point=str(tmp_path / "nope"),
+            fallback_path=str(fallback_file),
+        )
+        bm.is_primary_available = lambda: False
+        # Simulate existing RAM entries (from when fallback was also down)
+        bm._buffers['sensor.csv'] = ['old_row\n']
+        bm.write('sensor.csv', 'new_row\n')
+        # RAM should be empty now
+        assert bm._buffers.get('sensor.csv', []) == []
+        content = fallback_file.read_text()
+        # Old entry should appear before new entry
+        old_pos = content.find('old_row')
+        new_pos = content.find('new_row')
+        assert old_pos < new_pos
 
     def test_write_ordering_migration_before_new(self, buffer_manager, tmp_path):
         """When primary reconnects with pending fallback, migrate BEFORE new write."""

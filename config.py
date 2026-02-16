@@ -12,8 +12,8 @@ DEVICE_CONFIG = {
         'status_led': 25,               # Status LED (feedback)
         'reminder_led': 24,             # Service reminder LED
         'button_reminder': 23,          # Button to reset Service reminder
-        'rtc_sda': 0,                   # RTC I2C SDA
-        'rtc_scl': 1,                   # RTC I2C SCL
+        'rtc_sda': 2,                   # RTC I2C SDA
+        'rtc_scl': 3,                   # RTC I2C SCL
         'relay_fan_1': 16,              # Fan relay 1 (primary cycle)
         'relay_fan_2': 18,              # Fan relay 2 (secondary cycle)
         'relay_growlight': 17,          # Grow light relay

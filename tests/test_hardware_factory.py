@@ -152,7 +152,7 @@ class TestHardwareFactorySD:
 
         assert result is True
         assert factory.sd_mounted is True
-        mount_mock.assert_called_once()
+        assert mount_mock.call_count == 1 # type: ignore
 
     def test_init_sd_device_retries_on_failure(self):
         """Device path: mount_sd fails twice then succeeds on 3rd attempt."""
@@ -165,13 +165,13 @@ class TestHardwareFactorySD:
         with patch.object(hf_mod, '_IS_HOST', False):
             with patch('lib.hardware_factory.mount_sd', side_effect=[
                 (False, None), (False, None), (True, mock_sd)
-            ]) as mount_mock:
+            ]) as mount_mock:  # type: ignore
                 with patch('time.sleep_ms'):
                     result = factory._init_sd()
+                assert mount_mock.call_count == 3  # type: ignore
 
         assert result is True
         assert factory.sd_mounted is True
-        assert mount_mock.call_count == 3
 
     def test_init_sd_device_all_retries_fail(self):
         """Device path: all 3 mount attempts fail → returns False."""

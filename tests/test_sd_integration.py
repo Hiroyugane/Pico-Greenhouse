@@ -48,7 +48,7 @@ class TestMountSD:
         assert ok is True
         assert sd is mock_sd
         mock_sdcard.SDCard.assert_called_once_with(mock_spi, mock_cs)
-        mock_mount.assert_called_once()
+        mock_mount.assert_called_once() # type: ignore
 
     def test_mount_device_cs_int_wraps_pin(self):
         """On device path, integer cs_pin is wrapped in Pin()."""

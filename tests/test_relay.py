@@ -63,16 +63,16 @@ class TestRelayController:
         from lib.relay import RelayController
         relay = RelayController(16, invert=True)
         relay.turn_on()
-        relay.pin.value.assert_called_with(0)
+        relay.pin.value.assert_called_with(0) # type: ignore
         relay.turn_off()
-        relay.pin.value.assert_called_with(1)
+        relay.pin.value.assert_called_with(1) # type: ignore
 
     def test_pin_value_non_inverted(self):
         """Non-inverted relay: turn_on() calls pin.value(1)."""
         from lib.relay import RelayController
         relay = RelayController(16, invert=False)
         relay.turn_on()
-        relay.pin.value.assert_called_with(1)
+        relay.pin.value.assert_called_with(1) # type: ignore
 
     def test_default_name_from_pin(self):
         """Default name is 'Relay_{pin}'."""

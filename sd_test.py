@@ -107,8 +107,8 @@ def _build_hardware():  # pragma: no cover
     from lib import sdcard
     import vfs
 
-    _spi = [None]
-    _sd = [None]
+    _spi: list = [None]
+    _sd: list = [None]
 
     def _deinit_spi():
         try:

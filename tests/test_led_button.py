@@ -48,93 +48,101 @@ class TestLED:
     def test_init_off(self):
         """LED initializes with pin OFF."""
         from lib.led_button import LED
-        led = LED(25)
-        # Pin was created and off() was called
-        led.pin.off.assert_called()
+        with patch('lib.led_button.machine.Pin', return_value=MagicMock()):
+            led = LED(25)
+            # Pin was created and off() was called
+            led.pin.off.assert_called() # type: ignore
 
     def test_on(self):
         """on() turns LED on."""
         from lib.led_button import LED
-        led = LED(25)
-        led.on()
-        led.pin.on.assert_called()
+        with patch('lib.led_button.machine.Pin', return_value=MagicMock()):
+            led = LED(25)
+            led.on()
+            led.pin.on.assert_called() # type: ignore
 
     def test_off(self):
         """off() turns LED off."""
         from lib.led_button import LED
-        led = LED(25)
-        led.off()
-        led.pin.off.assert_called()
+        with patch('lib.led_button.machine.Pin', return_value=MagicMock()):
+            led = LED(25)
+            led.off()
+            led.pin.off.assert_called() # type: ignore
 
     def test_toggle(self):
         """toggle() alternates LED state."""
         from lib.led_button import LED
-        led = LED(25)
-        # Initially off (value() returns 0)
-        led.pin.value = Mock(return_value=0)
-        led.toggle()
-        led.pin.on.assert_called()
+        with patch('lib.led_button.machine.Pin', return_value=MagicMock()):
+            led = LED(25)
+            # Initially off (value() returns 0)
+            led.pin.value = Mock(return_value=0)
+            led.toggle()
+            led.pin.on.assert_called() # type: ignore
 
-        led.pin.value = Mock(return_value=1)
-        led.toggle()
-        led.pin.off.assert_called()
+            led.pin.value = Mock(return_value=1)
+            led.toggle()
+            led.pin.off.assert_called() # type: ignore
 
     @pytest.mark.asyncio
     async def test_blink_pattern_async(self):
         """blink_pattern_async plays ON/OFF pattern."""
         from lib.led_button import LED
-        led = LED(25)
+        with patch('lib.led_button.machine.Pin', return_value=MagicMock()):
+            led = LED(25)
 
-        with patch('asyncio.sleep', return_value=None) as sleep_mock:
-            await led.blink_pattern_async([100, 200], repeats=1)
+            with patch('asyncio.sleep', return_value=None) as sleep_mock:
+                await led.blink_pattern_async([100, 200], repeats=1)
 
-        # Should have called on, sleep(0.1), off, sleep(0.2), then off at end
-        assert led.pin.on.call_count >= 1
-        assert led.pin.off.call_count >= 1
+            # Should have called on, sleep(0.1), off, sleep(0.2), then off at end
+            assert led.pin.on.call_count >= 1 # type: ignore
+            assert led.pin.off.call_count >= 1 # type: ignore
 
     @pytest.mark.asyncio
     async def test_blink_pattern_zero_repeats(self):
         """repeats=0 returns immediately without blinking."""
         from lib.led_button import LED
-        led = LED(25)
+        with patch('lib.led_button.machine.Pin', return_value=MagicMock()):
+            led = LED(25)
 
-        with patch('asyncio.sleep', return_value=None) as sleep_mock:
-            await led.blink_pattern_async([100, 200], repeats=0)
-        sleep_mock.assert_not_called()
+            with patch('asyncio.sleep', return_value=None) as sleep_mock:
+                await led.blink_pattern_async([100, 200], repeats=0)
+            sleep_mock.assert_not_called() # type: ignore
 
     @pytest.mark.asyncio
     async def test_blink_pattern_led_off_at_end(self):
         """LED is OFF after blink pattern completes."""
         from lib.led_button import LED
-        led = LED(25)
+        with patch('lib.led_button.machine.Pin', return_value=MagicMock()):
+            led = LED(25)
 
-        with patch('asyncio.sleep', return_value=None):
-            await led.blink_pattern_async([100, 100], repeats=2)
+            with patch('asyncio.sleep', return_value=None):
+                await led.blink_pattern_async([100, 100], repeats=2)
 
-        # Last call should be off()
-        led.pin.off.assert_called()
+            # Last call should be off()
+            led.pin.off.assert_called() # type: ignore
 
     @pytest.mark.asyncio
     async def test_blink_continuous_stop_event(self):
         """blink_continuous_async stops when stop_event is set."""
         from lib.led_button import LED
-        led = LED(25)
+        with patch('lib.led_button.machine.Pin', return_value=MagicMock()):
+            led = LED(25)
 
-        stop = asyncio.Event()
-        cycle_count = 0
+            stop = asyncio.Event()
+            cycle_count = 0
 
-        original_sleep = asyncio.sleep
-        async def counting_sleep(duration):
-            nonlocal cycle_count
-            cycle_count += 1
-            if cycle_count >= 3:
-                stop.set()
+            original_sleep = asyncio.sleep
+            async def counting_sleep(duration):
+                nonlocal cycle_count
+                cycle_count += 1
+                if cycle_count >= 3:
+                    stop.set()
 
-        with patch('asyncio.sleep', side_effect=counting_sleep):
-            await led.blink_continuous_async(100, 100, stop_event=stop)
+            with patch('asyncio.sleep', side_effect=counting_sleep):
+                await led.blink_continuous_async(100, 100, stop_event=stop)
 
-        # Should have stopped
-        led.pin.off.assert_called()
+            # Should have stopped
+            led.pin.off.assert_called() # type: ignore
 
 
 # ============================================================================

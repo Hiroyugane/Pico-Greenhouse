@@ -207,6 +207,90 @@ class TestLEDButtonHandler:
             await led_handler.blink_pattern_async([100, 100])
         led_handler.led.pin.on.assert_called()
 
+    def test_register_callbacks_sets_both(self):
+        """register_callbacks sets short and long press handlers."""
+        from lib.led_button import LEDButtonHandler
+        handler = LEDButtonHandler(5, 9, debounce_ms=50, long_press_ms=3000)
+        short_cb = Mock()
+        long_cb = Mock()
+        handler.register_callbacks(short_press=short_cb, long_press=long_cb)
+        assert handler.short_press_callback is short_cb
+        assert handler.long_press_callback is long_cb
+        handler.button.irq.assert_called() # type: ignore
+
+    def test_dual_isr_short_press(self):
+        """Short press (< long_press_ms) triggers short_press_callback."""
+        from lib.led_button import LEDButtonHandler
+        handler = LEDButtonHandler(5, 9, debounce_ms=50, long_press_ms=3000)
+        short_cb = Mock()
+        long_cb = Mock()
+        handler.register_callbacks(short_press=short_cb, long_press=long_cb)
+
+        mock_pin = MagicMock()
+        # Simulate press (FALLING: value=0) then release (RISING: value=1) after 500ms
+        with patch('lib.led_button._ticks_ms', side_effect=[1000, 1500]):
+            mock_pin.value.return_value = 0
+            handler._button_dual_isr(mock_pin)  # press at t=1000
+            mock_pin.value.return_value = 1
+            handler._button_dual_isr(mock_pin)  # release at t=1500 (500ms < 3000ms)
+
+        short_cb.assert_called_once()
+        long_cb.assert_not_called()
+
+    def test_dual_isr_long_press(self):
+        """Long press (>= long_press_ms) triggers long_press_callback."""
+        from lib.led_button import LEDButtonHandler
+        handler = LEDButtonHandler(5, 9, debounce_ms=50, long_press_ms=3000)
+        short_cb = Mock()
+        long_cb = Mock()
+        handler.register_callbacks(short_press=short_cb, long_press=long_cb)
+
+        mock_pin = MagicMock()
+        # Simulate press then release after 3500ms
+        with patch('lib.led_button._ticks_ms', side_effect=[1000, 4500]):
+            mock_pin.value.return_value = 0
+            handler._button_dual_isr(mock_pin)  # press at t=1000
+            mock_pin.value.return_value = 1
+            handler._button_dual_isr(mock_pin)  # release at t=4500 (3500ms >= 3000ms)
+
+        short_cb.assert_not_called()
+        long_cb.assert_called_once()
+
+    def test_dual_isr_debounce(self):
+        """Rapid edges within debounce window are ignored."""
+        from lib.led_button import LEDButtonHandler
+        handler = LEDButtonHandler(5, 9, debounce_ms=50, long_press_ms=3000)
+        short_cb = Mock()
+        handler.register_callbacks(short_press=short_cb)
+
+        mock_pin = MagicMock()
+        # Two presses within debounce window — second ignored
+        with patch('lib.led_button._ticks_ms', side_effect=[1000, 1010]):
+            mock_pin.value.return_value = 0
+            handler._button_dual_isr(mock_pin)  # t=1000: accepted
+            handler._button_dual_isr(mock_pin)  # t=1010: ignored (10ms < 50ms)
+
+        # Only one press start recorded, no release yet
+        short_cb.assert_not_called()
+
+    def test_dual_isr_callback_error_handled(self):
+        """If callback raises in dual ISR, error is caught."""
+        from lib.led_button import LEDButtonHandler
+        handler = LEDButtonHandler(5, 9, debounce_ms=0, long_press_ms=3000)
+
+        def bad_cb():
+            raise RuntimeError('callback error')
+
+        handler.register_callbacks(short_press=bad_cb)
+
+        mock_pin = MagicMock()
+        with patch('lib.led_button._ticks_ms', side_effect=[1000, 1500]):
+            mock_pin.value.return_value = 0
+            handler._button_dual_isr(mock_pin)
+            mock_pin.value.return_value = 1
+            # Should not raise
+            handler._button_dual_isr(mock_pin)
+
 
 # ============================================================================
 # ServiceReminder
@@ -219,7 +303,7 @@ class TestServiceReminder:
         """ServiceReminder initializes with correct state."""
         from lib.led_button import LEDButtonHandler, ServiceReminder
         with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            handler = LEDButtonHandler(24, 23)
+            handler = LEDButtonHandler(5, 9)
             reminder = ServiceReminder(time_provider, handler, days_interval=7)
         assert reminder.days_interval == 7
         assert reminder.last_serviced_timestamp is not None
@@ -228,7 +312,7 @@ class TestServiceReminder:
         """reset() updates last_serviced_timestamp."""
         from lib.led_button import LEDButtonHandler, ServiceReminder
         with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            handler = LEDButtonHandler(24, 23)
+            handler = LEDButtonHandler(5, 9)
             reminder = ServiceReminder(time_provider, handler)
             old_ts = reminder.last_serviced_timestamp
             reminder.reset()
@@ -238,7 +322,7 @@ class TestServiceReminder:
         """_days_since_Service() returns non-negative value."""
         from lib.led_button import LEDButtonHandler, ServiceReminder
         with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            handler = LEDButtonHandler(24, 23)
+            handler = LEDButtonHandler(5, 9)
             reminder = ServiceReminder(
                 time_provider, handler,
                 last_serviced_timestamp='2026-01-01 00:00:00',
@@ -251,7 +335,7 @@ class TestServiceReminder:
         from lib.led_button import LEDButtonHandler, ServiceReminder
         storage = tmp_path / "reminder.txt"
         with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            handler = LEDButtonHandler(24, 23)
+            handler = LEDButtonHandler(5, 9)
             reminder = ServiceReminder(
                 time_provider, handler,
                 storage_path=str(storage),
@@ -265,7 +349,7 @@ class TestServiceReminder:
         storage = tmp_path / "reminder.txt"
         storage.write_text('2026-01-15 10:00:00')
         with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            handler = LEDButtonHandler(24, 23)
+            handler = LEDButtonHandler(5, 9)
             reminder = ServiceReminder(
                 time_provider, handler,
                 storage_path=str(storage),
@@ -277,7 +361,7 @@ class TestServiceReminder:
         from lib.led_button import LEDButtonHandler, ServiceReminder
         storage = tmp_path / "reminder.txt"
         with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            handler = LEDButtonHandler(24, 23)
+            handler = LEDButtonHandler(5, 9)
             reminder = ServiceReminder(
                 time_provider, handler,
                 storage_path=str(storage),
@@ -290,7 +374,7 @@ class TestServiceReminder:
         """_parse_date_from_timestamp parses correctly."""
         from lib.led_button import LEDButtonHandler, ServiceReminder
         with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            handler = LEDButtonHandler(24, 23)
+            handler = LEDButtonHandler(5, 9)
             reminder = ServiceReminder(time_provider, handler)
         result = reminder._parse_date_from_timestamp('2026-01-29 14:23:45')
         assert result == (2026, 1, 29)
@@ -299,7 +383,7 @@ class TestServiceReminder:
         """_parse_date_from_timestamp returns None for invalid input."""
         from lib.led_button import LEDButtonHandler, ServiceReminder
         with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            handler = LEDButtonHandler(24, 23)
+            handler = LEDButtonHandler(5, 9)
             reminder = ServiceReminder(time_provider, handler)
         assert reminder._parse_date_from_timestamp('invalid') is None
 
@@ -309,7 +393,7 @@ class TestServiceReminder:
         from lib.led_button import LEDButtonHandler, ServiceReminder
 
         with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            handler = LEDButtonHandler(24, 23)
+            handler = LEDButtonHandler(5, 9)
             reminder = ServiceReminder(
                 time_provider, handler,
                 days_interval=0,  # Always due
@@ -343,7 +427,7 @@ class TestServiceReminder:
         """CancelledError in monitor turns off LED and re-raises."""
         from lib.led_button import LEDButtonHandler, ServiceReminder
         with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            handler = LEDButtonHandler(24, 23)
+            handler = LEDButtonHandler(5, 9)
             reminder = ServiceReminder(time_provider, handler)
 
         with patch('asyncio.sleep', side_effect=asyncio.CancelledError):
@@ -356,7 +440,7 @@ class TestServiceReminder:
         from lib.led_button import LEDButtonHandler, ServiceReminder
 
         with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            handler = LEDButtonHandler(24, 23)
+            handler = LEDButtonHandler(5, 9)
             reminder = ServiceReminder(
                 time_provider, handler,
                 days_interval=0,  # Always due initially
@@ -394,7 +478,7 @@ class TestServiceReminder:
         from lib.led_button import LEDButtonHandler, ServiceReminder
 
         with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            handler = LEDButtonHandler(24, 23)
+            handler = LEDButtonHandler(5, 9)
             reminder = ServiceReminder(
                 time_provider, handler,
                 days_interval=999,  # Start as not-due
@@ -430,7 +514,7 @@ class TestServiceReminder:
         from lib.led_button import LEDButtonHandler, ServiceReminder
 
         with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            handler = LEDButtonHandler(24, 23)
+            handler = LEDButtonHandler(5, 9)
             reminder = ServiceReminder(time_provider, handler, days_interval=7)
 
         # Make _days_since_Service raise on first call, then work normally

@@ -13,7 +13,7 @@ class TestConfigStructure:
         from config import DEVICE_CONFIG
         required = ['pins', 'spi', 'files', 'dht_logger', 'fan_1', 'fan_2',
                      'growlight', 'Service_reminder', 'buffer_manager',
-                     'event_logger', 'output_pins', 'system']
+                     'event_logger', 'output_pins', 'display', 'system']
         for key in required:
             assert key in DEVICE_CONFIG, f"Missing section: {key}"
 

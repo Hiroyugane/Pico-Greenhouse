@@ -100,6 +100,7 @@ async def main():
         interval=dht_config.get('interval_s', 60),
         filename=f'/sd/{files_config.get("dht_log_base", "dht_log.csv")}',
         max_retries=dht_config.get('max_retries', 3),
+        status_led_pin=DEVICE_CONFIG['pins']['status_led'],
     )
     
     # Step 7: Create relay controllers with dependency injection
@@ -138,10 +139,14 @@ async def main():
     )
     
     # Step 8: Create LED/button handler and Service reminder
+    #
+    # Single menu button (GP9): short press = cycle display menu,
+    # long press (>=3s) = context action (e.g. reset service reminder).
     led_handler = LEDButtonHandler(
         led_pin=DEVICE_CONFIG['pins']['reminder_led'],
-        button_pin=DEVICE_CONFIG['pins']['button_reminder'],
+        button_pin=DEVICE_CONFIG['pins']['button_menu'],
         debounce_ms=DEVICE_CONFIG.get('system', {}).get('button_debounce_ms', 50),
+        long_press_ms=DEVICE_CONFIG.get('system', {}).get('long_press_ms', 3000),
     )
     
     Service_config = DEVICE_CONFIG.get('Service_reminder', {})
@@ -150,6 +155,19 @@ async def main():
         led_handler=led_handler,
         days_interval=Service_config.get('days_interval', 7),
         blink_pattern_ms=Service_config.get('blink_pattern_ms', [200, 200, 200, 800]),
+        auto_register_button=False,
+    )
+    
+    # Register button callbacks:
+    # - Short press: cycle display menu (placeholder for future OLED menu)
+    # - Long press: reset service reminder
+    def _on_short_press():
+        # TODO: cycle OLED display menu page
+        pass
+    
+    led_handler.register_callbacks(
+        short_press=_on_short_press,
+        long_press=reminder.reset,
     )
     
     # Step 9: Spawn all async tasks

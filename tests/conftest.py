@@ -217,7 +217,7 @@ def dht_logger(time_provider, buffer_manager, mock_event_logger, mock_dht_sensor
 def led_handler():
     """LEDButtonHandler with mocked machine.Pin."""
     from lib.led_button import LEDButtonHandler
-    return LEDButtonHandler(24, 23, debounce_ms=50)
+    return LEDButtonHandler(5, 9, debounce_ms=50)
 
 
 # ---------------------------------------------------------------------------

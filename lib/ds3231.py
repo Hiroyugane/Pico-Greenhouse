@@ -3,12 +3,29 @@ import machine
 class RTC:
     w = ['Montag','Dienstag','Mittwoch','Donnerstag','Freitag','Samstag','Sonntag']
     
-    def __init__(self, sda_pin=0, scl_pin=1, port=0, speed=100000, address=0x68, register=0x00):
+    def __init__(self, sda_pin=0, scl_pin=1, port=0, speed=100000, address=0x68, register=0x00, i2c=None):
+        """
+        Initialize DS3231 RTC.
+
+        Args:
+            sda_pin (int): SDA GPIO pin number (ignored when *i2c* is provided).
+            scl_pin (int): SCL GPIO pin number (ignored when *i2c* is provided).
+            port (int): I2C peripheral id (ignored when *i2c* is provided).
+            speed (int): I2C bus frequency in Hz (ignored when *i2c* is provided).
+            address (int): I2C address of the DS3231 (default 0x68).
+            register (int): Start register for time data (default 0x00).
+            i2c (machine.I2C, optional): Pre-built I2C bus instance for bus
+                sharing (e.g. with an OLED display).  When provided the driver
+                re-uses it instead of creating its own.
+        """
         self.rtc_address = address
         self.rtc_register = register
-        sda=machine.Pin(sda_pin)
-        scl=machine.Pin(scl_pin)
-        self.i2c=machine.I2C(port, sda=sda, scl=scl, freq=speed)
+        if i2c is not None:
+            self.i2c = i2c
+        else:
+            sda=machine.Pin(sda_pin)
+            scl=machine.Pin(scl_pin)
+            self.i2c=machine.I2C(port, sda=sda, scl=scl, freq=speed)
 
     def SetTime(self, NowTime = b'\x00\x23\x12\x28\x14\x07\x21'):
         # NowTime (sec min hour weekday day month year)

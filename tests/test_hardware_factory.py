@@ -221,7 +221,7 @@ class TestHardwareFactoryPins:
         from lib.hardware_factory import HardwareFactory
         factory = HardwareFactory()
         factory._init_pins()
-        assert 'button_reminder' in factory.pins
+        assert 'button_menu' in factory.pins
 
 
 class TestHardwareFactoryAccessors:

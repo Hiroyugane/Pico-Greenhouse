@@ -11,7 +11,6 @@ import uasyncio as asyncio
 import os
 import sys
 from lib.led_button import LED
-from config import DEVICE_CONFIG
 
 
 class DHTLogger:
@@ -47,7 +46,8 @@ class DHTLogger:
     """
     
     def __init__(self, pin, time_provider, buffer_manager, logger, 
-                 interval=60, filename='dht_log.csv', max_retries=3):
+                 interval=60, filename='dht_log.csv', max_retries=3,
+                 status_led_pin=None):
         """
         Initialize DHTLogger with dependency injection.
         
@@ -59,6 +59,7 @@ class DHTLogger:
             interval (int): Logging interval in seconds (default: 60)
             filename (str): CSV filename (default: 'dht_log.csv')
             max_retries (int): Sensor read retries (default: 3)
+            status_led_pin (int, optional): GPIO pin for status LED feedback
         """
         self.dht_sensor = dht.DHT22(machine.Pin(pin))
         self.interval = interval
@@ -67,6 +68,7 @@ class DHTLogger:
         self.buffer_manager = buffer_manager
         self.logger = logger
         self.max_retries = max_retries
+        self.status_led = LED(status_led_pin) if status_led_pin is not None else None
         
         # State
         self.last_temperature = None
@@ -202,12 +204,12 @@ class DHTLogger:
         
         Handles date-based file rollover at midnight.
         
-        LED feedback patterns (via lib/led_button.py LED class):
+        LED feedback patterns (via injected status_led):
         - 1 pulse (0.1s): Reading started
         - 2 pulses (0.1s): Read successful, data logged
         - 3 pulses (0.15s): Sensor read failed
         """
-        led = LED(DEVICE_CONFIG['pins']['status_led'])
+        led = self.status_led
         
         while True:
             try:
@@ -215,14 +217,16 @@ class DHTLogger:
                 self._check_date_changed()
                 
                 # LED: Single pulse = reading started
-                await led.blink_pattern_async([100, 100])
+                if led:
+                    await led.blink_pattern_async([100, 100])
                 
                 # Read sensor
                 temp, hum = self.read_sensor()
                 
                 if temp is not None and hum is not None:
                     # LED: Double pulse = read successful
-                    await led.blink_pattern_async([100, 100, 100, 100])
+                    if led:
+                        await led.blink_pattern_async([100, 100, 100, 100])
                     
                     # Cache for thermostat queries
                     self.last_temperature = temp
@@ -241,7 +245,8 @@ class DHTLogger:
                         self.write_failures += 1
                 else:
                     # LED: Triple pulse = sensor read failed
-                    await led.blink_pattern_async([150, 150, 150, 150, 150, 150])
+                    if led:
+                        await led.blink_pattern_async([150, 150, 150, 150, 150, 150])
                     self.logger.warning('DHTLogger', f'Sensor read failed (total: {self.read_failures})')
                 
                 self.logger.check_size()
@@ -252,7 +257,8 @@ class DHTLogger:
                 raise
             except Exception as e:
                 self.logger.error('DHTLogger', f'Unexpected error: {e}')
-                await led.blink_pattern_async([500, 500, 500, 500, 500, 500])
+                if led:
+                    await led.blink_pattern_async([500, 500, 500, 500, 500, 500])
                 await asyncio.sleep(1)
 
     @staticmethod

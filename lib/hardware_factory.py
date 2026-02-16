@@ -37,6 +37,7 @@ class HardwareFactory:
     
     Attributes:
         config (dict): Device configuration from config.py
+        i2c1 (machine.I2C): Shared I2C1 bus (RTC + OLED display)
         rtc (ds3231.RTC): Real-time clock instance
         spi (machine.SPI): SPI bus for SD card
         sd (sdcard.SDCard): SD card driver
@@ -55,6 +56,7 @@ class HardwareFactory:
             config (dict, optional): Device configuration (default: DEVICE_CONFIG from config.py)
         """
         self.config = config or DEVICE_CONFIG
+        self.i2c1 = None
         self.rtc = None
         self.spi = None
         self.sd = None
@@ -67,10 +69,11 @@ class HardwareFactory:
         Perform all hardware initialization.
         
         Initializes in order:
-        1. RTC (I2C)
-        2. SPI
-        3. SD card mount
-        4. GPIO pins (output: relays, LEDs; input: buttons)
+        1. I2C1 bus (shared: RTC + OLED)
+        2. RTC (via shared I2C1)
+        3. SPI
+        4. SD card mount
+        5. GPIO pins (output: relays, LEDs; input: buttons)
         
         Prints status to console (fallback when logging not yet ready).
         Stores errors for later inspection via get_errors().
@@ -80,35 +83,66 @@ class HardwareFactory:
         """
         print('[HardwareFactory] Starting initialization...')
         
-        # Step 1: Initialize RTC (critical for timestamps)
+        # Step 1: Initialize shared I2C bus
+        self._init_i2c()
+        
+        # Step 2: Initialize RTC (critical for timestamps)
         if not self._init_rtc():
             print('[HardwareFactory] ERROR: RTC initialization failed')
             return False
         print('[HardwareFactory] RTC initialized')
         
-        # Step 2: Initialize SPI + SD Card
+        # Step 3: Initialize SPI + SD Card
         self._init_spi()
         self._init_sd()
         
-        # Step 3: Initialize GPIO pins
+        # Step 4: Initialize GPIO pins
         self._init_pins()
         
         print(f'[HardwareFactory] Setup complete. Errors: {len(self.errors)}')
         return True
     
+    def _init_i2c(self) -> bool:
+        """
+        Initialize shared I2C1 bus for RTC and OLED display.
+        
+        Creates a single I2C instance on the configured port/pins
+        that will be shared between the DS3231 RTC (0x68) and the
+        SSD1306 OLED display (0x3C).
+        
+        Returns True on success, False on failure (non-fatal).
+        """
+        try:
+            pins = self.config.get('pins', {})
+            i2c_port = pins.get('rtc_i2c_port', 1)
+            sda = pins.get('rtc_sda', 2)
+            scl = pins.get('rtc_scl', 3)
+            
+            self.i2c1 = I2C(i2c_port, sda=Pin(sda), scl=Pin(scl), freq=100000)
+            return True
+        except Exception as e:
+            self.errors.append(f'I2C1 init failed: {e}')
+            return False
+    
     def _init_rtc(self) -> bool:
         """
-        Initialize RTC via I2C.
+        Initialize RTC via shared I2C1 bus.
+        
+        Uses the pre-built self.i2c1 instance if available,
+        otherwise falls back to letting the driver create its own.
         
         Returns True on success, False on failure.
         """
         try:
             pins = self.config.get('pins', {})
-            i2c_port = pins.get('rtc_i2c_port', 0)
-            sda = pins.get('rtc_sda', 0)
-            scl = pins.get('rtc_scl', 1)
             
-            self.rtc = ds3231.RTC(sda_pin=sda, scl_pin=scl, port=i2c_port)
+            if self.i2c1 is not None:
+                self.rtc = ds3231.RTC(i2c=self.i2c1)
+            else:
+                i2c_port = pins.get('rtc_i2c_port', 0)
+                sda = pins.get('rtc_sda', 0)
+                scl = pins.get('rtc_scl', 1)
+                self.rtc = ds3231.RTC(sda_pin=sda, scl_pin=scl, port=i2c_port)
             
             # Verify RTC is responding
             result = self.rtc.ReadTime(1)
@@ -221,14 +255,15 @@ class HardwareFactory:
                     except Exception as e:
                         self.errors.append(f'Failed to init output pin {pin_name}: {e}')
             
-            # Input pins: buttons
-            if 'button_reminder' in pins_config:
-                try:
-                    pin_num = pins_config['button_reminder']
-                    button = Pin(pin_num, Pin.IN, Pin.PULL_UP)
-                    self.pins['button_reminder'] = button
-                except Exception as e:
-                    self.errors.append(f'Failed to init button pin: {e}')
+            # Input pins: buttons (menu + reserved)
+            for button_name in ('button_menu', 'button_reserved'):
+                if button_name in pins_config:
+                    try:
+                        pin_num = pins_config[button_name]
+                        button = Pin(pin_num, Pin.IN, Pin.PULL_UP)
+                        self.pins[button_name] = button
+                    except Exception as e:
+                        self.errors.append(f'Failed to init button pin {button_name}: {e}')
             
             return True
         except Exception as e:

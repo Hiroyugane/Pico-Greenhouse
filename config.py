@@ -7,20 +7,39 @@
 
 DEVICE_CONFIG = {
     # Hardware Pins
+    #
+    # Pico GPIO layout (active header pins only):
+    #   GP0-GP1:   CO2 sensor UART0 (TX/RX)
+    #   GP2-GP3:   I2C1 bus (RTC + OLED display, shared)
+    #   GP4-GP8:   Status LEDs (5×)
+    #   GP9:       Menu button (short=cycle, long=action)
+    #   GP10-GP13: SPI1 (SD card)
+    #   GP14:      Reserved button (future use)
+    #   GP15:      DHT22 data
+    #   GP16-GP18: Relay outputs (fans + growlight)
+    #   GP19-GP22: Reserved (future relays / PWM fan)
+    #   GP25:      On-board LED (heartbeat)
+    #   GP26-GP28: Reserved ADC (analog sensors)
     'pins': {
         'dht22': 15,                    # DHT22 data pin
-        'status_led': 25,               # Status LED (feedback)
-        'reminder_led': 24,             # Service reminder LED
-        'button_reminder': 23,          # Button to reset Service reminder
-        'rtc_i2c_port': 1,              # I2C peripheral (0 or 1)
-        'rtc_sda': 2,                   # RTC I2C SDA
-        'rtc_scl': 3,                   # RTC I2C SCL
+        'onboard_led': 25,              # Pico on-board LED (heartbeat)
+        'status_led': 4,                # Status LED 1 (DHT read feedback)
+        'reminder_led': 5,              # Status LED 2 (service reminder)
+        'sd_led': 6,                    # Status LED 3 (SD card status)
+        'fan_led': 7,                   # Status LED 4 (fan status)
+        'error_led': 8,                 # Status LED 5 (system/error)
+        'button_menu': 9,               # Menu button (short=cycle menu, long≥3s=action)
+        'button_reserved': 14,          # Reserved button (future use)
+        'rtc_i2c_port': 1,              # I2C1 peripheral (shared: RTC + OLED)
+        'rtc_sda': 2,                   # I2C1 SDA
+        'rtc_scl': 3,                   # I2C1 SCL
         'relay_fan_1': 16,              # Fan relay 1 (primary cycle)
         'relay_fan_2': 18,              # Fan relay 2 (secondary cycle)
         'relay_growlight': 17,          # Grow light relay
-        'co2_sda': 0,                   # CO2 sensor I2C SDA
-        'co2_scl': 1,                   # CO2 sensor I2C SCL
-        'co2_i2c_port': 0,              # CO2 sensor I2C port
+        'co2_uart_id': 0,               # CO2 sensor UART peripheral
+        'co2_uart_tx': 0,               # CO2 sensor UART TX (GP0)
+        'co2_uart_rx': 1,               # CO2 sensor UART RX (GP1)
+        'co2_baudrate': 9600,           # CO2 sensor UART baudrate
     },
     
     # SPI Configuration (SD Card)
@@ -91,6 +110,14 @@ DEVICE_CONFIG = {
         'max_size': 50000,              # Max log file size (bytes) before rotation
     },
     
+    # OLED Display Configuration (SSD1306 on shared I2C1 bus)
+    'display': {
+        'type': 'SSD1306',
+        'width': 128,
+        'height': 64,
+        'i2c_address': 0x3C,            # SSD1306 default (RTC is 0x68; no conflict)
+    },
+    
     # Output Pin Initial States
     'output_pins': {
         'relay_fan_1': True,            # HIGH = off (relay module inverted logic)
@@ -98,12 +125,17 @@ DEVICE_CONFIG = {
         'relay_growlight': True,        # HIGH = off (relay module inverted logic)
         'status_led': False,            # LOW = off (active high LED)
         'reminder_led': False,          # LOW = off (active high LED)
+        'sd_led': False,                # LOW = off (active high LED)
+        'fan_led': False,               # LOW = off (active high LED)
+        'error_led': False,             # LOW = off (active high LED)
+        'onboard_led': False,           # LOW = off (active high LED)
     },
     
     # System Configuration
     'system': {
         'require_sd_startup': False,    # If True, system won't start without SD; if False, runs with buffering only
         'button_debounce_ms': 50,       # Debounce delay for button presses
+        'long_press_ms': 3000,          # Long-press threshold for menu action button
     },
 }
 
@@ -122,8 +154,11 @@ def validate_config():
         ValueError: If required keys are missing or values out of range
     """
     required_keys = {
-        'pins': ['dht22', 'status_led', 'reminder_led', 'button_reminder', 
-                 'rtc_i2c_port', 'rtc_sda', 'rtc_scl', 'relay_fan_1', 'relay_fan_2', 'relay_growlight'],
+        'pins': ['dht22', 'status_led', 'reminder_led', 'sd_led', 'fan_led', 'error_led',
+                 'onboard_led', 'button_menu', 'button_reserved',
+                 'rtc_i2c_port', 'rtc_sda', 'rtc_scl',
+                 'relay_fan_1', 'relay_fan_2', 'relay_growlight',
+                 'co2_uart_id', 'co2_uart_tx', 'co2_uart_rx', 'co2_baudrate'],
         'spi': ['id', 'baudrate', 'sck', 'mosi', 'miso', 'cs', 'mount_point'],
         'files': ['dht_log_base', 'system_log', 'fallback_path'],
         'dht_logger': ['interval_s', 'max_retries', 'max_buffer_size'],
@@ -133,8 +168,10 @@ def validate_config():
         'Service_reminder': ['days_interval', 'blink_pattern_ms'],
         'buffer_manager': ['sd_mount_point', 'fallback_path', 'max_buffer_entries'],
         'event_logger': ['logfile', 'max_size'],
-        'output_pins': ['relay_fan_1', 'relay_fan_2', 'relay_growlight', 'status_led', 'reminder_led'],
-        'system': ['require_sd_startup', 'button_debounce_ms'],
+        'output_pins': ['relay_fan_1', 'relay_fan_2', 'relay_growlight',
+                        'status_led', 'reminder_led', 'sd_led', 'fan_led', 'error_led', 'onboard_led'],
+        'display': ['type', 'width', 'height', 'i2c_address'],
+        'system': ['require_sd_startup', 'button_debounce_ms', 'long_press_ms'],
     }
     
     # Check all required sections and keys exist

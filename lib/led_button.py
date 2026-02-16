@@ -110,32 +110,42 @@ class LED:
 
 class LEDButtonHandler:
     """
-    Handler for LED and button control.
+    Handler for LED and multi-function button control.
     
     LED operations via LED class (non-blocking async blink patterns).
-    Button operations: Debounced interrupt-based callbacks.
+    Button: single GPIO with debounced interrupt, distinguishing
+    short press (< long_press_ms) from long press (>= long_press_ms).
     
     Attributes:
         led: LED instance
         button_pin: machine.Pin for button
         debounce_ms: Debounce delay
-        button_callback: Registered callback function
+        long_press_ms: Threshold for long-press detection
+        short_press_callback: Registered short-press callback
+        long_press_callback: Registered long-press callback
     """
     
-    def __init__(self, led_pin: int, button_pin: int, debounce_ms: int = 50):
+    def __init__(self, led_pin: int, button_pin: int, debounce_ms: int = 50,
+                 long_press_ms: int = 3000):
         """
-        Initialize LED and button.
+        Initialize LED and multi-function button.
         
         Args:
             led_pin (int): GPIO pin for LED
             button_pin (int): GPIO pin for button
             debounce_ms (int): Debounce delay in milliseconds (default: 50)
+            long_press_ms (int): Long-press threshold in ms (default: 3000)
         """
         self.led = LED(led_pin)
         self.button = machine.Pin(button_pin, machine.Pin.IN, machine.Pin.PULL_UP)
         self.debounce_ms = debounce_ms
+        self.long_press_ms = long_press_ms
+        self.short_press_callback = None
+        self.long_press_callback = None
+        # Legacy alias for backward compatibility
         self.button_callback = None
         self._last_press_time = 0
+        self._press_start_time = 0
     
     def set_on(self) -> None:
         """Turn LED on."""
@@ -151,17 +161,40 @@ class LEDButtonHandler:
     
     def register_button_callback(self, callback) -> None:
         """
-        Register callback to be invoked on debounced button press.
+        Register callback to be invoked on debounced button press (legacy).
+        
+        For backward compatibility, this registers the callback as the
+        short-press handler and sets up IRQ on FALLING edge only.
         
         Args:
             callback: Callable that takes no arguments
         """
         self.button_callback = callback
-        # Setup interrupt handler with debouncing
+        self.short_press_callback = callback
         self.button.irq(trigger=machine.Pin.IRQ_FALLING, handler=self._button_isr)
     
+    def register_callbacks(self, short_press=None, long_press=None) -> None:
+        """
+        Register short-press and/or long-press callbacks.
+        
+        Short press: button released before long_press_ms threshold.
+        Long press: button held >= long_press_ms then released.
+        
+        Args:
+            short_press: Callable for short press (no args)
+            long_press: Callable for long press (no args)
+        """
+        self.short_press_callback = short_press
+        self.long_press_callback = long_press
+        # Also set legacy alias to short_press for backward compat
+        self.button_callback = short_press
+        self.button.irq(
+            trigger=machine.Pin.IRQ_FALLING | machine.Pin.IRQ_RISING,
+            handler=self._button_dual_isr
+        )
+    
     def _button_isr(self, pin) -> None:
-        """Interrupt handler with debouncing."""
+        """Interrupt handler with debouncing (legacy, FALLING only)."""
         current_time = _ticks_ms()
         
         if current_time - self._last_press_time > self.debounce_ms:
@@ -172,6 +205,40 @@ class LEDButtonHandler:
                     self.button_callback()
                 except Exception as e:
                     print(f'[LEDButtonHandler] Button callback error: {e}')
+    
+    def _button_dual_isr(self, pin) -> None:
+        """
+        Interrupt handler for both FALLING and RISING edges.
+        
+        FALLING = press start (record timestamp).
+        RISING  = press end (compute duration, dispatch callback).
+        """
+        current_time = _ticks_ms()
+        
+        # Debounce guard
+        if current_time - self._last_press_time < self.debounce_ms:
+            return
+        self._last_press_time = current_time
+        
+        # Button pressed (FALLING edge, pin reads 0 when pressed with PULL_UP)
+        if pin.value() == 0:
+            self._press_start_time = current_time
+            return
+        
+        # Button released (RISING edge)
+        if self._press_start_time == 0:
+            return  # No matching press start
+        
+        duration = current_time - self._press_start_time
+        self._press_start_time = 0
+        
+        try:
+            if duration >= self.long_press_ms and self.long_press_callback:
+                self.long_press_callback()
+            elif self.short_press_callback:
+                self.short_press_callback()
+        except Exception as e:
+            print(f'[LEDButtonHandler] Button callback error: {e}')
     
     async def blink_pattern_async(self, pattern_ms: list, repeats: int = 1) -> None:
         """
@@ -219,7 +286,8 @@ class ServiceReminder:
     
     def __init__(self, time_provider, led_handler, last_serviced_timestamp = None,
                  days_interval: int = 7, blink_pattern_ms = None,
-                 storage_path: str = '/service_reminder.txt'):
+                 storage_path: str = '/service_reminder.txt',
+                 auto_register_button: bool = True):
         """
         Initialize Service reminder.
         
@@ -230,6 +298,10 @@ class ServiceReminder:
             days_interval (int): Days between reminders (default: 7)
             blink_pattern_ms (list, optional): Blink pattern (default: [5000, 2000])
             storage_path (str, optional): File path for persisted timestamp
+            auto_register_button (bool): If True, auto-register reset() as the
+                button callback via register_button_callback().  Set False when
+                the caller wires callbacks externally (e.g. via register_callbacks
+                for multi-function button support).  Default: True.
         
         Example:
             >>> reminder = ServiceReminder(time_provider, led_handler, days_interval=7)
@@ -258,8 +330,9 @@ class ServiceReminder:
         parsed_date = self._parse_date_from_timestamp(self.last_serviced_timestamp)
         self.last_serviced_date = parsed_date if parsed_date else self.time_provider.now_date_tuple()
         
-        # Register reset callback
-        self.led_handler.register_button_callback(self.reset)
+        # Register reset callback (unless caller wires it externally)
+        if auto_register_button:
+            self.led_handler.register_button_callback(self.reset)
         
         print(f'[ServiceReminder] Initialized: {self.days_interval} days, last_serviced={self.last_serviced_timestamp}')
 

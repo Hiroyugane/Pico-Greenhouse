@@ -8,6 +8,10 @@ import os
 import sys
 import time
 
+# Patchable flag: True when running on the Pico, False on host/CPython.
+# Tests can override this to exercise device-only code paths.
+_IS_DEVICE = (sys.implementation.name == 'micropython')
+
 # Type checkers don't know about MicroPython-specific os functions;
 # the host shim in host_shims/os.py provides them for host testing.
 if False:  # This block exists only for type checking
@@ -27,7 +31,7 @@ def mount_sd(spi, cs_pin, mount_point: str = '/sd'):
         tuple: (bool, SDCard | None) -- success flag and the SDCard instance
     """
     try:
-        if sys.implementation.name != 'micropython':
+        if not _IS_DEVICE:
             os.makedirs(mount_point, exist_ok=True)
             print(f'[SD] Host mount simulated at {mount_point}')
             return True, None
@@ -54,7 +58,7 @@ def is_mounted(sd, spi=None, return_instances: bool = False):
     reinitializing hardware and contending with active mounts.
     """
     try:
-        if sys.implementation.name != 'micropython':
+        if not _IS_DEVICE:
             return (True, sd, spi) if return_instances else True
         from config import DEVICE_CONFIG
         from machine import Pin, SPI

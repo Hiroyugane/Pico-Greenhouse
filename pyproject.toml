@@ -1,0 +1,35 @@
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks integration tests",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+[tool.coverage.run]
+source = ["lib", "config"]
+omit = [
+    "tests/*",
+    "host_shims/*",
+    "lib/picozero/*",
+    "lib/picozero-*",
+    "lib/sdcard-*",
+    "lib/sdcard.py",
+    "lib/ds3231.py",
+    "lib/ds2321_gen.py",
+]
+
+[tool.coverage.report]
+fail_under = 88
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.",
+    "if sys.implementation.name != .micropython.",
+    "if sys.implementation.name == .micropython.",
+    "if False:",
+    "def _resolve_path",
+]

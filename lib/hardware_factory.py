@@ -19,6 +19,9 @@ from config import DEVICE_CONFIG
 from lib import ds3231, sdcard
 from lib.sd_integration import mount_sd, is_mounted
 
+# Patchable flag: False when running on the Pico, True on host/CPython.
+_IS_HOST = (sys.implementation.name != 'micropython')
+
 
 class HardwareFactory:
     """
@@ -153,7 +156,7 @@ class HardwareFactory:
         Returns True if mounted, False otherwise (non-fatal; system can run with fallback).
         """
         try:
-            if sys.implementation.name != 'micropython':
+            if _IS_HOST:
                 # Simulate SD availability on host
                 mount_point = self.config.get('spi', {}).get('mount_point', '/sd')
                 try:

@@ -106,15 +106,9 @@ class DHTLogger:
             self.filename = self.filename_base
     
     def _file_exists(self) -> bool:
-        """Check if CSV file exists on primary storage."""
-        try:
-            # Use same path construction as BufferManager.write() for consistency
-            relpath = self._strip_sd_prefix(self.filename)
-            primary_path = f'{self.buffer_manager.sd_mount_point}/{relpath}'
-            with open(primary_path, 'r'):
-                return True
-        except:
-            return False
+        """Check if CSV data for this file already exists (primary, fallback, or buffer)."""
+        relpath = self._strip_sd_prefix(self.filename)
+        return self.buffer_manager.has_data_for(relpath)
 
     def _resolve_path(self, file_path: str) -> str:
         if sys.implementation.name == 'micropython':
@@ -125,13 +119,19 @@ class DHTLogger:
     
     def _create_file(self) -> None:
         """
-        Create CSV file with header on primary storage.
+        Create CSV file with header via BufferManager.
         
         Header: 'Timestamp,Temperature,Humidity'
+        Logs actual destination (primary SD or fallback) based on write result.
         """
         try:
-            self.buffer_manager.write(self._strip_sd_prefix(self.filename), 'Timestamp,Temperature,Humidity\n')
-            self.logger.info('DHTLogger', f'Created CSV file: {self.filename}')
+            wrote_to_primary = self.buffer_manager.write(
+                self._strip_sd_prefix(self.filename), 'Timestamp,Temperature,Humidity\n'
+            )
+            if wrote_to_primary:
+                self.logger.info('DHTLogger', f'Created CSV file: {self.filename}')
+            else:
+                self.logger.info('DHTLogger', f'Created CSV header (fallback): {self.filename}')
         except Exception as e:
             self.logger.error('DHTLogger', f'Failed to create file: {e}')
             raise

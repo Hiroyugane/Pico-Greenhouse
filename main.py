@@ -190,8 +190,7 @@ async def main():
         
         # Periodic health checks
         metrics = buffer_manager.get_metrics()
-        if metrics['buffer_entries'] > 0:
-            logger.warning('MAIN', f'Buffer has {metrics["buffer_entries"]} entries (SD may be unavailable)')
+        buffered = metrics['buffer_entries']
         
         # Hot-swap recovery: attempt SD refresh when primary is
         # reported down OR when the in-memory buffer is growing.
@@ -200,12 +199,20 @@ async def main():
         # refresh_sd() performs a block-level readblocks check and is
         # cheap when the card is actually present.
         sd_needs_check = (not buffer_manager.is_primary_available()
-                          or metrics['buffer_entries'] > 0)
+                          or buffered > 0)
         if sd_needs_check:
             if hardware.refresh_sd():
                 logger.info('MAIN', 'SD card re-mounted after hot-swap')
                 # Flush in-memory buffer now that primary is back
-                buffer_manager.flush()
+                if buffered > 0:
+                    buffer_manager.flush()
+                    logger.info('MAIN', f'Flushed {buffered} buffered entries to SD')
+        
+        # Log buffer warning AFTER the SD check so the reader sees
+        # the recovery attempt first, then the remaining state.
+        new_buffered = sum(len(v) for v in buffer_manager._buffers.values())
+        if new_buffered > 0:
+            logger.warning('MAIN', f'Buffer has {new_buffered} entries (SD may be unavailable)')
         
         # Attempt to migrate fallback entries if primary became available
         if metrics['writes_to_fallback'] > metrics['fallback_migrations']:

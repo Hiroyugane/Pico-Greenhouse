@@ -179,6 +179,47 @@ class BufferManager:
                 return len(first_char) > 0
         except:
             return False
+
+    def has_data_for(self, relpath: str) -> bool:
+        """
+        Check whether data for *relpath* already exists anywhere.
+
+        Looks in primary (SD), fallback file, and in-memory buffers.
+        Useful to avoid writing duplicate CSV headers on repeated reboots
+        while SD is down.
+
+        Args:
+            relpath: Relative path (e.g. 'dht_log_2026-02-16.csv')
+
+        Returns:
+            True if data for this relpath already exists somewhere.
+        """
+        if relpath.startswith('/sd/'):
+            relpath = relpath[4:]
+
+        # 1. Check primary
+        primary_path = f'{self.sd_mount_point}/{relpath}'
+        try:
+            with open(primary_path, 'r') as f:
+                if f.read(1):
+                    return True
+        except:
+            pass
+
+        # 2. Check in-memory buffers
+        if relpath in self._buffers and self._buffers[relpath]:
+            return True
+
+        # 3. Check fallback file for entries tagged with this relpath
+        try:
+            with open(self.fallback_path, 'r') as f:
+                for line in f:
+                    if line.startswith(f'{relpath}|'):
+                        return True
+        except:
+            pass
+
+        return False
     
     def write(self, relpath: str, data: str) -> bool:
         """
@@ -309,7 +350,8 @@ class BufferManager:
                 continue
             
             if primary_available:
-                primary_path = f'{self.sd_mount_point}/{path.lstrip("/sd/")}'
+                clean = path[4:] if path.startswith('/sd/') else path
+                primary_path = f'{self.sd_mount_point}/{clean}'
                 try:
                     with open(primary_path, 'a') as f:
                         for entry in self._buffers[path]:

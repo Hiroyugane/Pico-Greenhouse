@@ -105,6 +105,7 @@ class TestMainHealthCheck:
             'buffer_entries': 5, 'writes_to_fallback': 0, 'fallback_migrations': 0
         }
         mock_buffer.is_primary_available.return_value = True
+        mock_buffer._buffers = {'test.csv': ['a\n', 'b\n', 'c\n', 'd\n', 'e\n']}
         monkeypatch.setattr(main_module, 'BufferManager', lambda *a, **kw: mock_buffer)
 
         mock_logger = Mock()
@@ -150,6 +151,7 @@ class TestMainHealthCheck:
             'buffer_entries': 0, 'writes_to_fallback': 0, 'fallback_migrations': 0
         }
         mock_buffer.is_primary_available.return_value = False
+        mock_buffer._buffers = {}
         monkeypatch.setattr(main_module, 'BufferManager', lambda *a, **kw: mock_buffer)
 
         mock_logger = Mock()
@@ -194,6 +196,7 @@ class TestMainHealthCheck:
         }
         # Primary claims available but buffer is growing (ghost writes)
         mock_buffer.is_primary_available.return_value = True
+        mock_buffer._buffers = {'test.csv': list(range(10))}
         monkeypatch.setattr(main_module, 'BufferManager', lambda *a, **kw: mock_buffer)
 
         mock_logger = Mock()
@@ -222,6 +225,9 @@ class TestMainHealthCheck:
         mock_hw.refresh_sd.assert_called()
         # flush should also be called after successful refresh
         mock_buffer.flush.assert_called()
+        # Should log how many entries were flushed
+        info_calls = [str(c) for c in mock_logger.info.call_args_list]
+        assert any('Flushed' in c and '10' in c for c in info_calls)
 
     async def test_fallback_migration_attempt(self, monkeypatch):
         """When fallback writes exceed migrations, attempt migration."""
@@ -240,6 +246,7 @@ class TestMainHealthCheck:
         }
         mock_buffer.is_primary_available.return_value = True
         mock_buffer.migrate_fallback.return_value = 3
+        mock_buffer._buffers = {}
         monkeypatch.setattr(main_module, 'BufferManager', lambda *a, **kw: mock_buffer)
 
         mock_logger = Mock()

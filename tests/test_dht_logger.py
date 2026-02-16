@@ -21,6 +21,17 @@ class TestDHTLoggerInit:
         header_call = write_mock.call_args_list[0]
         assert 'Timestamp,Temperature,Humidity' in header_call[0][1]
 
+    def test_init_logs_fallback_when_sd_unavailable(self, time_provider, buffer_manager, mock_event_logger):
+        """When write returns False (fallback), log message reflects fallback destination."""
+        from lib.dht_logger import DHTLogger
+        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+            with patch.object(buffer_manager, 'write', return_value=False):
+                with patch.object(buffer_manager, 'has_data_for', return_value=False):
+                    dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
+        # Should log fallback message, not primary
+        info_calls = [str(c) for c in mock_event_logger.info.call_args_list]
+        assert any('fallback' in c for c in info_calls)
+
     def test_init_sets_interval(self, time_provider, buffer_manager, mock_event_logger):
         """DHTLogger interval is set from constructor arg."""
         from lib.dht_logger import DHTLogger
@@ -205,7 +216,7 @@ class TestDHTLoggerDateRollover:
 class TestDHTLoggerFileOps:
     """Tests for file operations."""
 
-    def test_file_exists_true(self, time_provider, buffer_manager, mock_event_logger, tmp_path):
+    def test_file_exists_true_primary(self, time_provider, buffer_manager, mock_event_logger, tmp_path):
         """_file_exists returns True when file exists on primary."""
         from lib.dht_logger import DHTLogger
         with patch('time.localtime', return_value=FAKE_LOCALTIME):
@@ -215,12 +226,40 @@ class TestDHTLoggerFileOps:
         (tmp_path / "sd" / relpath).write_text("header\n")
         assert dht._file_exists() is True
 
-    def test_file_exists_false(self, time_provider, buffer_manager, mock_event_logger):
-        """_file_exists returns False for non-existent file."""
+    def test_file_exists_true_fallback(self, time_provider, buffer_manager, mock_event_logger, tmp_path):
+        """_file_exists returns True when data exists only in fallback."""
         from lib.dht_logger import DHTLogger
         with patch('time.localtime', return_value=FAKE_LOCALTIME):
             dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
-        # Delete any created file so we get False
+        # Remove the primary file (was created during init)
+        relpath = dht._strip_sd_prefix(dht.filename)
+        primary = tmp_path / "sd" / relpath
+        if primary.exists():
+            primary.unlink()
+        # Write to fallback in pipe-delimited format
+        fallback = tmp_path / "local" / "fallback.csv"
+        fallback.write_text(f'{relpath}|Timestamp,Temperature,Humidity\n')
+        assert dht._file_exists() is True
+
+    def test_file_exists_true_buffer(self, time_provider, buffer_manager, mock_event_logger, tmp_path):
+        """_file_exists returns True when data exists only in memory buffer."""
+        from lib.dht_logger import DHTLogger
+        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+            dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
+        relpath = dht._strip_sd_prefix(dht.filename)
+        # Remove primary file
+        primary = tmp_path / "sd" / relpath
+        if primary.exists():
+            primary.unlink()
+        # Put data in memory buffer
+        buffer_manager._buffers[relpath] = ['Timestamp,Temperature,Humidity\n']
+        assert dht._file_exists() is True
+
+    def test_file_exists_false(self, time_provider, buffer_manager, mock_event_logger):
+        """_file_exists returns False when data absent from all locations."""
+        from lib.dht_logger import DHTLogger
+        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+            dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
         dht.filename = '/sd/nonexistent_file.csv'
         assert dht._file_exists() is False
 

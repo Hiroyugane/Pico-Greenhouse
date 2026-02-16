@@ -375,3 +375,43 @@ class TestBufferManagerUtilities:
         fallback = tmp_path / "local" / "fallback.csv"
         fallback.write_text("data")
         assert buffer_manager._has_fallback_entries() is True
+
+
+class TestBufferManagerHasDataFor:
+    """Tests for has_data_for() method."""
+
+    def test_has_data_for_primary(self, buffer_manager, tmp_path):
+        """has_data_for returns True when file exists on primary."""
+        (tmp_path / "sd" / "test.csv").write_text("header\n")
+        assert buffer_manager.has_data_for('test.csv') is True
+
+    def test_has_data_for_primary_with_sd_prefix(self, buffer_manager, tmp_path):
+        """has_data_for strips /sd/ prefix before checking."""
+        (tmp_path / "sd" / "test.csv").write_text("header\n")
+        assert buffer_manager.has_data_for('/sd/test.csv') is True
+
+    def test_has_data_for_fallback(self, buffer_manager, tmp_path):
+        """has_data_for returns True when data exists in fallback."""
+        fallback = tmp_path / "local" / "fallback.csv"
+        fallback.write_text('test.csv|Timestamp,Temperature,Humidity\n')
+        assert buffer_manager.has_data_for('test.csv') is True
+
+    def test_has_data_for_buffer(self, buffer_manager):
+        """has_data_for returns True when data exists in memory buffer."""
+        buffer_manager._buffers['test.csv'] = ['row\n']
+        assert buffer_manager.has_data_for('test.csv') is True
+
+    def test_has_data_for_false(self, buffer_manager):
+        """has_data_for returns False when data absent everywhere."""
+        assert buffer_manager.has_data_for('nonexistent.csv') is False
+
+    def test_has_data_for_empty_buffer_ignored(self, buffer_manager):
+        """Empty buffer list for a relpath is treated as no data."""
+        buffer_manager._buffers['test.csv'] = []
+        assert buffer_manager.has_data_for('test.csv') is False
+
+    def test_has_data_for_does_not_match_other_relpath(self, buffer_manager, tmp_path):
+        """Fallback entries for a different relpath don't match."""
+        fallback = tmp_path / "local" / "fallback.csv"
+        fallback.write_text('other.csv|data\n')
+        assert buffer_manager.has_data_for('test.csv') is False

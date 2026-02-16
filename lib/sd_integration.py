@@ -8,6 +8,11 @@ import os
 import sys
 import time
 
+# Type checkers don't know about MicroPython-specific os functions;
+# the host shim in host_shims/os.py provides them for host testing.
+if False:  # This block exists only for type checking
+    from os import mount as _mount_typecheck  # noqa: F401
+
 
 def mount_sd(spi, cs_pin, mount_point: str = '/sd'):
     """
@@ -34,7 +39,7 @@ def mount_sd(spi, cs_pin, mount_point: str = '/sd'):
             cs_pin = Pin(cs_pin)
         
         sd = sdcard.SDCard(spi, cs_pin)
-        os.mount(sd, mount_point)
+        os.mount(sd, mount_point)  # type: ignore[attr-defined]
         return True, sd
     except Exception as e:
         print(f'[SD] Mount failed at {mount_point}: {e}')
@@ -77,12 +82,12 @@ def is_mounted(sd, spi=None, return_instances: bool = False):
                 miso=Pin(miso)
             )
             sd_local = sdcard.SDCard(spi, cs_pin)
-            os.mount(sd_local, mount_point)
+            os.mount(sd_local, mount_point)  # type: ignore[attr-defined]
             return sd_local, spi
 
         def _safe_umount():
             try:
-                os.umount(mount_point)
+                os.umount(mount_point)  # type: ignore[attr-defined]
             except Exception:
                 pass
 

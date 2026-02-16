@@ -12,7 +12,7 @@ def main():
         uart1.flush()
         sequence_to_send = b'\xFE\x44\x00\x08\x02\x9F\x25'
         uart1.write(sequence_to_send)
-        sleep(1)
+        sleep(10)
                 
         if uart1.any():
             resp = uart1.read(7)

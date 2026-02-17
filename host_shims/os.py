@@ -4,6 +4,9 @@ Re-exports everything from the standard ``os`` module and adds
 MicroPython-specific functions (``mount``, ``umount``, ``uname``,
 ``ilistdir``, ``sync``, VFS classes, etc.) so the project can run on
 standard CPython without modification.
+
+Upgraded to use probe data from ``host_shims/_probe_data.py`` for
+realistic ``statvfs`` and ``uname`` results.
 """
 
 from __future__ import annotations
@@ -15,6 +18,10 @@ from collections import namedtuple as _namedtuple
 # Re-export the entire standard os module so callers see the full API.
 from os import *  # noqa: F401,F403
 from typing import Iterator
+
+from host_shims._probe_data import PROBE
+
+_VERBOSE = _os.environ.get("HOST_SHIM_VERBOSE", "") == "1"
 
 # ---------------------------------------------------------------------------
 # uname – MicroPython-compatible system info
@@ -28,14 +35,16 @@ _uname_result = _namedtuple(
 def uname() -> _uname_result:                        # type: ignore[override]
     """Return a MicroPython-style uname tuple.
 
-    Fields: sysname, nodename, release, version, machine.
+    When probe data is available, returns strings that match the real
+    device (e.g. ``rp2``, ``Raspberry Pi Pico W with RP2040``).  Falls
+    back to host OS values.
     """
     return _uname_result(
-        sysname=_platform.system(), # type: ignore
-        nodename=_platform.node(), # type: ignore
-        release=_platform.release(), # type: ignore
-        version=f"host-shim CPython {_platform.python_version()}", # type: ignore
-        machine=_platform.machine(), # type: ignore
+        sysname=PROBE.platform.uname_sysname or _platform.system(),  # type: ignore
+        nodename=PROBE.platform.uname_nodename or _platform.node(),  # type: ignore
+        release=PROBE.platform.uname_release or _platform.release(),  # type: ignore
+        version=PROBE.platform.uname_version or f"host-shim CPython {_platform.python_version()}",  # type: ignore
+        machine=PROBE.platform.uname_machine or _platform.machine(),  # type: ignore
     )
 
 
@@ -69,12 +78,13 @@ def ilistdir(dir: str = ".") -> Iterator[tuple]:
 # ---------------------------------------------------------------------------
 
 if not hasattr(_os, "statvfs"):
-    # Windows CPython lacks os.statvfs; provide a stub that returns zeros.
     def statvfs(path: str) -> tuple:
-        """Return a dummy statvfs result (all zeros) on platforms without it."""
-        #  f_bsize, f_frsize, f_blocks, f_bfree, f_bavail,
-        #  f_files, f_ffree, f_favail, f_flag, f_namemax
-        return (4096, 4096, 0, 0, 0, 0, 0, 0, 0, 255)
+        """Return probe-calibrated statvfs result on platforms without it.
+
+        Uses real SD card capacity data from hw_probe if available,
+        otherwise returns realistic defaults for a 32 GB FAT32 SD card.
+        """
+        return PROBE.sd.statvfs_tuple
 
 
 # ---------------------------------------------------------------------------
@@ -97,13 +107,15 @@ _mounts: dict[str, object] = {}
 def mount(device: object, mount_point: str, *, readonly: bool = False) -> None:
     """Simulate MicroPython ``os.mount(device, mount_point)``."""
     _mounts[mount_point] = device
-    print(f"[HOST OS] mount({device!r}, {mount_point!r}, readonly={readonly})")
+    if _VERBOSE:
+        print(f"[HOST OS] mount({device!r}, {mount_point!r}, readonly={readonly})")
 
 
 def umount(mount_point: str) -> None:
     """Simulate MicroPython ``os.umount(mount_point)``."""
     _mounts.pop(mount_point, None)
-    print(f"[HOST OS] umount({mount_point!r})")
+    if _VERBOSE:
+        print(f"[HOST OS] umount({mount_point!r})")
 
 
 # ---------------------------------------------------------------------------

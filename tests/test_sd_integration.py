@@ -8,7 +8,7 @@ import lib as _lib_pkg
 
 def _patch_lib_sdcard(mock_sdcard):
     """Context manager to patch lib.sdcard in both sys.modules and package attr."""
-    return patch.object(_lib_pkg, 'sdcard', mock_sdcard)
+    return patch.object(_lib_pkg, 'sdcard', mock_sdcard, create=True)
 
 
 class TestMountSD:

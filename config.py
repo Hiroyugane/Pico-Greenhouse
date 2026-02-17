@@ -94,7 +94,7 @@ DEVICE_CONFIG = {
     # Service Reminder Configuration
     'Service_reminder': {
         'days_interval': 7,             # Remind every 7 days
-        'blink_pattern_ms': [2000, 2000, 2000, 2000],  # ON 200ms, OFF 200ms, ON 200ms, OFF 800ms (SOS pattern)
+        'blink_pattern_ms': [2000, 2000, 2000, 2000],  # ON 200ms, OFF 200ms, ON 200ms, OFF 800ms
     },
     
     # Buffer Manager Configuration
@@ -133,7 +133,7 @@ DEVICE_CONFIG = {
     
     # System Configuration
     'system': {
-        'require_sd_startup': False,    # If True, system won't start without SD; if False, runs with buffering only
+        'require_sd_startup': False,    # If True, system won't start without SD; if False, runs with buffering only # noqa: E501
         'button_debounce_ms': 50,       # Debounce delay for button presses
         'long_press_ms': 3000,          # Long-press threshold for menu action button
     },
@@ -154,12 +154,16 @@ def validate_config():
         ValueError: If required keys are missing or values out of range
     """
     required_keys = {
-        'pins': ['dht22', 'status_led', 'reminder_led', 'sd_led', 'fan_led', 'error_led',
-                 'onboard_led', 'button_menu', 'button_reserved',
-                 'rtc_i2c_port', 'rtc_sda', 'rtc_scl',
-                 'relay_fan_1', 'relay_fan_2', 'relay_growlight',
-                 'co2_uart_id', 'co2_uart_tx', 'co2_uart_rx', 'co2_baudrate'],
-        'spi': ['id', 'baudrate', 'sck', 'mosi', 'miso', 'cs', 'mount_point'],
+        'pins': [
+            'dht22', 'status_led', 'reminder_led', 'sd_led', 'fan_led', 'error_led',
+            'onboard_led', 'button_menu', 'button_reserved',
+            'rtc_i2c_port', 'rtc_sda', 'rtc_scl',
+            'relay_fan_1', 'relay_fan_2', 'relay_growlight',
+            'co2_uart_id', 'co2_uart_tx', 'co2_uart_rx', 'co2_baudrate'
+            ],
+        'spi': [
+            'id', 'baudrate', 'sck', 'mosi', 'miso', 'cs', 'mount_point'
+            ],
         'files': ['dht_log_base', 'system_log', 'fallback_path'],
         'dht_logger': ['interval_s', 'max_retries', 'max_buffer_size'],
         'fan_1': ['interval_s', 'on_time_s', 'max_temp', 'temp_hysteresis'],
@@ -169,7 +173,7 @@ def validate_config():
         'buffer_manager': ['sd_mount_point', 'fallback_path', 'max_buffer_entries'],
         'event_logger': ['logfile', 'max_size'],
         'output_pins': ['relay_fan_1', 'relay_fan_2', 'relay_growlight',
-                        'status_led', 'reminder_led', 'sd_led', 'fan_led', 'error_led', 'onboard_led'],
+        'status_led', 'reminder_led', 'sd_led', 'fan_led', 'error_led', 'onboard_led'],
         'display': ['type', 'width', 'height', 'i2c_address'],
         'system': ['require_sd_startup', 'button_debounce_ms', 'long_press_ms'],
     }

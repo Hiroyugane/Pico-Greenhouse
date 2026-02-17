@@ -97,7 +97,9 @@ class TestRTCTimeProvider:
         with patch('time.localtime', return_value=FAKE_LOCALTIME):
             from lib.time_provider import RTCTimeProvider
             provider = RTCTimeProvider(mock_rtc)
-        mock_rtc.ReadTime.assert_called()
+            initial_call_count = mock_rtc.ReadTime.call_count
+            provider._sync_from_rtc(force=True)
+        assert mock_rtc.ReadTime.call_count > initial_call_count
 
     def test_sync_from_rtc_skips_when_recent(self, mock_rtc):
         """_sync_from_rtc() does not call ReadTime again if synced recently."""

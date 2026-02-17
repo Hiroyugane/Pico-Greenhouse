@@ -20,6 +20,7 @@ omit = [
     "lib/sdcard.py",
     "lib/ds3231.py",
     "lib/ds2321_gen.py",
+    "hw_probe.py"
 ]
 
 [tool.coverage.report]

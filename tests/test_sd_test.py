@@ -13,7 +13,7 @@ class TestCheckSdCard:
 
     async def test_healthy_card_polls_at_ok_interval(self):
         """When read_block succeeds, sleeps poll_ok_ms."""
-        from sd_test import check_sd_card
+        from prototypes.sd_test import check_sd_card
 
         sleep_durations = []
         call_count = 0
@@ -39,7 +39,7 @@ class TestCheckSdCard:
 
     async def test_failed_read_triggers_remount(self):
         """When read_block fails, safe_umount + remount are called."""
-        from sd_test import check_sd_card
+        from prototypes.sd_test import check_sd_card
 
         remount_mock = Mock()
         umount_mock = Mock()
@@ -67,7 +67,7 @@ class TestCheckSdCard:
 
     async def test_successful_recovery_resets_backoff(self):
         """After failed read + successful remount, backoff resets and polls ok."""
-        from sd_test import check_sd_card
+        from prototypes.sd_test import check_sd_card
 
         # First read fails, remount succeeds, second read_block in recovery
         # succeeds
@@ -104,7 +104,7 @@ class TestCheckSdCard:
 
     async def test_exponential_backoff_on_repeated_failures(self):
         """Consecutive remount failures double the backoff up to max."""
-        from sd_test import check_sd_card
+        from prototypes.sd_test import check_sd_card
 
         sleep_durations = []
         call_count = 0
@@ -137,7 +137,7 @@ class TestCheckSdCard:
 
     async def test_backoff_capped_at_maximum(self):
         """Backoff never exceeds max_backoff_ms."""
-        from sd_test import check_sd_card
+        from prototypes.sd_test import check_sd_card
 
         sleep_durations = []
         call_count = 0
@@ -166,7 +166,7 @@ class TestCheckSdCard:
 
     async def test_state_transition_ok_to_fail(self, capsys):
         """Prints state change message when transitioning ok → fail."""
-        from sd_test import check_sd_card
+        from prototypes.sd_test import check_sd_card
 
         call_count = 0
 
@@ -190,7 +190,7 @@ class TestCheckSdCard:
 
     async def test_state_transition_fail_to_ok(self, capsys):
         """Prints state change message when transitioning fail → ok."""
-        from sd_test import check_sd_card
+        from prototypes.sd_test import check_sd_card
 
         read_calls = [0]
 
@@ -231,7 +231,7 @@ class TestCheckSdCard:
 
     async def test_recovery_error_logged_on_first_and_every_fifth(self, capsys):
         """Recovery error is printed on failures 1, 5, 10, etc."""
-        from sd_test import check_sd_card
+        from prototypes.sd_test import check_sd_card
 
         call_count = 0
 
@@ -262,7 +262,7 @@ class TestCheckSdCard:
         # a side-effect on safe_umount that corrupts last_state_ok.
         import builtins
 
-        from sd_test import check_sd_card
+        from prototypes.sd_test import check_sd_card
 
         original_print = builtins.print
         print_calls = [0]
@@ -301,7 +301,7 @@ class TestCheckSdCard:
 
     async def test_constants_exposed(self):
         """Module-level constants are importable."""
-        from sd_test import MOUNT_POINT, SPI_BAUDRATE, SPI_ID
+        from prototypes.sd_test import MOUNT_POINT, SPI_BAUDRATE, SPI_ID
 
         assert SPI_ID == 1
         assert SPI_BAUDRATE == 40000000

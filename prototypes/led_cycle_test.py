@@ -12,15 +12,22 @@
 #
 # Button: GP9 (short press = next LED)
 
+import os
 import sys
+
+# Ensure the project root is on sys.path so `lib` and `host_shims` resolve
+# regardless of which directory the script is launched from.
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 # Host shim auto-detection
 if sys.implementation.name != "micropython":
-    sys.path.insert(0, "host_shims")
+    sys.path.insert(0, os.path.join(_PROJECT_ROOT, "host_shims"))
 
-import uasyncio as asyncio
+import uasyncio as asyncio  # noqa: E402
 
-from lib.led_button import LED, LEDButtonHandler
+from lib.led_button import LED, LEDButtonHandler  # noqa: E402
 
 # Pin definitions from config
 LED_PINS = [4, 5, 6, 7, 8, 25]

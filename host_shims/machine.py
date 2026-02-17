@@ -152,7 +152,12 @@ class Pin:
     def value(self, v: Optional[int] = None) -> Optional[int]:
         if v is None:
             return self._value
-        self._value = 1 if v else 0
+        new = 1 if v else 0
+        if new != self._value:
+            self._value = new
+            _print(f"[HOST GPIO] Pin {self.id} -> {new}")
+        else:
+            self._value = new
         return None
 
     def __call__(self, v: Optional[int] = None) -> Optional[int]:
@@ -644,7 +649,7 @@ def _pull_name(pull: Optional[int]) -> str:
     }.get(pull, str(pull))
 
 
-_VERBOSE = os.environ.get("HOST_SHIM_VERBOSE", "0") != "0"
+_VERBOSE = os.environ.get("HOST_SHIM_VERBOSE", "1") != "0"
 
 
 def _print(message: str) -> None:

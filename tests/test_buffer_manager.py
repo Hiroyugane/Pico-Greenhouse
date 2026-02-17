@@ -1,9 +1,7 @@
 # Tests for lib/buffer_manager.py
 # Uses tmp_path for real filesystem I/O isolation
 
-import os
-import pytest
-from unittest.mock import patch, Mock
+from unittest.mock import patch
 
 
 class TestBufferManagerPrimaryWrite:
@@ -274,6 +272,7 @@ class TestBufferManagerUtilities:
     def test_is_primary_available_false(self, tmp_path):
         """is_primary_available() returns False when SD doesn't exist."""
         import shutil
+
         from lib.buffer_manager import BufferManager
         sd_path = tmp_path / "nope"
         bm = BufferManager(sd_mount_point=str(sd_path))

@@ -10,14 +10,11 @@ from __future__ import annotations
 
 import os as _os
 import platform as _platform
-import stat as _stat
-import sys as _sys
 from collections import namedtuple as _namedtuple
-from typing import Iterator
 
 # Re-export the entire standard os module so callers see the full API.
 from os import *  # noqa: F401,F403
-from os import path  # noqa: F811  – explicit re-export for ``os.path``
+from typing import Iterator
 
 # ---------------------------------------------------------------------------
 # uname – MicroPython-compatible system info

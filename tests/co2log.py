@@ -1,5 +1,7 @@
-from machine import UART, Pin
 from time import sleep
+
+from machine import UART, Pin
+
 import lib.ds3231 as ds3231
 
 

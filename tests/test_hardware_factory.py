@@ -1,8 +1,7 @@
 # Tests for lib/hardware_factory.py
 # Covers setup, init methods, error handling, SD refresh
 
-import pytest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 
 
 class TestHardwareFactorySetup:

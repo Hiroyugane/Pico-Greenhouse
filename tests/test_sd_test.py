@@ -2,8 +2,9 @@
 # Covers the check_sd_card state machine (backoff, recovery, state transitions)
 
 import asyncio
-import pytest
 from unittest.mock import Mock, patch
+
+import pytest
 
 
 @pytest.mark.asyncio
@@ -249,12 +250,12 @@ class TestCheckSdCard:
 
     async def test_outer_exception_caught(self, capsys):
         """Generic exception in the outer loop body is caught."""
-        from sd_test import check_sd_card
-
         # The outer except guards code between inner try/excepts.
         # Trigger it by making the state-transition print explode via
         # a side-effect on safe_umount that corrupts last_state_ok.
         import builtins
+
+        from sd_test import check_sd_card
         original_print = builtins.print
         print_calls = [0]
 
@@ -291,7 +292,7 @@ class TestCheckSdCard:
 
     async def test_constants_exposed(self):
         """Module-level constants are importable."""
-        from sd_test import SPI_ID, SPI_BAUDRATE, MOUNT_POINT
+        from sd_test import MOUNT_POINT, SPI_BAUDRATE, SPI_ID
         assert SPI_ID == 1
         assert SPI_BAUDRATE == 40000000
         assert MOUNT_POINT == '/sd'

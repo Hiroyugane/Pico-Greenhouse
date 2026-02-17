@@ -13,6 +13,7 @@
 import os
 import sys
 
+
 class BufferManager:
     """
     Centralized manager for buffered writes with SD hot-swap support.
@@ -282,7 +283,7 @@ class BufferManager:
                     f.write(data)
                 self.writes_to_primary += 1
                 return True
-            except Exception as e:
+            except Exception:
                 # Primary write failed (e.g., file locked, permissions)
                 pass
         

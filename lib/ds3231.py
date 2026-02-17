@@ -1,5 +1,6 @@
 import machine
 
+
 class RTC:
     w = ['Montag','Dienstag','Mittwoch','Donnerstag','Freitag','Samstag','Sonntag']
     

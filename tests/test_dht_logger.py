@@ -2,8 +2,10 @@
 # Covers sensor reading, date rollover, CSV file creation, log loop
 
 import asyncio
+from unittest.mock import Mock, patch
+
 import pytest
-from unittest.mock import Mock, patch, MagicMock
+
 from tests.conftest import FAKE_LOCALTIME
 
 
@@ -55,9 +57,8 @@ class TestDHTLoggerInit:
         # Pre-create the file that DHTLogger would look for
         with patch('time.localtime', return_value=FAKE_LOCALTIME):
             # Peek at what the filename would be
-            from lib.time_provider import RTCTimeProvider
             # Manually create the expected file so _file_exists returns True
-            relpath = f'dht_log_2026-01-29.csv'
+            relpath = 'dht_log_2026-01-29.csv'
             primary_path = tmp_path / "sd" / relpath
             primary_path.write_text('Timestamp,Temperature,Humidity\n')
 
@@ -438,9 +439,9 @@ class TestDHTLoggerLogLoop:
         assert sd_file.exists(), f'DHT log file was not created on SD: {sd_file}'
         content = sd_file.read_text()
         lines = content.strip().split('\n')
-        assert lines[0] == 'Timestamp,Temperature,Humidity', f'Missing CSV header'
-        assert len(lines) >= 2, f'No data rows written (only header)'
-        assert '22.5' in lines[1] and '65.0' in lines[1], f'Data row missing sensor values'
+        assert lines[0] == 'Timestamp,Temperature,Humidity', 'Missing CSV header'
+        assert len(lines) >= 2, 'No data rows written (only header)'
+        assert '22.5' in lines[1] and '65.0' in lines[1], 'Data row missing sensor values'
 
     async def test_log_loop_fallback_write_logs_warning(self, time_provider, buffer_manager, mock_event_logger):
         """When write returns False (fallback), log_loop logs a warning."""

@@ -5,11 +5,10 @@
 # All hardware (Pin, SPI, I2C, DHT22, RTC) is MagicMock-based with realistic attributes.
 # Provides reusable fixtures for all lib/ modules under test.
 
-import sys
-import os
 import asyncio
+import sys
 from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch, PropertyMock
+from unittest.mock import MagicMock, Mock, patch
 
 # ---------------------------------------------------------------------------
 # Path setup: ensure project root is importable
@@ -73,6 +72,7 @@ sys.modules['uasyncio'] = asyncio
 
 # Patch time.sleep_ms which only exists in MicroPython
 import time as _time
+
 if not hasattr(_time, 'sleep_ms'):
     _time.sleep_ms = lambda ms: _time.sleep(ms / 1000.0)
 if not hasattr(_time, 'ticks_ms'):
@@ -82,6 +82,7 @@ if not hasattr(_time, 'ticks_ms'):
 # Pytest configuration
 # ---------------------------------------------------------------------------
 import pytest
+
 
 def pytest_configure(config):
     """Register custom markers."""

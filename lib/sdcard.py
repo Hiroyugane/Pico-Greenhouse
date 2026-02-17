@@ -20,9 +20,9 @@ Example usage on ESP8266:
 
 """
 
-from micropython import const
 import time
 
+from micropython import const
 
 if not hasattr(time, 'sleep_ms'):
     def _sleep_ms(ms: int) -> None:

@@ -53,8 +53,8 @@ def build_time_data(localtime_tuple):
 
 def main():  # pragma: no cover
     """Sync the ds3231 RTC to the system clock (run on-device via Thonny)."""
-    from config import DEVICE_CONFIG
     import lib.ds3231 as ds3231
+    from config import DEVICE_CONFIG
 
     pins = DEVICE_CONFIG['pins']
     rtc = ds3231.RTC(

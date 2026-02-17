@@ -30,14 +30,15 @@ if sys.implementation.name != 'micropython':
     sys.path.insert(0, host_shims_path)
 
 import uasyncio as asyncio
+
 from config import DEVICE_CONFIG, validate_config
-from lib.hardware_factory import HardwareFactory
-from lib.time_provider import RTCTimeProvider
 from lib.buffer_manager import BufferManager
-from lib.event_logger import EventLogger
 from lib.dht_logger import DHTLogger
-from lib.relay import FanController, GrowlightController
+from lib.event_logger import EventLogger
+from lib.hardware_factory import HardwareFactory
 from lib.led_button import LEDButtonHandler, ServiceReminder
+from lib.relay import FanController, GrowlightController
+from lib.time_provider import RTCTimeProvider
 
 
 async def main():

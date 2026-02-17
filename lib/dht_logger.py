@@ -5,11 +5,13 @@
 # Uses dependency injection for TimeProvider, BufferManager, EventLogger.
 # Decoupled from global state; supports hot-swap SD and date-based file rollover.
 
+import os
+import sys
+
 import dht
 import machine
 import uasyncio as asyncio
-import os
-import sys
+
 from lib.led_button import LED
 
 
@@ -159,7 +161,7 @@ class DHTLogger:
             except Exception as e:
                 self.logger.warning('DHTLogger', f'Read attempt {attempt + 1}/{self.max_retries} failed: {e}')
                 if attempt < self.max_retries - 1:
-                    import time # importing time here to avoid global import in async context - useful?
+                    import time  # importing time here to avoid global import in async context - useful?
                     time.sleep(0.5)
         
         self.read_failures += 1

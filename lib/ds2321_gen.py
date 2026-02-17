@@ -10,8 +10,8 @@
 # Assumes date > Y2K and 24 hour clock.
 
 import time
-import machine
 
+import machine
 
 _ADDR = const(104)
 

@@ -4,9 +4,10 @@
 # Low-level LED/button abstraction with async-safe blink patterns.
 # ServiceReminder task tracks days since last Service and signals LED until button press.
 
+import time
+
 import machine
 import uasyncio as asyncio
-import time
 
 
 def _ticks_ms() -> int:
@@ -433,7 +434,7 @@ class ServiceReminder:
                 elif not is_due and reminder_due:
                     reminder_due = False
                     self.led_handler.set_off()
-                    print(f'[ServiceReminder] Reminder cleared')
+                    print('[ServiceReminder] Reminder cleared')
                 
                 # When reminder is due, play blink pattern repeatedly
                 if reminder_due:
@@ -445,7 +446,7 @@ class ServiceReminder:
                     if not is_due:
                         reminder_due = False
                         self.led_handler.set_off()
-                        print(f'[ServiceReminder] Reminder cleared')
+                        print('[ServiceReminder] Reminder cleared')
                         # After clearing, fall back to hourly checks
                         await asyncio.sleep(3600)
                     else:

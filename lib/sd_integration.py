@@ -35,8 +35,9 @@ def mount_sd(spi, cs_pin, mount_point: str = '/sd'):
             os.makedirs(mount_point, exist_ok=True)
             print(f'[SD] Host mount simulated at {mount_point}')
             return True, None
-        from lib import sdcard
         from machine import Pin
+
+        from lib import sdcard
         
         # Ensure cs_pin is a Pin object
         if isinstance(cs_pin, int):
@@ -60,8 +61,9 @@ def is_mounted(sd, spi=None, return_instances: bool = False):
     try:
         if not _IS_DEVICE:
             return (True, sd, spi) if return_instances else True
+        from machine import SPI, Pin
+
         from config import DEVICE_CONFIG
-        from machine import Pin, SPI
         from lib import sdcard
 
         spi_config = DEVICE_CONFIG.get('spi', {})

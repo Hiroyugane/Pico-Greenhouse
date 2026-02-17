@@ -1,9 +1,8 @@
 # Tests for lib/time_provider.py
 # Covers TimeProvider (base) and RTCTimeProvider (RTC-backed)
 
-import pytest
-import time
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
+
 from tests.conftest import FAKE_LOCALTIME
 
 

@@ -1,5 +1,6 @@
-from machine import UART, Pin
 from time import sleep
+
+from machine import UART, Pin
 
 
 def main():

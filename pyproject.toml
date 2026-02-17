@@ -33,3 +33,25 @@ exclude_lines = [
     "if False:",
     "def _resolve_path",
 ]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+fix = true
+exclude = [
+    "lib/picozero*",
+    "lib/sdcard*",
+    "lib/ds3231.py",
+    "lib/ds2321_gen.py",
+    "host_shims",
+    "typings",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["lib"]

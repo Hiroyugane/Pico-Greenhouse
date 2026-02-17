@@ -1,8 +1,8 @@
 # Tests for config.py
 # Covers validate_config() with valid/invalid configurations
 
+
 import pytest
-import copy
 
 
 class TestConfigStructure:

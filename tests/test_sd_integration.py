@@ -1,9 +1,9 @@
 # Tests for lib/sd_integration.py
 # Covers mount_sd() and is_mounted() for host and device paths
 
+from unittest.mock import MagicMock, Mock, patch
+
 import lib as _lib_pkg
-import pytest
-from unittest.mock import Mock, patch, MagicMock
 
 
 def _patch_lib_sdcard(mock_sdcard):

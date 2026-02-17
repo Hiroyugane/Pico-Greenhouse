@@ -2,10 +2,11 @@
 # Covers RelayController, FanController, GrowlightController
 
 import asyncio
-import pytest
-from unittest.mock import Mock, patch, MagicMock, AsyncMock
-from tests.conftest import FAKE_LOCALTIME
+from unittest.mock import Mock, patch
 
+import pytest
+
+from tests.conftest import FAKE_LOCALTIME
 
 # ============================================================================
 # RelayController

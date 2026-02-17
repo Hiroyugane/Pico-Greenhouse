@@ -1,8 +1,8 @@
 # Tests for lib/event_logger.py
 # Covers info/warning/error logging, flush thresholds, rotation, error paths
 
-import pytest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
+
 from tests.conftest import FAKE_LOCALTIME
 
 

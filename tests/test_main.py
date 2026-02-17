@@ -2,8 +2,10 @@
 # Covers startup, task spawning, error paths, health-check loop
 
 import asyncio
+from unittest.mock import Mock, patch
+
 import pytest
-from unittest.mock import Mock, patch, MagicMock
+
 from tests.conftest import FAKE_LOCALTIME
 
 

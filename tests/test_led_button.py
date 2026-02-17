@@ -3,10 +3,11 @@
 
 import asyncio
 import time
-import pytest
-from unittest.mock import Mock, patch, MagicMock
-from tests.conftest import FAKE_LOCALTIME
+from unittest.mock import MagicMock, Mock, patch
 
+import pytest
+
+from tests.conftest import FAKE_LOCALTIME
 
 # ============================================================================
 # _ticks_ms helper

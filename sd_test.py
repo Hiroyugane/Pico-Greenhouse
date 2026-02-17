@@ -1,6 +1,6 @@
-import uasyncio as asyncio
 import time
 
+import uasyncio as asyncio
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -103,9 +103,10 @@ async def check_sd_card(
 # ---------------------------------------------------------------------------
 def _build_hardware():  # pragma: no cover
     """Create SPI / SD objects and return (init_fn, read_fn, umount_fn)."""
-    from machine import Pin, SPI  # noqa: F811 — device import
-    from lib import sdcard
     import vfs
+    from machine import SPI, Pin  # noqa: F811 — device import
+
+    from lib import sdcard
 
     _spi: list = [None]
     _sd: list = [None]

@@ -17,7 +17,7 @@ class TestDHTLoggerInit:
         from lib.dht_logger import DHTLogger
         with patch('time.localtime', return_value=FAKE_LOCALTIME):
             with patch.object(buffer_manager, 'write', return_value=True) as write_mock:
-                dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
+                DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
         # Should have written CSV header
         write_mock.assert_called()
         header_call = write_mock.call_args_list[0]
@@ -29,7 +29,7 @@ class TestDHTLoggerInit:
         with patch('time.localtime', return_value=FAKE_LOCALTIME):
             with patch.object(buffer_manager, 'write', return_value=False):
                 with patch.object(buffer_manager, 'has_data_for', return_value=False):
-                    dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
+                    DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
         # Should log fallback message, not primary
         info_calls = [str(c) for c in mock_event_logger.info.call_args_list]
         assert any('fallback' in c for c in info_calls)
@@ -63,7 +63,7 @@ class TestDHTLoggerInit:
             primary_path.write_text('Timestamp,Temperature,Humidity\n')
 
             with patch.object(buffer_manager, 'write') as write_mock:
-                dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
+                DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
         # write should NOT have been called (file already exists)
         write_mock.assert_not_called()
 
@@ -73,7 +73,7 @@ class TestDHTLoggerInit:
         with patch('time.localtime', return_value=FAKE_LOCALTIME):
             with patch.object(buffer_manager, 'write', side_effect=OSError('disk full')):
                 # Should not crash
-                dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
+                DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
         # Error should have been logged
         mock_event_logger.error.assert_called()
 

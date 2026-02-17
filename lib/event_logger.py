@@ -57,7 +57,7 @@ class EventLogger:
         """
         try:
             return self.time_provider.now_timestamp()
-        except:
+        except Exception:
             return 'TIME_ERROR'
     
     def info(self, module: str, message: str) -> None:

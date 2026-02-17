@@ -89,7 +89,7 @@ class BufferManager:
                 readback = f.read()
             os.remove(test_file)
             return readback == test_data
-        except:
+        except Exception:
             return False
     
     def _ensure_fallback_dir(self) -> bool:
@@ -106,7 +106,7 @@ class BufferManager:
             if not self._dir_exists(fallback_dir):
                 os.makedirs(fallback_dir, exist_ok=True)
             return True
-        except:
+        except Exception:
             return False
     
     def _dir_exists(self, path: str) -> bool:
@@ -116,7 +116,7 @@ class BufferManager:
             mode = st[0] if isinstance(st, tuple) else st.st_mode
             # MicroPython doesn't expose stat.S_ISDIR; use POSIX dir bit 0x4000
             return bool(mode & 0x4000)
-        except:
+        except Exception:
             return False
 
     def _path_sep(self) -> str:
@@ -178,7 +178,7 @@ class BufferManager:
             with open(self.fallback_path, 'r') as f:
                 first_char = f.read(1)
                 return len(first_char) > 0
-        except:
+        except Exception:
             return False
 
     def has_data_for(self, relpath: str) -> bool:
@@ -204,7 +204,7 @@ class BufferManager:
             with open(primary_path, 'r') as f:
                 if f.read(1):
                     return True
-        except:
+        except Exception:
             pass
 
         # 2. Check in-memory buffers
@@ -217,7 +217,7 @@ class BufferManager:
                 for line in f:
                     if line.startswith(f'{relpath}|'):
                         return True
-        except:
+        except Exception:
             pass
 
         return False
@@ -306,7 +306,7 @@ class BufferManager:
                 f.write(f'{relpath}|{data}')  # Include relpath in fallback for migration
             self.writes_to_fallback += 1
             return False
-        except:
+        except Exception:
             # Both primary and fallback failed; buffer in RAM as last resort
             if relpath not in self._buffers:
                 self._buffers[relpath] = []
@@ -368,7 +368,7 @@ class BufferManager:
                     self._buffers[path] = []
                     flushed_to_primary = True
                     continue
-                except:
+                except Exception:
                     pass  # Fall through to fallback
             
             # Primary unavailable or write failed — drain to fallback file
@@ -379,7 +379,7 @@ class BufferManager:
                             f.write(f'{path}|{entry}')
                     self.writes_to_fallback += len(self._buffers[path])
                     self._buffers[path] = []
-                except:
+                except Exception:
                     pass  # Entries stay in RAM as last resort
         
         return flushed_to_primary
@@ -412,7 +412,7 @@ class BufferManager:
             try:
                 with open(self.fallback_path, 'r') as f:
                     lines = f.readlines()
-            except:
+            except Exception:
                 return 0
             
             if not lines:
@@ -431,7 +431,7 @@ class BufferManager:
                         f.write(data)
                     
                     entries_migrated += 1
-                except:
+                except Exception:
                     pass  # Skip malformed entries
             
             # Clear fallback file on success
@@ -440,11 +440,11 @@ class BufferManager:
                     with open(self.fallback_path, 'w') as f:
                         f.write('')
                     self.fallback_migrations += 1
-                except:
+                except Exception:
                     pass
             
             return entries_migrated
-        except:
+        except Exception:
             return 0
     
     def rename(self, old_relpath: str, new_relpath: str) -> bool:

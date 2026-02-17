@@ -257,7 +257,7 @@ class TestBufferManagerUtilities:
         # Sabotage reads to return wrong data (simulates ghost writes on removed card)
         import builtins
         real_open = builtins.open
-        call_count = [0]
+
         def fake_open(path, *args, **kwargs):
             f = real_open(path, *args, **kwargs)
             mode = args[0] if args else kwargs.get('mode', 'r')

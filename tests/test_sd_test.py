@@ -243,8 +243,8 @@ class TestCheckSdCard:
                 )
 
         captured = capsys.readouterr()
-        recovery_lines = [l for l in captured.out.splitlines()
-                          if 'RECOVERY ERROR' in l]
+        recovery_lines = [line for line in captured.out.splitlines()
+                          if 'RECOVERY ERROR' in line]
         # Should print on failure 1 and failure 5
         assert len(recovery_lines) == 2
 

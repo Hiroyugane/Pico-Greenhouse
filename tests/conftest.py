@@ -71,7 +71,7 @@ sys.modules['micropython'] = _micropython_mock
 sys.modules['uasyncio'] = asyncio
 
 # Patch time.sleep_ms which only exists in MicroPython
-import time as _time
+import time as _time  # noqa: E402
 
 if not hasattr(_time, 'sleep_ms'):
     _time.sleep_ms = lambda ms: _time.sleep(ms / 1000.0)
@@ -81,7 +81,7 @@ if not hasattr(_time, 'ticks_ms'):
 # ---------------------------------------------------------------------------
 # Pytest configuration
 # ---------------------------------------------------------------------------
-import pytest
+import pytest  # noqa: E402
 
 
 def pytest_configure(config):

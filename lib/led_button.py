@@ -345,7 +345,7 @@ class ServiceReminder:
             date_part = timestamp.split(' ')[0]
             year_str, month_str, day_str = date_part.split('-')
             return (int(year_str), int(month_str), int(day_str))
-        except:
+        except Exception:
             return None
 
     def _load_last_serviced_timestamp(self):
@@ -358,7 +358,7 @@ class ServiceReminder:
             with open(self.storage_path, 'r') as f:
                 value = f.read().strip()
                 return value if value else None
-        except:
+        except Exception:
             return None
 
     def _save_last_serviced_timestamp(self, timestamp: str) -> None:
@@ -388,11 +388,15 @@ class ServiceReminder:
             current_date = self.time_provider.now_date_tuple()
             
             # Use epoch-based day calculation to handle year boundaries safely
-            current_secs = time.mktime((current_date[0], current_date[1], current_date[2], 0, 0, 0, 0, 0))
-            last_secs = time.mktime((self.last_serviced_date[0], self.last_serviced_date[1], self.last_serviced_date[2], 0, 0, 0, 0, 0))
+            current_secs = time.mktime((
+                current_date[0], current_date[1], current_date[2],
+                0, 0, 0, 0, 0))
+            last_secs = time.mktime((
+                self.last_serviced_date[0], self.last_serviced_date[1],
+                self.last_serviced_date[2], 0, 0, 0, 0, 0))
             
             return int((current_secs - last_secs) / 86400)
-        except:
+        except Exception:
             return 0
     
     def reset(self) -> None:

@@ -139,7 +139,9 @@ class FanController(RelayController):
             logger.warning('FanController', f'on_time ({on_time_s}s) > interval ({interval_s}s), clamping')
             self.on_time_s = interval_s
         
-        logger.info('FanController', f'Initialized {self.name}: interval={interval_s}s, on_time={on_time_s}s, thermostat=[max={max_temp}°C, hyst={temp_hysteresis}°C]')
+        logger.info('FanController',
+                    f'Initialized {self.name}: interval={interval_s}s, on_time={on_time_s}s, '
+                    f'thermostat=[max={max_temp}°C, hyst={temp_hysteresis}°C]')
     
     async def start_cycle(self) -> None:
         """
@@ -165,7 +167,10 @@ class FanController(RelayController):
                         self.thermostat_on_count += 1
                         try:
                             self.turn_on()
-                            self.logger.info('FanController', f'{self.name} THERMOSTAT ON at {current_temp:.1f}°C >= {self.max_temp}°C (activation #{self.thermostat_on_count})')
+                            self.logger.info(
+                                'FanController',
+                                f'{self.name} THERMOSTAT ON at {current_temp:.1f}°C '
+                                f'>= {self.max_temp}°C (activation #{self.thermostat_on_count})')
                         except Exception as e:
                             self.logger.error('FanController', f'{self.name} failed to turn ON: {e}')
                     
@@ -177,10 +182,16 @@ class FanController(RelayController):
                             try:
                                 self.turn_off()
                             except Exception as e:
-                                self.logger.error('FanController', f'{self.name} failed to turn OFF after thermostat deactivation: {e}')
+                                self.logger.error(
+                                    'FanController',
+                                    f'{self.name} failed to turn OFF '
+                                    f'after thermostat deactivation: {e}')
                         # Force schedule state re-evaluation
                         self.last_schedule_state = None
-                        self.logger.info('FanController', f'{self.name} THERMOSTAT RESUME SCHEDULE at {current_temp:.1f}°C < {self.max_temp - self.temp_hysteresis}°C')
+                        self.logger.info(
+                            'FanController',
+                            f'{self.name} THERMOSTAT RESUME SCHEDULE at '
+                            f'{current_temp:.1f}°C < {self.max_temp - self.temp_hysteresis}°C')
                 
                 # Apply time-of-day schedule (only when thermostat inactive)
                 if not self.thermostat_active:
@@ -278,7 +289,10 @@ class GrowlightController(RelayController):
         
         self.last_state = None
         
-        logger.info('GrowlightController', f'Initialized {self.name}: dawn={dawn_hour:02d}:{dawn_minute:02d}, sunset={sunset_hour:02d}:{sunset_minute:02d}')
+        logger.info('GrowlightController',
+                    f'Initialized {self.name}: '
+                    f'dawn={dawn_hour:02d}:{dawn_minute:02d}, '
+                    f'sunset={sunset_hour:02d}:{sunset_minute:02d}')
     
     async def start_scheduler(self) -> None:
         """

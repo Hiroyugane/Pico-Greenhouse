@@ -306,7 +306,7 @@ class TestFanController:
         mock_logger = Mock()
         from lib.relay import FanController
         with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            fan = FanController(
+            FanController(
                 pin=16, time_provider=time_provider, dht_logger=mock_dht_logger,
                 logger=mock_logger, interval_s=0, on_time_s=0,
             )

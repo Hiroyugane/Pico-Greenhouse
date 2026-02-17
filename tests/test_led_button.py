@@ -91,7 +91,7 @@ class TestLED:
         with patch('lib.led_button.machine.Pin', return_value=MagicMock()):
             led = LED(25)
 
-            with patch('asyncio.sleep', return_value=None) as sleep_mock:
+            with patch('asyncio.sleep', return_value=None):
                 await led.blink_pattern_async([100, 200], repeats=1)
 
             # Should have called on, sleep(0.1), off, sleep(0.2), then off at end
@@ -132,7 +132,6 @@ class TestLED:
             stop = asyncio.Event()
             cycle_count = 0
 
-            original_sleep = asyncio.sleep
             async def counting_sleep(duration):
                 nonlocal cycle_count
                 cycle_count += 1
@@ -315,7 +314,6 @@ class TestServiceReminder:
         with patch('time.localtime', return_value=FAKE_LOCALTIME):
             handler = LEDButtonHandler(5, 9)
             reminder = ServiceReminder(time_provider, handler)
-            old_ts = reminder.last_serviced_timestamp
             reminder.reset()
         assert isinstance(reminder.last_serviced_timestamp, str)
 
@@ -337,7 +335,7 @@ class TestServiceReminder:
         storage = tmp_path / "reminder.txt"
         with patch('time.localtime', return_value=FAKE_LOCALTIME):
             handler = LEDButtonHandler(5, 9)
-            reminder = ServiceReminder(
+            ServiceReminder(
                 time_provider, handler,
                 storage_path=str(storage),
             )
@@ -401,7 +399,6 @@ class TestServiceReminder:
             )
 
         blink_called = False
-        original_blink = handler.blink_pattern_async
 
         async def mock_blink(*args, **kwargs):
             nonlocal blink_called

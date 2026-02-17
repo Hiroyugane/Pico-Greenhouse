@@ -122,7 +122,7 @@ DEVICE_CONFIG = {
     # System Configuration
     "system": {
         "require_sd_startup": False,  # If True, system won't start without SD; if False, runs with buffering only # noqa: E501
-        "button_debounce_ms": 50,  # Debounce delay for button presses
+        "button_debounce_ms": 200,  # Debounce delay for button presses
         "long_press_ms": 3000,  # Long-press threshold for menu action button
     },
 }

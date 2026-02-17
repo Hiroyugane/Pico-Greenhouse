@@ -9,12 +9,13 @@ import time
 import machine
 import uasyncio as asyncio
 
+# Resolve ticks function once at import time — avoids hasattr() in ISR context.
+try:
+    _ticks_ms = time.ticks_ms  # MicroPython
+except AttributeError:
 
-def _ticks_ms() -> int:
-    """Return monotonic milliseconds on MicroPython or host."""
-    if hasattr(time, "ticks_ms"):
-        return time.ticks_ms()
-    return int(time.time() * 1000)
+    def _ticks_ms() -> int:  # CPython / host fallback
+        return int(time.time() * 1000)
 
 
 class LED:
@@ -126,14 +127,14 @@ class LEDButtonHandler:
         long_press_callback: Registered long-press callback
     """
 
-    def __init__(self, led_pin: int, button_pin: int, debounce_ms: int = 50, long_press_ms: int = 3000):
+    def __init__(self, led_pin: int, button_pin: int, debounce_ms: int = 200, long_press_ms: int = 3000):
         """
         Initialize LED and multi-function button.
 
         Args:
             led_pin (int): GPIO pin for LED
             button_pin (int): GPIO pin for button
-            debounce_ms (int): Debounce delay in milliseconds (default: 50)
+            debounce_ms (int): Debounce delay in milliseconds (default: 200)
             long_press_ms (int): Long-press threshold in ms (default: 3000)
         """
         self.led = LED(led_pin)
@@ -146,6 +147,9 @@ class LEDButtonHandler:
         self.button_callback = None
         self._last_press_time = 0
         self._press_start_time = 0
+        # ISR-safe flags — set in ISR, consumed by poll_button()
+        self._pending_short = False
+        self._pending_long = False
 
     def set_on(self) -> None:
         """Turn LED on."""
@@ -191,25 +195,14 @@ class LEDButtonHandler:
         self.button.irq(trigger=machine.Pin.IRQ_FALLING | machine.Pin.IRQ_RISING, handler=self._button_dual_isr)
 
     def _button_isr(self, pin) -> None:
-        """Interrupt handler with debouncing (legacy, FALLING only)."""
+        """ISR (FALLING only): debounce + set flag.  No heap allocation."""
         current_time = _ticks_ms()
-
         if current_time - self._last_press_time > self.debounce_ms:
             self._last_press_time = current_time
-
-            if self.button_callback:
-                try:
-                    self.button_callback()
-                except Exception as e:
-                    print(f"[LEDButtonHandler] Button callback error: {e}")
+            self._pending_short = True
 
     def _button_dual_isr(self, pin) -> None:
-        """
-        Interrupt handler for both FALLING and RISING edges.
-
-        FALLING = press start (record timestamp).
-        RISING  = press end (compute duration, dispatch callback).
-        """
+        """ISR (FALLING+RISING): debounce + set flags.  No heap allocation."""
         current_time = _ticks_ms()
 
         # Debounce guard
@@ -229,13 +222,38 @@ class LEDButtonHandler:
         duration = current_time - self._press_start_time
         self._press_start_time = 0
 
-        try:
-            if duration >= self.long_press_ms and self.long_press_callback:
-                self.long_press_callback()
-            elif self.short_press_callback:
-                self.short_press_callback()
-        except Exception as e:
-            print(f"[LEDButtonHandler] Button callback error: {e}")
+        if duration >= self.long_press_ms:
+            self._pending_long = True
+        else:
+            self._pending_short = True
+
+    async def poll_button(self, interval_ms: int = 50) -> None:
+        """
+        Async task: poll ISR flags and dispatch callbacks outside interrupt context.
+
+        Must be spawned as ``asyncio.create_task(handler.poll_button())``
+        after registering callbacks.
+
+        Args:
+            interval_ms (int): Polling interval in milliseconds (default: 50)
+        """
+        while True:
+            if self._pending_long:
+                self._pending_long = False
+                if self.long_press_callback:
+                    try:
+                        self.long_press_callback()
+                    except Exception as e:
+                        print(f"[LEDButtonHandler] Long press callback error: {e}")
+            if self._pending_short:
+                self._pending_short = False
+                cb = self.short_press_callback or self.button_callback
+                if cb:
+                    try:
+                        cb()
+                    except Exception as e:
+                        print(f"[LEDButtonHandler] Short press callback error: {e}")
+            await asyncio.sleep(interval_ms / 1000)
 
     async def blink_pattern_async(self, pattern_ms: list, repeats: int = 1) -> None:
         """

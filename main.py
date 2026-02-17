@@ -195,6 +195,7 @@ async def main():
     asyncio.create_task(growlight.start_scheduler())
     asyncio.create_task(dht_logger.log_loop())
     asyncio.create_task(reminder.monitor())
+    asyncio.create_task(led_handler.poll_button())
 
     logger.info("MAIN", "All tasks spawned. System running.")
 

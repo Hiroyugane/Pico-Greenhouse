@@ -19,27 +19,36 @@ class TestTicksMs:
 
     def test_ticks_ms_with_native(self):
         """When time.ticks_ms exists, _ticks_ms uses it."""
-        from lib.led_button import _ticks_ms
+        # _ticks_ms is resolved at import time; re-import to test
+        import importlib
 
-        # time.ticks_ms was added by conftest; verify it's used
-        with patch("time.ticks_ms", return_value=12345):
-            result = _ticks_ms()
+        with patch.object(time, "ticks_ms", return_value=12345):
+            import lib.led_button
+
+            importlib.reload(lib.led_button)
+            result = lib.led_button._ticks_ms()
         assert result == 12345
+        # Restore module to normal state
+        importlib.reload(lib.led_button)
 
     def test_ticks_ms_fallback(self):
         """When time.ticks_ms is absent, falls back to time.time()*1000."""
-        from lib.led_button import _ticks_ms
+        import importlib
 
         saved = getattr(time, "ticks_ms", None)
         try:
             if hasattr(time, "ticks_ms"):
                 delattr(time, "ticks_ms")
+            import lib.led_button
+
+            importlib.reload(lib.led_button)
             with patch("time.time", return_value=1000.5):
-                result = _ticks_ms()
+                result = lib.led_button._ticks_ms()
             assert result == 1000500
         finally:
             if saved is not None:
                 time.ticks_ms = saved
+            importlib.reload(lib.led_button)
 
 
 # ============================================================================
@@ -190,19 +199,85 @@ class TestLEDButtonHandler:
         from lib.led_button import LEDButtonHandler
 
         handler = LEDButtonHandler(24, 23, debounce_ms=50)
-        calls = []
-        handler.register_button_callback(lambda: calls.append("pressed"))
+        handler.register_button_callback(lambda: None)
 
         # Simulate 3 presses: 0ms, 10ms later, 65ms later
         with patch("lib.led_button._ticks_ms", side_effect=[1000, 1010, 1065]):
             handler._button_isr(None)  # t=1000: pass
+            assert handler._pending_short is True
+            handler._pending_short = False  # consume flag
             handler._button_isr(None)  # t=1010: blocked (only 10ms)
+            assert handler._pending_short is False
             handler._button_isr(None)  # t=1065: pass (65ms > 50ms)
+            assert handler._pending_short is True
 
-        assert calls.count("pressed") == 2
+    def test_button_isr_sets_flag_only(self):
+        """ISR sets _pending_short flag without calling callback."""
+        from lib.led_button import LEDButtonHandler
 
-    def test_button_isr_callback_error_handled(self):
-        """If callback raises, error is printed but no crash."""
+        handler = LEDButtonHandler(24, 23, debounce_ms=0)
+        cb = Mock()
+        handler.register_button_callback(cb)
+        with patch("lib.led_button._ticks_ms", return_value=1000):
+            handler._button_isr(None)
+        # Flag is set, but callback is NOT called in ISR
+        assert handler._pending_short is True
+        cb.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_poll_button_dispatches_short_press(self):
+        """poll_button() dispatches short_press_callback from flag."""
+        from lib.led_button import LEDButtonHandler
+
+        handler = LEDButtonHandler(24, 23, debounce_ms=0)
+        cb = Mock()
+        handler.register_button_callback(cb)
+        handler._pending_short = True
+
+        call_count = 0
+
+        async def limited_sleep(duration):
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 2:
+                raise asyncio.CancelledError()
+
+        with patch("asyncio.sleep", side_effect=limited_sleep):
+            with pytest.raises(asyncio.CancelledError):
+                await handler.poll_button()
+
+        cb.assert_called_once()
+        assert handler._pending_short is False
+
+    @pytest.mark.asyncio
+    async def test_poll_button_dispatches_long_press(self):
+        """poll_button() dispatches long_press_callback from flag."""
+        from lib.led_button import LEDButtonHandler
+
+        handler = LEDButtonHandler(5, 9, debounce_ms=50, long_press_ms=3000)
+        short_cb = Mock()
+        long_cb = Mock()
+        handler.register_callbacks(short_press=short_cb, long_press=long_cb)
+        handler._pending_long = True
+
+        call_count = 0
+
+        async def limited_sleep(duration):
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 2:
+                raise asyncio.CancelledError()
+
+        with patch("asyncio.sleep", side_effect=limited_sleep):
+            with pytest.raises(asyncio.CancelledError):
+                await handler.poll_button()
+
+        long_cb.assert_called_once()
+        short_cb.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_poll_button_callback_error_handled(self):
+        """If callback raises in poll_button, error is caught."""
         from lib.led_button import LEDButtonHandler
 
         handler = LEDButtonHandler(24, 23, debounce_ms=0)
@@ -211,9 +286,20 @@ class TestLEDButtonHandler:
             raise RuntimeError("callback error")
 
         handler.register_button_callback(bad_cb)
-        with patch("lib.led_button._ticks_ms", return_value=1000):
-            # Should not raise
-            handler._button_isr(None)
+        handler._pending_short = True
+
+        call_count = 0
+
+        async def limited_sleep(duration):
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 2:
+                raise asyncio.CancelledError()
+
+        with patch("asyncio.sleep", side_effect=limited_sleep):
+            with pytest.raises(asyncio.CancelledError):
+                # Should not raise RuntimeError
+                await handler.poll_button()
 
     @pytest.mark.asyncio
     async def test_blink_pattern_delegates(self, led_handler):
@@ -235,7 +321,7 @@ class TestLEDButtonHandler:
         handler.button.irq.assert_called()  # type: ignore
 
     def test_dual_isr_short_press(self):
-        """Short press (< long_press_ms) triggers short_press_callback."""
+        """Short press (< long_press_ms) sets _pending_short flag."""
         from lib.led_button import LEDButtonHandler
 
         handler = LEDButtonHandler(5, 9, debounce_ms=50, long_press_ms=3000)
@@ -251,11 +337,14 @@ class TestLEDButtonHandler:
             mock_pin.value.return_value = 1
             handler._button_dual_isr(mock_pin)  # release at t=1500 (500ms < 3000ms)
 
-        short_cb.assert_called_once()
+        assert handler._pending_short is True
+        assert handler._pending_long is False
+        # Callbacks are NOT called directly in ISR
+        short_cb.assert_not_called()
         long_cb.assert_not_called()
 
     def test_dual_isr_long_press(self):
-        """Long press (>= long_press_ms) triggers long_press_callback."""
+        """Long press (>= long_press_ms) sets _pending_long flag."""
         from lib.led_button import LEDButtonHandler
 
         handler = LEDButtonHandler(5, 9, debounce_ms=50, long_press_ms=3000)
@@ -271,8 +360,10 @@ class TestLEDButtonHandler:
             mock_pin.value.return_value = 1
             handler._button_dual_isr(mock_pin)  # release at t=4500 (3500ms >= 3000ms)
 
+        assert handler._pending_long is True
+        assert handler._pending_short is False
         short_cb.assert_not_called()
-        long_cb.assert_called_once()
+        long_cb.assert_not_called()
 
     def test_dual_isr_debounce(self):
         """Rapid edges within debounce window are ignored."""
@@ -293,7 +384,7 @@ class TestLEDButtonHandler:
         short_cb.assert_not_called()
 
     def test_dual_isr_callback_error_handled(self):
-        """If callback raises in dual ISR, error is caught."""
+        """If callback raises in poll_button (via dual ISR flag), error is caught."""
         from lib.led_button import LEDButtonHandler
 
         handler = LEDButtonHandler(5, 9, debounce_ms=0, long_press_ms=3000)
@@ -308,8 +399,9 @@ class TestLEDButtonHandler:
             mock_pin.value.return_value = 0
             handler._button_dual_isr(mock_pin)
             mock_pin.value.return_value = 1
-            # Should not raise
             handler._button_dual_isr(mock_pin)
+
+        assert handler._pending_short is True
 
 
 # ============================================================================

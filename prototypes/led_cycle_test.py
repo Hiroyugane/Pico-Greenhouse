@@ -12,17 +12,16 @@
 #
 # Button: GP9 (short press = next LED)
 
-import os
 import sys
 
-# Ensure the project root is on sys.path so `lib` and `host_shims` resolve
-# regardless of which directory the script is launched from.
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, _PROJECT_ROOT)
-
-# Host shim auto-detection
+# On CPython, ensure the project root and host_shims are on sys.path.
+# MicroPython's `os` lacks `os.path`, and paths are already correct on-device.
 if sys.implementation.name != "micropython":
+    import os
+
+    _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _PROJECT_ROOT not in sys.path:
+        sys.path.insert(0, _PROJECT_ROOT)
     sys.path.insert(0, os.path.join(_PROJECT_ROOT, "host_shims"))
 
 import uasyncio as asyncio  # noqa: E402
@@ -40,7 +39,9 @@ class LEDCycler:
 
     def __init__(self):
         self.leds = [LED(pin) for pin in LED_PINS]
-        self.handler = LEDButtonHandler(led_pin=LED_PINS[0], button_pin=BUTTON_PIN)
+        # Use a dummy LED pin (GP25, also in the list) so the handler's
+        # internal LED doesn't conflict with the cycling LEDs.
+        self.handler = LEDButtonHandler(led_pin=25, button_pin=BUTTON_PIN, debounce_ms=200)
         self.current_index = -1  # No LED lit initially
         self.handler.register_button_callback(self.next_led)
         print("[LEDCycler] Ready — press button on GP9 to cycle LEDs")
@@ -52,7 +53,7 @@ class LEDCycler:
         if 0 <= self.current_index < len(self.leds):
             self.leds[self.current_index].off()
 
-        # Advance (wrap around, or go back to -1 after last to turn all off)
+        # Advance (wrap around)
         self.current_index += 1
         if self.current_index >= len(self.leds):
             self.current_index = 0
@@ -70,6 +71,9 @@ class LEDCycler:
 
 async def main():
     cycler = LEDCycler()
+
+    # Start the button polling task (dispatches callbacks outside ISR context)
+    asyncio.create_task(cycler.handler.poll_button())
 
     # Quick startup animation: walk all LEDs once
     print("[LEDCycler] Startup animation...")

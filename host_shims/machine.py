@@ -16,6 +16,7 @@ class Pin:
     IN = 0
     PULL_UP = 2
     IRQ_FALLING = 4
+    IRQ_RISING = 8
 
     def __init__(self, pin: int, mode: int = OUT, pull: Optional[int] = None):
         self.id = pin
@@ -44,8 +45,13 @@ class Pin:
         _print(f"[HOST GPIO] Pin {self.id} IRQ set trigger={trigger} handler={bool(handler)}")
 
     def simulate_falling_edge(self):
-        if self._irq_handler and (self._irq_trigger == self.IRQ_FALLING):
+        if self._irq_handler and (self._irq_trigger is not None) and (self._irq_trigger & self.IRQ_FALLING):
             _print(f"[HOST GPIO] Pin {self.id} simulated falling edge")
+            self._irq_handler(self)
+
+    def simulate_rising_edge(self):
+        if self._irq_handler and (self._irq_trigger is not None) and (self._irq_trigger & self.IRQ_RISING):
+            _print(f"[HOST GPIO] Pin {self.id} simulated rising edge")
             self._irq_handler(self)
 
 

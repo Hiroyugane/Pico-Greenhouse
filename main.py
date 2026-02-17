@@ -33,6 +33,7 @@ import uasyncio as asyncio
 
 from config import DEVICE_CONFIG, validate_config
 from lib.buffer_manager import BufferManager
+from lib.buzzer import BuzzerController
 from lib.dht_logger import DHTLogger
 from lib.event_logger import EventLogger
 from lib.hardware_factory import HardwareFactory
@@ -151,6 +152,29 @@ async def main():
         sunset_minute=light_config.get("sunset_minute", 0),
         name="Growlight",
     )
+
+    # Step 7c: Create buzzer controller
+    buzzer_config = DEVICE_CONFIG.get("buzzer", {})
+    buzzer = None
+    if buzzer_config.get("enabled", True):
+        try:
+            buzzer = BuzzerController(
+                pin=DEVICE_CONFIG["pins"]["buzzer"],
+                logger=logger,
+                enabled=True,
+                default_freq=buzzer_config.get("default_freq", 1000),
+                default_duty_pct=buzzer_config.get("default_duty_pct", 50),
+                patterns={
+                    k: v
+                    for k, v in buzzer_config.items()
+                    if isinstance(v, list) and k.endswith(("_melody", "_pattern"))
+                },
+            )
+            await buzzer.startup()
+            logger.info("MAIN", "Buzzer initialized")
+        except Exception as e:
+            logger.warning("MAIN", f"Buzzer init failed (non-critical): {e}")
+            buzzer = None
 
     # Step 8: Create LED/button handler and Service reminder
     #

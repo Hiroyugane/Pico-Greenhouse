@@ -537,6 +537,60 @@ class ADC:
         return random.randint(0, PROBE.adc.floating_noise_u16_max)
 
 
+# ── PWM ───────────────────────────────────────────────────────────────────
+
+class PWM:
+    """Host shim for MicroPython machine.PWM.
+
+    Emulates the PWM API used to drive a passive buzzer (or other
+    PWM peripherals).  No real hardware output; prints state changes.
+    """
+
+    def __init__(self, pin: "Pin", *, freq: int = 0, duty_u16: int = 0):
+        self._pin = pin if isinstance(pin, Pin) else Pin(pin, Pin.OUT)
+        self._freq = freq
+        self._duty_u16 = duty_u16
+        _print(
+            f"[HOST PWM] PWM on Pin {self._pin.id} "
+            f"freq={self._freq} duty_u16={self._duty_u16}"
+        )
+
+    def freq(self, value: Optional[int] = None) -> Optional[int]:
+        """Get or set the PWM frequency in Hz."""
+        if value is None:
+            return self._freq
+        self._freq = value
+        _print(f"[HOST PWM] Pin {self._pin.id} freq -> {value} Hz")
+        return None
+
+    def duty_u16(self, value: Optional[int] = None) -> Optional[int]:
+        """Get or set 16-bit duty cycle (0–65535)."""
+        if value is None:
+            return self._duty_u16
+        self._duty_u16 = max(0, min(65535, value))
+        _print(f"[HOST PWM] Pin {self._pin.id} duty_u16 -> {self._duty_u16}")
+        return None
+
+    def duty_ns(self, value: Optional[int] = None) -> Optional[int]:
+        """Get or set duty in nanoseconds (approximate)."""
+        if value is None:
+            if self._freq == 0:
+                return 0
+            period_ns = 1_000_000_000 // self._freq
+            return int(self._duty_u16 / 65535 * period_ns)
+        # Convert ns to u16
+        if self._freq > 0:
+            period_ns = 1_000_000_000 // self._freq
+            self._duty_u16 = max(0, min(65535, int(value / period_ns * 65535)))
+        return None
+
+    def deinit(self):
+        """Release PWM channel."""
+        self._duty_u16 = 0
+        self._freq = 0
+        _print(f"[HOST PWM] Pin {self._pin.id} deinit")
+
+
 # ── Timer ─────────────────────────────────────────────────────────────────
 
 class Timer:

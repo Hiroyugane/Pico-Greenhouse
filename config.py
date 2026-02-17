@@ -17,7 +17,9 @@ DEVICE_CONFIG = {
     #   GP14:      Reserved button (future use)
     #   GP15:      DHT22 data
     #   GP16-GP18: Relay outputs (fans + growlight)
-    #   GP19-GP22: Reserved (future relays / PWM fan)
+    #   GP19:      Reserved (future relay)
+    #   GP20:      Passive buzzer (PWM)
+    #   GP21-GP22: Reserved (future relays / PWM fan)
     #   GP25:      On-board LED (heartbeat)
     #   GP26-GP28: Reserved ADC (analog sensors)
     "pins": {
@@ -40,6 +42,7 @@ DEVICE_CONFIG = {
         "co2_uart_tx": 2,  # CO2 sensor UART TX (GP0)
         "co2_uart_rx": 3,  # CO2 sensor UART RX (GP1)
         "co2_baudrate": 9600,  # CO2 sensor UART baudrate
+        "buzzer": 20,  # Passive buzzer (PWM output)
     },
     # SPI Configuration (SD Card)
     "spi": {
@@ -99,6 +102,31 @@ DEVICE_CONFIG = {
     "event_logger": {
         "logfile": "/sd/system.log",
         "max_size": 50000,  # Max log file size (bytes) before rotation
+    },
+    # Buzzer Configuration (passive buzzer via PWM)
+    "buzzer": {
+        "enabled": True,  # Master enable/disable
+        "default_freq": 1000,  # Default tone frequency (Hz)
+        "default_duty_pct": 50,  # Default duty cycle (% of u16 range)
+        "startup_melody": [
+            (1047, 100, 50),  # C6, 100ms, 50ms pause
+            (1319, 100, 50),  # E6
+            (1568, 200, 0),  # G6
+        ],
+        "error_pattern": [
+            (400, 200, 100),  # Low tone, 200ms, 100ms pause
+            (400, 200, 100),
+            (400, 400, 0),  # Longer final beep
+        ],
+        "alert_pattern": [
+            (2000, 150, 100),  # High tone
+            (2000, 150, 100),
+            (2000, 150, 0),
+        ],
+        "reminder_pattern": [
+            (880, 100, 200),  # A5
+            (880, 100, 0),
+        ],
     },
     # OLED Display Configuration (SSD1306 on shared I2C1 bus)
     "display": {
@@ -162,6 +190,7 @@ def validate_config():
             "co2_uart_tx",
             "co2_uart_rx",
             "co2_baudrate",
+            "buzzer",
         ],
         "spi": ["id", "baudrate", "sck", "mosi", "miso", "cs", "mount_point"],
         "files": ["dht_log_base", "system_log", "fallback_path"],
@@ -170,6 +199,7 @@ def validate_config():
         "fan_2": ["interval_s", "on_time_s", "max_temp", "temp_hysteresis"],
         "growlight": ["dawn_hour", "dawn_minute", "sunset_hour", "sunset_minute"],
         "Service_reminder": ["days_interval", "blink_pattern_ms"],
+        "buzzer": ["enabled", "default_freq", "default_duty_pct"],
         "buffer_manager": ["sd_mount_point", "fallback_path", "max_buffer_entries"],
         "event_logger": ["logfile", "max_size"],
         "output_pins": [
@@ -207,6 +237,12 @@ def validate_config():
 
     if DEVICE_CONFIG["Service_reminder"]["days_interval"] <= 0:
         raise ValueError("Service_reminder.days_interval must be > 0")
+
+    if DEVICE_CONFIG["buzzer"]["default_freq"] <= 0:
+        raise ValueError("buzzer.default_freq must be > 0")
+
+    if not (0 < DEVICE_CONFIG["buzzer"]["default_duty_pct"] <= 100):
+        raise ValueError("buzzer.default_duty_pct must be 1–100")
 
     if DEVICE_CONFIG["buffer_manager"]["max_buffer_entries"] <= 0:
         raise ValueError("buffer_manager.max_buffer_entries must be > 0")

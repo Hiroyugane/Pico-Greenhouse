@@ -2,7 +2,7 @@
 # Covers startup, task spawning, error paths, health-check loop
 
 import asyncio
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -63,6 +63,9 @@ class TestMainStartup:
         monkeypatch.setattr(main_module, "GrowlightController", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "ServiceReminder", lambda *a, **kw: Mock())
+        mock_buzzer = Mock()
+        mock_buzzer.startup = AsyncMock()
+        monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
 
         created_tasks = []
         monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: created_tasks.append(t) or Mock())
@@ -76,6 +79,7 @@ class TestMainStartup:
                 raise asyncio.CancelledError()
 
         monkeypatch.setattr(main_module.asyncio, "sleep", limited_sleep)
+        monkeypatch.setattr(main_module.asyncio, "sleep_ms", limited_sleep)
 
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
             with pytest.raises(asyncio.CancelledError):
@@ -112,6 +116,9 @@ class TestMainHealthCheck:
         monkeypatch.setattr(main_module, "GrowlightController", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "ServiceReminder", lambda *a, **kw: Mock())
+        mock_buzzer = Mock()
+        mock_buzzer.startup = AsyncMock()
+        monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
         monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: Mock())
 
         call_count = 0
@@ -123,6 +130,7 @@ class TestMainHealthCheck:
                 raise asyncio.CancelledError()
 
         monkeypatch.setattr(main_module.asyncio, "sleep", limited_sleep)
+        monkeypatch.setattr(main_module.asyncio, "sleep_ms", limited_sleep)
 
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
             with pytest.raises(asyncio.CancelledError):
@@ -157,6 +165,9 @@ class TestMainHealthCheck:
         monkeypatch.setattr(main_module, "GrowlightController", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "ServiceReminder", lambda *a, **kw: Mock())
+        mock_buzzer = Mock()
+        mock_buzzer.startup = AsyncMock()
+        monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
         monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: Mock())
 
         call_count = 0
@@ -168,6 +179,7 @@ class TestMainHealthCheck:
                 raise asyncio.CancelledError()
 
         monkeypatch.setattr(main_module.asyncio, "sleep", limited_sleep)
+        monkeypatch.setattr(main_module.asyncio, "sleep_ms", limited_sleep)
 
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
             with pytest.raises(asyncio.CancelledError):
@@ -201,6 +213,9 @@ class TestMainHealthCheck:
         monkeypatch.setattr(main_module, "GrowlightController", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "ServiceReminder", lambda *a, **kw: Mock())
+        mock_buzzer = Mock()
+        mock_buzzer.startup = AsyncMock()
+        monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
         monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: Mock())
 
         call_count = 0
@@ -212,6 +227,7 @@ class TestMainHealthCheck:
                 raise asyncio.CancelledError()
 
         monkeypatch.setattr(main_module.asyncio, "sleep", limited_sleep)
+        monkeypatch.setattr(main_module.asyncio, "sleep_ms", limited_sleep)
 
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
             with pytest.raises(asyncio.CancelledError):
@@ -250,6 +266,9 @@ class TestMainHealthCheck:
         monkeypatch.setattr(main_module, "GrowlightController", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "ServiceReminder", lambda *a, **kw: Mock())
+        mock_buzzer = Mock()
+        mock_buzzer.startup = AsyncMock()
+        monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
         monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: Mock())
 
         call_count = 0
@@ -261,6 +280,7 @@ class TestMainHealthCheck:
                 raise asyncio.CancelledError()
 
         monkeypatch.setattr(main_module.asyncio, "sleep", limited_sleep)
+        monkeypatch.setattr(main_module.asyncio, "sleep_ms", limited_sleep)
 
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
             with pytest.raises(asyncio.CancelledError):

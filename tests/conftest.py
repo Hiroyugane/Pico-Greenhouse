@@ -61,6 +61,31 @@ _machine_mock.SPI = MagicMock()
 _machine_mock.I2C = MagicMock()
 _machine_mock.RTC = MagicMock
 
+
+# Make PWM() return a mock with freq/duty_u16/deinit tracking
+def _make_pwm(*args, **kwargs):
+    pwm = MagicMock()
+    pwm._freq = kwargs.get("freq", 0)
+    pwm._duty = kwargs.get("duty_u16", 0)
+
+    def _freq_fn(v=None):
+        if v is None:
+            return pwm._freq
+        pwm._freq = v
+
+    def _duty_fn(v=None):
+        if v is None:
+            return pwm._duty
+        pwm._duty = max(0, min(65535, v))
+
+    pwm.freq = MagicMock(side_effect=_freq_fn)
+    pwm.duty_u16 = MagicMock(side_effect=_duty_fn)
+    pwm.deinit = MagicMock()
+    return pwm
+
+
+_machine_mock.PWM = MagicMock(side_effect=_make_pwm)
+
 # --- dht module ---
 _dht_mock = MagicMock()
 
@@ -72,6 +97,15 @@ _micropython_mock.const = lambda x: x
 sys.modules["machine"] = _machine_mock
 sys.modules["dht"] = _dht_mock
 sys.modules["micropython"] = _micropython_mock
+
+# Patch sleep_ms onto asyncio so uasyncio.sleep_ms works in tests
+if not hasattr(asyncio, "sleep_ms"):
+
+    async def _sleep_ms(ms):
+        await asyncio.sleep(ms / 1000.0)
+
+    asyncio.sleep_ms = _sleep_ms
+
 sys.modules["uasyncio"] = asyncio
 
 # Patch time.sleep_ms which only exists in MicroPython
@@ -283,4 +317,29 @@ def growlight_controller(time_provider, mock_event_logger):
         sunset_hour=20,
         sunset_minute=0,
         name="TestGrowlight",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fixtures: Buzzer
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def buzzer_controller(mock_event_logger):
+    """BuzzerController with mocked PWM and test patterns."""
+    from lib.buzzer import BuzzerController
+
+    return BuzzerController(
+        pin=20,
+        logger=mock_event_logger,
+        enabled=True,
+        default_freq=1000,
+        default_duty_pct=50,
+        patterns={
+            "startup_melody": [(1047, 100, 50), (1319, 100, 50), (1568, 200, 0)],
+            "error_pattern": [(400, 200, 100), (400, 200, 100), (400, 400, 0)],
+            "alert_pattern": [(2000, 150, 100), (2000, 150, 100), (2000, 150, 0)],
+            "reminder_pattern": [(880, 100, 200), (880, 100, 0)],
+        },
     )

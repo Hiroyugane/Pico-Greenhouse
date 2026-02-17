@@ -15,36 +15,40 @@ class TestDHTLoggerInit:
     def test_init_creates_csv_header(self, time_provider, buffer_manager, mock_event_logger):
         """DHTLogger init creates CSV file with header via buffer_manager."""
         from lib.dht_logger import DHTLogger
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            with patch.object(buffer_manager, 'write', return_value=True) as write_mock:
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with patch.object(buffer_manager, "write", return_value=True) as write_mock:
                 DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
         # Should have written CSV header
         write_mock.assert_called()
         header_call = write_mock.call_args_list[0]
-        assert 'Timestamp,Temperature,Humidity' in header_call[0][1]
+        assert "Timestamp,Temperature,Humidity" in header_call[0][1]
 
     def test_init_logs_fallback_when_sd_unavailable(self, time_provider, buffer_manager, mock_event_logger):
         """When write returns False (fallback), log message reflects fallback destination."""
         from lib.dht_logger import DHTLogger
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            with patch.object(buffer_manager, 'write', return_value=False):
-                with patch.object(buffer_manager, 'has_data_for', return_value=False):
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with patch.object(buffer_manager, "write", return_value=False):
+                with patch.object(buffer_manager, "has_data_for", return_value=False):
                     DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
         # Should log fallback message, not primary
         info_calls = [str(c) for c in mock_event_logger.info.call_args_list]
-        assert any('fallback' in c for c in info_calls)
+        assert any("fallback" in c for c in info_calls)
 
     def test_init_sets_interval(self, time_provider, buffer_manager, mock_event_logger):
         """DHTLogger interval is set from constructor arg."""
         from lib.dht_logger import DHTLogger
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger, interval=30)
         assert dht.interval == 30
 
     def test_init_state_defaults(self, time_provider, buffer_manager, mock_event_logger):
         """Initial state: no cached readings, zero failures."""
         from lib.dht_logger import DHTLogger
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
         assert dht.last_temperature is None
         assert dht.last_humidity is None
@@ -54,15 +58,16 @@ class TestDHTLoggerInit:
     def test_init_existing_csv_skips_create(self, time_provider, buffer_manager, mock_event_logger, tmp_path):
         """When CSV already exists, __init__ skips _create_file."""
         from lib.dht_logger import DHTLogger
+
         # Pre-create the file that DHTLogger would look for
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             # Peek at what the filename would be
             # Manually create the expected file so _file_exists returns True
-            relpath = 'dht_log_2026-01-29.csv'
+            relpath = "dht_log_2026-01-29.csv"
             primary_path = tmp_path / "sd" / relpath
-            primary_path.write_text('Timestamp,Temperature,Humidity\n')
+            primary_path.write_text("Timestamp,Temperature,Humidity\n")
 
-            with patch.object(buffer_manager, 'write') as write_mock:
+            with patch.object(buffer_manager, "write") as write_mock:
                 DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
         # write should NOT have been called (file already exists)
         write_mock.assert_not_called()
@@ -70,8 +75,9 @@ class TestDHTLoggerInit:
     def test_init_create_file_failure_logged(self, time_provider, buffer_manager, mock_event_logger):
         """If _create_file raises, error is logged but init continues."""
         from lib.dht_logger import DHTLogger
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            with patch.object(buffer_manager, 'write', side_effect=OSError('disk full')):
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with patch.object(buffer_manager, "write", side_effect=OSError("disk full")):
                 # Should not crash
                 DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
         # Error should have been logged
@@ -90,8 +96,8 @@ class TestDHTLoggerReadSensor:
         sensor.temperature = Mock(return_value=22.5)
         sensor.humidity = Mock(return_value=65.0)
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            with patch('dht.DHT22', return_value=sensor):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with patch("dht.DHT22", return_value=sensor):
                 dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
         temp, hum = dht.read_sensor()
         assert temp == 22.5
@@ -106,8 +112,8 @@ class TestDHTLoggerReadSensor:
         sensor.temperature = Mock(return_value=120.0)
         sensor.humidity = Mock(return_value=150.0)
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            with patch('dht.DHT22', return_value=sensor):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with patch("dht.DHT22", return_value=sensor):
                 dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger, max_retries=2)
         temp, hum = dht.read_sensor()
         assert temp is None
@@ -120,19 +126,21 @@ class TestDHTLoggerReadSensor:
 
         sensor = Mock()
         call_count = 0
+
         def counting_measure():
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                raise OSError('sensor error')
+                raise OSError("sensor error")
+
         sensor.measure = counting_measure
         sensor.temperature = Mock(return_value=22.0)
         sensor.humidity = Mock(return_value=60.0)
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            with patch('dht.DHT22', return_value=sensor):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with patch("dht.DHT22", return_value=sensor):
                 dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger, max_retries=3)
-        with patch('time.sleep'):
+        with patch("time.sleep"):
             temp, hum = dht.read_sensor()
         assert temp == 22.0
         assert hum == 60.0
@@ -142,12 +150,12 @@ class TestDHTLoggerReadSensor:
         from lib.dht_logger import DHTLogger
 
         sensor = Mock()
-        sensor.measure = Mock(side_effect=OSError('always fails'))
+        sensor.measure = Mock(side_effect=OSError("always fails"))
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            with patch('dht.DHT22', return_value=sensor):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with patch("dht.DHT22", return_value=sensor):
                 dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger, max_retries=3)
-        with patch('time.sleep'):
+        with patch("time.sleep"):
             temp, hum = dht.read_sensor()
         assert temp is None
         assert hum is None
@@ -162,8 +170,8 @@ class TestDHTLoggerReadSensor:
         sensor.temperature = Mock(return_value=-40.0)
         sensor.humidity = Mock(return_value=0.0)
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            with patch('dht.DHT22', return_value=sensor):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with patch("dht.DHT22", return_value=sensor):
                 dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
         temp, hum = dht.read_sensor()
         assert temp == -40.0
@@ -176,18 +184,20 @@ class TestDHTLoggerDateRollover:
     def test_update_filename_for_date(self, time_provider, buffer_manager, mock_event_logger):
         """Filename includes date in dht_log_YYYY-MM-DD.csv format."""
         from lib.dht_logger import DHTLogger
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
-        assert '2026-01-29' in dht.filename
+        assert "2026-01-29" in dht.filename
 
     def test_check_date_changed_detects_rollover(self, time_provider, buffer_manager, mock_event_logger):
         """_check_date_changed returns True when date changes."""
         from lib.dht_logger import DHTLogger
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
 
         dht.current_date = (2026, 1, 28)  # Yesterday
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             changed = dht._check_date_changed()
         assert changed is True
         assert dht.current_date == (2026, 1, 29)
@@ -195,7 +205,8 @@ class TestDHTLoggerDateRollover:
     def test_check_date_no_change(self, time_provider, buffer_manager, mock_event_logger):
         """_check_date_changed returns False when date hasn't changed."""
         from lib.dht_logger import DHTLogger
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
             changed = dht._check_date_changed()
         assert changed is False
@@ -203,11 +214,12 @@ class TestDHTLoggerDateRollover:
     def test_update_filename_error_fallback(self, time_provider, buffer_manager, mock_event_logger):
         """If now_date_tuple raises, filename falls back to base."""
         from lib.dht_logger import DHTLogger
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
 
         dht.time_provider = Mock()
-        dht.time_provider.now_date_tuple = Mock(side_effect=OSError('fail'))
+        dht.time_provider.now_date_tuple = Mock(side_effect=OSError("fail"))
         dht.logger = mock_event_logger
         dht._update_filename_for_date()
         # Should fall back to filename_base
@@ -220,7 +232,8 @@ class TestDHTLoggerFileOps:
     def test_file_exists_true_primary(self, time_provider, buffer_manager, mock_event_logger, tmp_path):
         """_file_exists returns True when file exists on primary."""
         from lib.dht_logger import DHTLogger
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
         # Create the expected file
         relpath = dht._strip_sd_prefix(dht.filename)
@@ -230,7 +243,8 @@ class TestDHTLoggerFileOps:
     def test_file_exists_true_fallback(self, time_provider, buffer_manager, mock_event_logger, tmp_path):
         """_file_exists returns True when data exists only in fallback."""
         from lib.dht_logger import DHTLogger
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
         # Remove the primary file (was created during init)
         relpath = dht._strip_sd_prefix(dht.filename)
@@ -239,13 +253,14 @@ class TestDHTLoggerFileOps:
             primary.unlink()
         # Write to fallback in pipe-delimited format
         fallback = tmp_path / "local" / "fallback.csv"
-        fallback.write_text(f'{relpath}|Timestamp,Temperature,Humidity\n')
+        fallback.write_text(f"{relpath}|Timestamp,Temperature,Humidity\n")
         assert dht._file_exists() is True
 
     def test_file_exists_true_buffer(self, time_provider, buffer_manager, mock_event_logger, tmp_path):
         """_file_exists returns True when data exists only in memory buffer."""
         from lib.dht_logger import DHTLogger
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
         relpath = dht._strip_sd_prefix(dht.filename)
         # Remove primary file
@@ -253,22 +268,24 @@ class TestDHTLoggerFileOps:
         if primary.exists():
             primary.unlink()
         # Put data in memory buffer
-        buffer_manager._buffers[relpath] = ['Timestamp,Temperature,Humidity\n']
+        buffer_manager._buffers[relpath] = ["Timestamp,Temperature,Humidity\n"]
         assert dht._file_exists() is True
 
     def test_file_exists_false(self, time_provider, buffer_manager, mock_event_logger):
         """_file_exists returns False when data absent from all locations."""
         from lib.dht_logger import DHTLogger
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
-        dht.filename = '/sd/nonexistent_file.csv'
+        dht.filename = "/sd/nonexistent_file.csv"
         assert dht._file_exists() is False
 
     def test_strip_sd_prefix(self):
         """_strip_sd_prefix removes /sd/ prefix."""
         from lib.dht_logger import DHTLogger
-        assert DHTLogger._strip_sd_prefix('/sd/dht_log.csv') == 'dht_log.csv'
-        assert DHTLogger._strip_sd_prefix('dht_log.csv') == 'dht_log.csv'
+
+        assert DHTLogger._strip_sd_prefix("/sd/dht_log.csv") == "dht_log.csv"
+        assert DHTLogger._strip_sd_prefix("dht_log.csv") == "dht_log.csv"
 
 
 @pytest.mark.asyncio
@@ -284,11 +301,12 @@ class TestDHTLoggerLogLoop:
         sensor.temperature = Mock(return_value=22.5)
         sensor.humidity = Mock(return_value=65.0)
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            with patch('dht.DHT22', return_value=sensor):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with patch("dht.DHT22", return_value=sensor):
                 dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger, interval=1)
 
         loop_count = 0
+
         async def limited_sleep(duration):
             nonlocal loop_count
             if duration >= 1:
@@ -296,8 +314,8 @@ class TestDHTLoggerLogLoop:
                 if loop_count >= 1:
                     raise asyncio.CancelledError()
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            with patch('asyncio.sleep', side_effect=limited_sleep):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with patch("asyncio.sleep", side_effect=limited_sleep):
                 with pytest.raises(asyncio.CancelledError):
                     await dht.log_loop()
 
@@ -309,15 +327,16 @@ class TestDHTLoggerLogLoop:
         from lib.dht_logger import DHTLogger
 
         sensor = Mock()
-        sensor.measure = Mock(side_effect=OSError('sensor error'))
+        sensor.measure = Mock(side_effect=OSError("sensor error"))
         sensor.temperature = Mock(return_value=22.5)
         sensor.humidity = Mock(return_value=65.0)
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            with patch('dht.DHT22', return_value=sensor):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with patch("dht.DHT22", return_value=sensor):
                 dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger, interval=1, max_retries=1)
 
         loop_count = 0
+
         async def limited_sleep(duration):
             nonlocal loop_count
             if duration >= 1:
@@ -325,9 +344,9 @@ class TestDHTLoggerLogLoop:
                 if loop_count >= 1:
                     raise asyncio.CancelledError()
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            with patch('time.sleep'):
-                with patch('asyncio.sleep', side_effect=limited_sleep):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with patch("time.sleep"):
+                with patch("asyncio.sleep", side_effect=limited_sleep):
                     with pytest.raises(asyncio.CancelledError):
                         await dht.log_loop()
 
@@ -342,22 +361,25 @@ class TestDHTLoggerLogLoop:
         sensor.temperature = Mock(return_value=22.5)
         sensor.humidity = Mock(return_value=65.0)
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            with patch('dht.DHT22', return_value=sensor):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with patch("dht.DHT22", return_value=sensor):
                 dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger, interval=1)
 
         # Make write raise after the CSV header is already created
         original_write = buffer_manager.write
         call_count = 0
+
         def failing_write(relpath, data):
             nonlocal call_count
             call_count += 1
-            if 'Timestamp' not in data:  # Don't fail on header writes
-                raise OSError('disk full')
+            if "Timestamp" not in data:  # Don't fail on header writes
+                raise OSError("disk full")
             return original_write(relpath, data)
+
         buffer_manager.write = failing_write
 
         loop_count = 0
+
         async def limited_sleep(duration):
             nonlocal loop_count
             if duration >= 1:
@@ -365,8 +387,8 @@ class TestDHTLoggerLogLoop:
                 if loop_count >= 1:
                     raise asyncio.CancelledError()
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            with patch('asyncio.sleep', side_effect=limited_sleep):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with patch("asyncio.sleep", side_effect=limited_sleep):
                 with pytest.raises(asyncio.CancelledError):
                     await dht.log_loop()
 
@@ -376,21 +398,22 @@ class TestDHTLoggerLogLoop:
         """Generic exception in log_loop is caught and loop continues."""
         from lib.dht_logger import DHTLogger
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger, interval=1)
 
         # Make _check_date_changed raise a generic error
-        dht._check_date_changed = Mock(side_effect=RuntimeError('unexpected'))
+        dht._check_date_changed = Mock(side_effect=RuntimeError("unexpected"))
 
         call_count = 0
+
         async def counting_sleep(duration):
             nonlocal call_count
             call_count += 1
             if call_count >= 3:
                 raise asyncio.CancelledError()
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            with patch('asyncio.sleep', side_effect=counting_sleep):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with patch("asyncio.sleep", side_effect=counting_sleep):
                 with pytest.raises(asyncio.CancelledError):
                     await dht.log_loop()
 
@@ -400,10 +423,11 @@ class TestDHTLoggerLogLoop:
     async def test_log_loop_cancelled_error(self, time_provider, buffer_manager, mock_event_logger):
         """CancelledError is re-raised from log_loop."""
         from lib.dht_logger import DHTLogger
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
 
-        with patch('asyncio.sleep', side_effect=asyncio.CancelledError):
+        with patch("asyncio.sleep", side_effect=asyncio.CancelledError):
             with pytest.raises(asyncio.CancelledError):
                 await dht.log_loop()
 
@@ -416,11 +440,12 @@ class TestDHTLoggerLogLoop:
         sensor.temperature = Mock(return_value=22.5)
         sensor.humidity = Mock(return_value=65.0)
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            with patch('dht.DHT22', return_value=sensor):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with patch("dht.DHT22", return_value=sensor):
                 dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger, interval=1)
 
         loop_count = 0
+
         async def limited_sleep(duration):
             nonlocal loop_count
             if duration >= 1:
@@ -428,20 +453,20 @@ class TestDHTLoggerLogLoop:
                 if loop_count >= 2:
                     raise asyncio.CancelledError()
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            with patch('asyncio.sleep', side_effect=limited_sleep):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with patch("asyncio.sleep", side_effect=limited_sleep):
                 with pytest.raises(asyncio.CancelledError):
                     await dht.log_loop()
 
         # Verify that the CSV file exists on the SD mount and contains data rows
         relpath = dht._strip_sd_prefix(dht.filename)
         sd_file = tmp_path / "sd" / relpath
-        assert sd_file.exists(), f'DHT log file was not created on SD: {sd_file}'
+        assert sd_file.exists(), f"DHT log file was not created on SD: {sd_file}"
         content = sd_file.read_text()
-        lines = content.strip().split('\n')
-        assert lines[0] == 'Timestamp,Temperature,Humidity', 'Missing CSV header'
-        assert len(lines) >= 2, 'No data rows written (only header)'
-        assert '22.5' in lines[1] and '65.0' in lines[1], 'Data row missing sensor values'
+        lines = content.strip().split("\n")
+        assert lines[0] == "Timestamp,Temperature,Humidity", "Missing CSV header"
+        assert len(lines) >= 2, "No data rows written (only header)"
+        assert "22.5" in lines[1] and "65.0" in lines[1], "Data row missing sensor values"
 
     async def test_log_loop_fallback_write_logs_warning(self, time_provider, buffer_manager, mock_event_logger):
         """When write returns False (fallback), log_loop logs a warning."""
@@ -452,19 +477,22 @@ class TestDHTLoggerLogLoop:
         sensor.temperature = Mock(return_value=22.5)
         sensor.humidity = Mock(return_value=65.0)
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            with patch('dht.DHT22', return_value=sensor):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with patch("dht.DHT22", return_value=sensor):
                 dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger, interval=1)
 
         # Make buffer_manager.write return False (simulating fallback)
         original_write = buffer_manager.write
+
         def fallback_write(relpath, data):
-            if 'Timestamp' not in data:
+            if "Timestamp" not in data:
                 return False  # Simulate fallback for data rows
             return original_write(relpath, data)
+
         buffer_manager.write = fallback_write
 
         loop_count = 0
+
         async def limited_sleep(duration):
             nonlocal loop_count
             if duration >= 1:
@@ -472,11 +500,11 @@ class TestDHTLoggerLogLoop:
                 if loop_count >= 1:
                     raise asyncio.CancelledError()
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            with patch('asyncio.sleep', side_effect=limited_sleep):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with patch("asyncio.sleep", side_effect=limited_sleep):
                 with pytest.raises(asyncio.CancelledError):
                     await dht.log_loop()
 
         # Should have warned about fallback write
         warn_calls = [str(c) for c in mock_event_logger.warning.call_args_list]
-        assert any('fallback' in c.lower() for c in warn_calls), f'No fallback warning logged: {warn_calls}'
+        assert any("fallback" in c.lower() for c in warn_calls), f"No fallback warning logged: {warn_calls}"

@@ -25,8 +25,8 @@
 import os
 import sys
 
-if sys.implementation.name != 'micropython':
-    host_shims_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'host_shims')
+if sys.implementation.name != "micropython":
+    host_shims_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "host_shims")
     sys.path.insert(0, host_shims_path)
 
 import uasyncio as asyncio
@@ -44,85 +44,85 @@ from lib.time_provider import RTCTimeProvider
 async def main():
     """
     Main async entry point for Pi Greenhouse system.
-    
+
     Orchestrates initialization and spawns all concurrent tasks.
     All long-running operations (logging, relay cycling, scheduling) run as async tasks.
     """
-    print('[STARTUP] Initializing Pi Greenhouse system...')
-    
+    print("[STARTUP] Initializing Pi Greenhouse system...")
+
     # Step 1: Validate configuration
     try:
         validate_config()
-        print('[STARTUP] Configuration validated')
+        print("[STARTUP] Configuration validated")
     except ValueError as e:
-        print(f'[STARTUP ERROR] Config validation failed: {e}')
+        print(f"[STARTUP ERROR] Config validation failed: {e}")
         return
-    
+
     # Step 2: Initialize hardware
     hardware = HardwareFactory(DEVICE_CONFIG)
     if not hardware.setup():
-        print('[STARTUP ERROR] Critical hardware initialization failed (RTC)')
+        print("[STARTUP ERROR] Critical hardware initialization failed (RTC)")
         hardware.print_status()
         return
-    
+
     hardware.print_status()
-    
+
     # Step 3: Create TimeProvider (wraps RTC)
     rtc = hardware.get_rtc()
     time_provider = RTCTimeProvider(rtc)
-    
+
     # Step 4: Create BufferManager
-    buffer_config = DEVICE_CONFIG.get('buffer_manager', {})
+    buffer_config = DEVICE_CONFIG.get("buffer_manager", {})
     buffer_manager = BufferManager(
-        sd_mount_point=buffer_config.get('sd_mount_point', '/sd'),
-        fallback_path=buffer_config.get('fallback_path', '/local/fallback.csv'),
-        max_buffer_entries=buffer_config.get('max_buffer_entries', 1000),
+        sd_mount_point=buffer_config.get("sd_mount_point", "/sd"),
+        fallback_path=buffer_config.get("fallback_path", "/local/fallback.csv"),
+        max_buffer_entries=buffer_config.get("max_buffer_entries", 1000),
     )
-    
+
     # Step 5: Create EventLogger
-    logger_config = DEVICE_CONFIG.get('event_logger', {})
+    logger_config = DEVICE_CONFIG.get("event_logger", {})
     logger = EventLogger(
         time_provider,
         buffer_manager,
-        logfile=logger_config.get('logfile', '/sd/system.log'),
-        max_size=logger_config.get('max_size', 50000),
+        logfile=logger_config.get("logfile", "/sd/system.log"),
+        max_size=logger_config.get("max_size", 50000),
     )
-    
-    logger.info('MAIN', 'System startup')
-    
+
+    logger.info("MAIN", "System startup")
+
     # Step 6: Create DHTLogger
-    dht_config = DEVICE_CONFIG.get('dht_logger', {})
-    files_config = DEVICE_CONFIG.get('files', {})
+    dht_config = DEVICE_CONFIG.get("dht_logger", {})
+    files_config = DEVICE_CONFIG.get("files", {})
     try:
         dht_logger = DHTLogger(
-            pin=DEVICE_CONFIG['pins']['dht22'],
+            pin=DEVICE_CONFIG["pins"]["dht22"],
             time_provider=time_provider,
             buffer_manager=buffer_manager,
             logger=logger,
-            interval=dht_config.get('interval_s', 60),
-            filename=f'/sd/{files_config.get("dht_log_base", "dht_log.csv")}',
-            max_retries=dht_config.get('max_retries', 3),
-            status_led_pin=DEVICE_CONFIG['pins']['status_led'],
+            interval=dht_config.get("interval_s", 60),
+            filename=f"/sd/{files_config.get('dht_log_base', 'dht_log.csv')}",
+            max_retries=dht_config.get("max_retries", 3),
+            status_led_pin=DEVICE_CONFIG["pins"]["status_led"],
         )
     except Exception as e:
-        logger.error('MAIN', f'DHTLogger init failed: {e}')
+        logger.error("MAIN", f"DHTLogger init failed: {e}")
         # Create a minimal DHTLogger without status LED to keep system running
         dht_logger = DHTLogger(
-            pin=DEVICE_CONFIG['pins']['dht22'],
+            pin=DEVICE_CONFIG["pins"]["dht22"],
             time_provider=time_provider,
             buffer_manager=buffer_manager,
             logger=logger,
-            interval=dht_config.get('interval_s', 60),
-            filename=f'/sd/{files_config.get("dht_log_base", "dht_log.csv")}',
-            max_retries=dht_config.get('max_retries', 3),
+            interval=dht_config.get("interval_s", 60),
+            filename=f"/sd/{files_config.get('dht_log_base', 'dht_log.csv')}",
+            max_retries=dht_config.get("max_retries", 3),
         )
-    
+
     # Step 7: Create relay controllers with dependency injection
     fan_configs = [
-        (DEVICE_CONFIG['pins']['relay_fan_1'], DEVICE_CONFIG.get('fan_1', {}), 'Fan_1'),
-        (DEVICE_CONFIG['pins']['relay_fan_2'], DEVICE_CONFIG.get('fan_2', {}), 'Fan_2'),
+        (DEVICE_CONFIG["pins"]["relay_fan_1"], DEVICE_CONFIG.get("fan_1", {}), "Fan_1"),
+        (DEVICE_CONFIG["pins"]["relay_fan_2"], DEVICE_CONFIG.get("fan_2", {}), "Fan_2"),
     ]
-    
+
     fans = []
     for pin, config, name in fan_configs:
         fan = FanController(
@@ -130,117 +130,117 @@ async def main():
             time_provider=time_provider,
             dht_logger=dht_logger,
             logger=logger,
-            interval_s=config.get('interval_s', 600),
-            on_time_s=config.get('on_time_s', 20),
-            max_temp=config.get('max_temp', 24.0),
-            temp_hysteresis=config.get('temp_hysteresis', 1.0),
+            interval_s=config.get("interval_s", 600),
+            on_time_s=config.get("on_time_s", 20),
+            max_temp=config.get("max_temp", 24.0),
+            temp_hysteresis=config.get("temp_hysteresis", 1.0),
             name=name,
         )
         fans.append(fan)
-    logger.info('MAIN', 'Fan controllers initialized')
-    
+    logger.info("MAIN", "Fan controllers initialized")
+
     # Step 7b: Create grow light controller
-    light_config = DEVICE_CONFIG.get('growlight', {})
+    light_config = DEVICE_CONFIG.get("growlight", {})
     growlight = GrowlightController(
-        pin=DEVICE_CONFIG['pins']['relay_growlight'],
+        pin=DEVICE_CONFIG["pins"]["relay_growlight"],
         time_provider=time_provider,
         logger=logger,
-        dawn_hour=light_config.get('dawn_hour', 6),
-        dawn_minute=light_config.get('dawn_minute', 0),
-        sunset_hour=light_config.get('sunset_hour', 22),
-        sunset_minute=light_config.get('sunset_minute', 0),
-        name='Growlight',
+        dawn_hour=light_config.get("dawn_hour", 6),
+        dawn_minute=light_config.get("dawn_minute", 0),
+        sunset_hour=light_config.get("sunset_hour", 22),
+        sunset_minute=light_config.get("sunset_minute", 0),
+        name="Growlight",
     )
-    
+
     # Step 8: Create LED/button handler and Service reminder
     #
     # Single menu button (GP9): short press = cycle display menu,
     # long press (>=3s) = context action (e.g. reset service reminder).
     led_handler = LEDButtonHandler(
-        led_pin=DEVICE_CONFIG['pins']['reminder_led'],
-        button_pin=DEVICE_CONFIG['pins']['button_menu'],
-        debounce_ms=DEVICE_CONFIG.get('system', {}).get('button_debounce_ms', 50),
-        long_press_ms=DEVICE_CONFIG.get('system', {}).get('long_press_ms', 3000),
+        led_pin=DEVICE_CONFIG["pins"]["reminder_led"],
+        button_pin=DEVICE_CONFIG["pins"]["button_menu"],
+        debounce_ms=DEVICE_CONFIG.get("system", {}).get("button_debounce_ms", 50),
+        long_press_ms=DEVICE_CONFIG.get("system", {}).get("long_press_ms", 3000),
     )
-    
-    Service_config = DEVICE_CONFIG.get('Service_reminder', {})
+
+    Service_config = DEVICE_CONFIG.get("Service_reminder", {})
     reminder = ServiceReminder(
         time_provider=time_provider,
         led_handler=led_handler,
-        days_interval=Service_config.get('days_interval', 7),
-        blink_pattern_ms=Service_config.get('blink_pattern_ms', [200, 200, 200, 800]),
+        days_interval=Service_config.get("days_interval", 7),
+        blink_pattern_ms=Service_config.get("blink_pattern_ms", [200, 200, 200, 800]),
         auto_register_button=False,
     )
-    
+
     # Register button callbacks:
     # - Short press: cycle display menu (placeholder for future OLED menu)
     # - Long press: reset service reminder
     def _on_short_press():
         # TODO: cycle OLED display menu page
         pass
-    
+
     led_handler.register_callbacks(
         short_press=_on_short_press,
         long_press=reminder.reset,
     )
-    
+
     # Step 9: Spawn all async tasks
-    logger.info('MAIN', 'Spawning async tasks...')
-    
+    logger.info("MAIN", "Spawning async tasks...")
+
     # Spawn fan cycle tasks
     for fan in fans:
         asyncio.create_task(fan.start_cycle())
-    
+
     # Spawn other async tasks
     asyncio.create_task(growlight.start_scheduler())
     asyncio.create_task(dht_logger.log_loop())
     asyncio.create_task(reminder.monitor())
-    
-    logger.info('MAIN', 'All tasks spawned. System running.')
-    
+
+    logger.info("MAIN", "All tasks spawned. System running.")
+
     # Main event loop (keep running)
     while True:
         await asyncio.sleep(60)
-        
+
         # Periodic health checks
         metrics = buffer_manager.get_metrics()
-        buffered = metrics['buffer_entries']
-        
+        buffered = metrics["buffer_entries"]
+
         # Hot-swap recovery: attempt SD refresh when primary is
         # reported down OR when the in-memory buffer is growing.
         # The second condition catches the case where is_primary_available()
         # returns True (cached VFS metadata) but real writes are failing.
         # refresh_sd() performs a block-level readblocks check and is
         # cheap when the card is actually present.
-        sd_needs_check = (not buffer_manager.is_primary_available()
-                          or buffered > 0)
+        sd_needs_check = not buffer_manager.is_primary_available() or buffered > 0
         if sd_needs_check:
             if hardware.refresh_sd():
-                logger.info('MAIN', 'SD card re-mounted after hot-swap')
+                logger.info("MAIN", "SD card re-mounted after hot-swap")
                 # Flush in-memory buffer now that primary is back
                 if buffered > 0:
                     buffer_manager.flush()
-                    logger.info('MAIN', f'Flushed {buffered} buffered entries to SD')
-        
+                    logger.info("MAIN", f"Flushed {buffered} buffered entries to SD")
+
         # Log buffer warning AFTER the SD check so the reader sees
         # the recovery attempt first, then the remaining state.
         new_buffered = sum(len(v) for v in buffer_manager._buffers.values())
         if new_buffered > 0:
-            logger.warning('MAIN', f'Buffer has {new_buffered} entries (SD may be unavailable)')
-        
+            logger.warning("MAIN", f"Buffer has {new_buffered} entries (SD may be unavailable)")
+
         # Attempt to migrate fallback entries if primary became available
-        if metrics['writes_to_fallback'] > metrics['fallback_migrations']:
+        if metrics["writes_to_fallback"] > metrics["fallback_migrations"]:
             migrated = buffer_manager.migrate_fallback()
             if migrated > 0:
-                logger.info('MAIN', f'Migrated {migrated} fallback entries to primary SD')
+                logger.info("MAIN", f"Migrated {migrated} fallback entries to primary SD")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print('[SHUTDOWN] Keyboard interrupt')
+        print("[SHUTDOWN] Keyboard interrupt")
     except Exception as e:
-        print(f'[SHUTDOWN] Fatal error: {e}')
+        print(f"[SHUTDOWN] Fatal error: {e}")
         import traceback
+
         traceback.print_exc()

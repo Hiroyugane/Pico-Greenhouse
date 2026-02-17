@@ -40,15 +40,17 @@ def build_time_data(localtime_tuple):
     weekday = get_weekday(year_full, month, day)
     year_short = year_full - 2000  # RTC expects 00-99
 
-    return bytes([
-        dec_to_bcd(second),
-        dec_to_bcd(minute),
-        dec_to_bcd(hour),
-        dec_to_bcd(weekday),
-        dec_to_bcd(day),
-        dec_to_bcd(month),
-        dec_to_bcd(year_short),
-    ])
+    return bytes(
+        [
+            dec_to_bcd(second),
+            dec_to_bcd(minute),
+            dec_to_bcd(hour),
+            dec_to_bcd(weekday),
+            dec_to_bcd(day),
+            dec_to_bcd(month),
+            dec_to_bcd(year_short),
+        ]
+    )
 
 
 def main():  # pragma: no cover
@@ -56,25 +58,24 @@ def main():  # pragma: no cover
     import lib.ds3231 as ds3231
     from config import DEVICE_CONFIG
 
-    pins = DEVICE_CONFIG['pins']
+    pins = DEVICE_CONFIG["pins"]
     rtc = ds3231.RTC(
-        sda_pin=pins['rtc_sda'],
-        scl_pin=pins['rtc_scl'],
-        port=pins['rtc_i2c_port'],
+        sda_pin=pins["rtc_sda"],
+        scl_pin=pins["rtc_scl"],
+        port=pins["rtc_i2c_port"],
     )
-    rtc_time = rtc.ReadTime('DIN-1355-1+time')  # type: ignore
-    print('Alt:', rtc_time)
+    rtc_time = rtc.ReadTime("DIN-1355-1+time")  # type: ignore
+    print("Alt:", rtc_time)
 
     current_time = time.localtime()
     time_data = build_time_data(current_time)
     rtc.SetTime(time_data)
 
     time.sleep(2)
-    print('Neu:', rtc.ReadTime('DIN-1355-1+time'))  # type: ignore
-    print('current Time:', time.localtime())
+    print("Neu:", rtc.ReadTime("DIN-1355-1+time"))  # type: ignore
+    print("current Time:", time.localtime())
     print("Zeit erfolgreich auf RTC-Chip gesetzt.")
 
 
 if __name__ == "__main__":  # pragma: no cover
     main()
-

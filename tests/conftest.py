@@ -29,21 +29,25 @@ _machine_mock.Pin.PULL_UP = 1
 _machine_mock.Pin.IRQ_FALLING = 2
 _machine_mock.Pin.IRQ_RISING = 1
 
+
 # Make Pin() return a fresh mock each time, with value tracking
 def _make_pin(*args, **kwargs):
     pin = MagicMock()
     pin._current_value = 0
     pin._call_history = []  # Track (method, value) calls for assertions
+
     def _value_fn(v=None):
         if v is None:
             return pin._current_value
         pin._current_value = v
-        pin._call_history.append(('value', v))
+        pin._call_history.append(("value", v))
+
     pin.value = MagicMock(side_effect=_value_fn)
-    pin.on = MagicMock(side_effect=lambda: (_value_fn(1), pin._call_history.append(('on', 1)))[0])
-    pin.off = MagicMock(side_effect=lambda: (_value_fn(0), pin._call_history.append(('off', 0)))[0])
+    pin.on = MagicMock(side_effect=lambda: (_value_fn(1), pin._call_history.append(("on", 1)))[0])
+    pin.off = MagicMock(side_effect=lambda: (_value_fn(0), pin._call_history.append(("off", 0)))[0])
     pin.irq = MagicMock()
     return pin
+
 
 _machine_mock.Pin = MagicMock(side_effect=_make_pin)
 # Preserve class-level constants on the callable mock
@@ -65,17 +69,17 @@ _micropython_mock = MagicMock()
 _micropython_mock.const = lambda x: x
 
 # --- uasyncio → standard asyncio ---
-sys.modules['machine'] = _machine_mock
-sys.modules['dht'] = _dht_mock
-sys.modules['micropython'] = _micropython_mock
-sys.modules['uasyncio'] = asyncio
+sys.modules["machine"] = _machine_mock
+sys.modules["dht"] = _dht_mock
+sys.modules["micropython"] = _micropython_mock
+sys.modules["uasyncio"] = asyncio
 
 # Patch time.sleep_ms which only exists in MicroPython
 import time as _time  # noqa: E402
 
-if not hasattr(_time, 'sleep_ms'):
+if not hasattr(_time, "sleep_ms"):
     _time.sleep_ms = lambda ms: _time.sleep(ms / 1000.0)
-if not hasattr(_time, 'ticks_ms'):
+if not hasattr(_time, "ticks_ms"):
     _time.ticks_ms = lambda: int(_time.time() * 1000)
 
 # ---------------------------------------------------------------------------
@@ -111,8 +115,9 @@ def mock_rtc():
 @pytest.fixture
 def time_provider(mock_rtc):
     """RTCTimeProvider with time.localtime patched to known value."""
-    with patch('time.localtime', return_value=FAKE_LOCALTIME):
+    with patch("time.localtime", return_value=FAKE_LOCALTIME):
         from lib.time_provider import RTCTimeProvider
+
         provider = RTCTimeProvider(mock_rtc)
         yield provider
 
@@ -120,14 +125,16 @@ def time_provider(mock_rtc):
 @pytest.fixture
 def base_time_provider():
     """Base TimeProvider (no RTC) with time.localtime patched."""
-    with patch('time.localtime', return_value=FAKE_LOCALTIME):
+    with patch("time.localtime", return_value=FAKE_LOCALTIME):
         from lib.time_provider import TimeProvider
+
         yield TimeProvider()
 
 
 # ---------------------------------------------------------------------------
 # Fixtures: Storage (real filesystem via tmp_path)
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def buffer_manager(tmp_path):
@@ -139,6 +146,7 @@ def buffer_manager(tmp_path):
     fallback_file = fallback_dir / "fallback.csv"
 
     from lib.buffer_manager import BufferManager
+
     return BufferManager(
         sd_mount_point=str(sd_dir),
         fallback_path=str(fallback_file),
@@ -150,15 +158,17 @@ def buffer_manager(tmp_path):
 # Fixtures: Logging
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def event_logger(time_provider, buffer_manager):
     """EventLogger wired to real TimeProvider and BufferManager."""
-    with patch('time.localtime', return_value=FAKE_LOCALTIME):
+    with patch("time.localtime", return_value=FAKE_LOCALTIME):
         from lib.event_logger import EventLogger
+
         return EventLogger(
             time_provider,
             buffer_manager,
-            logfile='/sd/test.log',
+            logfile="/sd/test.log",
             max_size=10000,
         )
 
@@ -178,6 +188,7 @@ def mock_event_logger():
 # ---------------------------------------------------------------------------
 # Fixtures: DHT sensor
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def mock_dht_sensor():
@@ -201,11 +212,15 @@ def mock_dht_logger():
 @pytest.fixture
 def dht_logger(time_provider, buffer_manager, mock_event_logger, mock_dht_sensor):
     """Real DHTLogger with mocked sensor for integration-style tests."""
-    with patch('time.localtime', return_value=FAKE_LOCALTIME):
-        with patch('dht.DHT22', return_value=mock_dht_sensor):
+    with patch("time.localtime", return_value=FAKE_LOCALTIME):
+        with patch("dht.DHT22", return_value=mock_dht_sensor):
             from lib.dht_logger import DHTLogger
+
             return DHTLogger(
-                15, time_provider, buffer_manager, mock_event_logger,
+                15,
+                time_provider,
+                buffer_manager,
+                mock_event_logger,
                 interval=60,
             )
 
@@ -214,10 +229,12 @@ def dht_logger(time_provider, buffer_manager, mock_event_logger, mock_dht_sensor
 # Fixtures: LED / Button
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def led_handler():
     """LEDButtonHandler with mocked machine.Pin."""
     from lib.led_button import LEDButtonHandler
+
     return LEDButtonHandler(5, 9, debounce_ms=50)
 
 
@@ -225,17 +242,20 @@ def led_handler():
 # Fixtures: Relay controllers
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def relay_controller():
     """Basic RelayController."""
     from lib.relay import RelayController
-    return RelayController(16, invert=True, name='TestRelay')
+
+    return RelayController(16, invert=True, name="TestRelay")
 
 
 @pytest.fixture
 def fan_controller(time_provider, mock_dht_logger, mock_event_logger):
     """FanController with all dependencies mocked."""
     from lib.relay import FanController
+
     return FanController(
         pin=16,
         time_provider=time_provider,
@@ -245,7 +265,7 @@ def fan_controller(time_provider, mock_dht_logger, mock_event_logger):
         on_time_s=20,
         max_temp=24.0,
         temp_hysteresis=1.0,
-        name='TestFan',
+        name="TestFan",
     )
 
 
@@ -253,6 +273,7 @@ def fan_controller(time_provider, mock_dht_logger, mock_event_logger):
 def growlight_controller(time_provider, mock_event_logger):
     """GrowlightController with explicit schedule."""
     from lib.relay import GrowlightController
+
     return GrowlightController(
         pin=17,
         time_provider=time_provider,
@@ -261,5 +282,5 @@ def growlight_controller(time_provider, mock_event_logger):
         dawn_minute=0,
         sunset_hour=20,
         sunset_minute=0,
-        name='TestGrowlight',
+        name="TestGrowlight",
     )

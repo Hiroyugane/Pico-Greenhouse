@@ -89,14 +89,14 @@ class TestBuildTimeData:
         assert len(result) == 7
 
         # Expected BCD: [sec, min, hour, weekday, day, month, year]
-        assert result[0] == dec_to_bcd(45)   # seconds
-        assert result[1] == dec_to_bcd(23)   # minutes
-        assert result[2] == dec_to_bcd(14)   # hours
+        assert result[0] == dec_to_bcd(45)  # seconds
+        assert result[1] == dec_to_bcd(23)  # minutes
+        assert result[2] == dec_to_bcd(14)  # hours
         # weekday is computed from the date, not from the tuple's wday field
         assert result[3] == dec_to_bcd(get_weekday(2026, 1, 29))
-        assert result[4] == dec_to_bcd(29)   # day
-        assert result[5] == dec_to_bcd(1)    # month
-        assert result[6] == dec_to_bcd(26)   # year (2026-2000)
+        assert result[4] == dec_to_bcd(29)  # day
+        assert result[5] == dec_to_bcd(1)  # month
+        assert result[6] == dec_to_bcd(26)  # year (2026-2000)
 
     def test_midnight_new_year(self):
         """Midnight 2026-01-01 00:00:00."""
@@ -132,7 +132,7 @@ class TestBuildTimeData:
         """February date works (month < 3 Zeller edge case)."""
         lt = (2026, 2, 14, 10, 0, 0, 5, 45, -1)
         result = build_time_data(lt)
-        assert result[5] == dec_to_bcd(2)   # month
+        assert result[5] == dec_to_bcd(2)  # month
         assert result[4] == dec_to_bcd(14)  # day
 
     def test_payload_length_always_seven(self):

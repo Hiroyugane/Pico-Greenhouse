@@ -13,25 +13,28 @@ from tests.conftest import FAKE_LOCALTIME
 # _ticks_ms helper
 # ============================================================================
 
+
 class TestTicksMs:
     """Tests for module-level _ticks_ms() helper."""
 
     def test_ticks_ms_with_native(self):
         """When time.ticks_ms exists, _ticks_ms uses it."""
         from lib.led_button import _ticks_ms
+
         # time.ticks_ms was added by conftest; verify it's used
-        with patch('time.ticks_ms', return_value=12345):
+        with patch("time.ticks_ms", return_value=12345):
             result = _ticks_ms()
         assert result == 12345
 
     def test_ticks_ms_fallback(self):
         """When time.ticks_ms is absent, falls back to time.time()*1000."""
         from lib.led_button import _ticks_ms
-        saved = getattr(time, 'ticks_ms', None)
+
+        saved = getattr(time, "ticks_ms", None)
         try:
-            if hasattr(time, 'ticks_ms'):
-                delattr(time, 'ticks_ms')
-            with patch('time.time', return_value=1000.5):
+            if hasattr(time, "ticks_ms"):
+                delattr(time, "ticks_ms")
+            with patch("time.time", return_value=1000.5):
                 result = _ticks_ms()
             assert result == 1000500
         finally:
@@ -43,90 +46,99 @@ class TestTicksMs:
 # LED
 # ============================================================================
 
+
 class TestLED:
     """Tests for LED class."""
 
     def test_init_off(self):
         """LED initializes with pin OFF."""
         from lib.led_button import LED
-        with patch('lib.led_button.machine.Pin', return_value=MagicMock()):
+
+        with patch("lib.led_button.machine.Pin", return_value=MagicMock()):
             led = LED(25)
             # Pin was created and off() was called
-            led.pin.off.assert_called() # type: ignore
+            led.pin.off.assert_called()  # type: ignore
 
     def test_on(self):
         """on() turns LED on."""
         from lib.led_button import LED
-        with patch('lib.led_button.machine.Pin', return_value=MagicMock()):
+
+        with patch("lib.led_button.machine.Pin", return_value=MagicMock()):
             led = LED(25)
             led.on()
-            led.pin.on.assert_called() # type: ignore
+            led.pin.on.assert_called()  # type: ignore
 
     def test_off(self):
         """off() turns LED off."""
         from lib.led_button import LED
-        with patch('lib.led_button.machine.Pin', return_value=MagicMock()):
+
+        with patch("lib.led_button.machine.Pin", return_value=MagicMock()):
             led = LED(25)
             led.off()
-            led.pin.off.assert_called() # type: ignore
+            led.pin.off.assert_called()  # type: ignore
 
     def test_toggle(self):
         """toggle() alternates LED state."""
         from lib.led_button import LED
-        with patch('lib.led_button.machine.Pin', return_value=MagicMock()):
+
+        with patch("lib.led_button.machine.Pin", return_value=MagicMock()):
             led = LED(25)
             # Initially off (value() returns 0)
             led.pin.value = Mock(return_value=0)
             led.toggle()
-            led.pin.on.assert_called() # type: ignore
+            led.pin.on.assert_called()  # type: ignore
 
             led.pin.value = Mock(return_value=1)
             led.toggle()
-            led.pin.off.assert_called() # type: ignore
+            led.pin.off.assert_called()  # type: ignore
 
     @pytest.mark.asyncio
     async def test_blink_pattern_async(self):
         """blink_pattern_async plays ON/OFF pattern."""
         from lib.led_button import LED
-        with patch('lib.led_button.machine.Pin', return_value=MagicMock()):
+
+        with patch("lib.led_button.machine.Pin", return_value=MagicMock()):
             led = LED(25)
 
-            with patch('asyncio.sleep', return_value=None):
+            with patch("asyncio.sleep", return_value=None):
                 await led.blink_pattern_async([100, 200], repeats=1)
 
             # Should have called on, sleep(0.1), off, sleep(0.2), then off at end
-            assert led.pin.on.call_count >= 1 # type: ignore
-            assert led.pin.off.call_count >= 1 # type: ignore
+            assert led.pin.on.call_count >= 1  # type: ignore
+            assert led.pin.off.call_count >= 1  # type: ignore
 
     @pytest.mark.asyncio
     async def test_blink_pattern_zero_repeats(self):
         """repeats=0 returns immediately without blinking."""
         from lib.led_button import LED
-        with patch('lib.led_button.machine.Pin', return_value=MagicMock()):
+
+        with patch("lib.led_button.machine.Pin", return_value=MagicMock()):
             led = LED(25)
 
-            with patch('asyncio.sleep', return_value=None) as sleep_mock:
+            with patch("asyncio.sleep", return_value=None) as sleep_mock:
                 await led.blink_pattern_async([100, 200], repeats=0)
-            sleep_mock.assert_not_called() # type: ignore
+            sleep_mock.assert_not_called()  # type: ignore
 
     @pytest.mark.asyncio
     async def test_blink_pattern_led_off_at_end(self):
         """LED is OFF after blink pattern completes."""
         from lib.led_button import LED
-        with patch('lib.led_button.machine.Pin', return_value=MagicMock()):
+
+        with patch("lib.led_button.machine.Pin", return_value=MagicMock()):
             led = LED(25)
 
-            with patch('asyncio.sleep', return_value=None):
+            with patch("asyncio.sleep", return_value=None):
                 await led.blink_pattern_async([100, 100], repeats=2)
 
             # Last call should be off()
-            led.pin.off.assert_called() # type: ignore
+            led.pin.off.assert_called()  # type: ignore
 
     @pytest.mark.asyncio
     async def test_blink_continuous_stop_event(self):
         """blink_continuous_async stops when stop_event is set."""
         from lib.led_button import LED
-        with patch('lib.led_button.machine.Pin', return_value=MagicMock()):
+
+        with patch("lib.led_button.machine.Pin", return_value=MagicMock()):
             led = LED(25)
 
             stop = asyncio.Event()
@@ -138,16 +150,17 @@ class TestLED:
                 if cycle_count >= 3:
                     stop.set()
 
-            with patch('asyncio.sleep', side_effect=counting_sleep):
+            with patch("asyncio.sleep", side_effect=counting_sleep):
                 await led.blink_continuous_async(100, 100, stop_event=stop)
 
             # Should have stopped
-            led.pin.off.assert_called() # type: ignore
+            led.pin.off.assert_called()  # type: ignore
 
 
 # ============================================================================
 # LEDButtonHandler
 # ============================================================================
+
 
 class TestLEDButtonHandler:
     """Tests for LEDButtonHandler."""
@@ -175,52 +188,56 @@ class TestLEDButtonHandler:
     def test_button_debounce(self):
         """Rapid presses within debounce window are ignored."""
         from lib.led_button import LEDButtonHandler
+
         handler = LEDButtonHandler(24, 23, debounce_ms=50)
         calls = []
-        handler.register_button_callback(lambda: calls.append('pressed'))
+        handler.register_button_callback(lambda: calls.append("pressed"))
 
         # Simulate 3 presses: 0ms, 10ms later, 65ms later
-        with patch('lib.led_button._ticks_ms', side_effect=[1000, 1010, 1065]):
+        with patch("lib.led_button._ticks_ms", side_effect=[1000, 1010, 1065]):
             handler._button_isr(None)  # t=1000: pass
             handler._button_isr(None)  # t=1010: blocked (only 10ms)
             handler._button_isr(None)  # t=1065: pass (65ms > 50ms)
 
-        assert calls.count('pressed') == 2
+        assert calls.count("pressed") == 2
 
     def test_button_isr_callback_error_handled(self):
         """If callback raises, error is printed but no crash."""
         from lib.led_button import LEDButtonHandler
+
         handler = LEDButtonHandler(24, 23, debounce_ms=0)
 
         def bad_cb():
-            raise RuntimeError('callback error')
+            raise RuntimeError("callback error")
 
         handler.register_button_callback(bad_cb)
-        with patch('lib.led_button._ticks_ms', return_value=1000):
+        with patch("lib.led_button._ticks_ms", return_value=1000):
             # Should not raise
             handler._button_isr(None)
 
     @pytest.mark.asyncio
     async def test_blink_pattern_delegates(self, led_handler):
         """blink_pattern_async delegates to LED."""
-        with patch('asyncio.sleep', return_value=None):
+        with patch("asyncio.sleep", return_value=None):
             await led_handler.blink_pattern_async([100, 100])
         led_handler.led.pin.on.assert_called()
 
     def test_register_callbacks_sets_both(self):
         """register_callbacks sets short and long press handlers."""
         from lib.led_button import LEDButtonHandler
+
         handler = LEDButtonHandler(5, 9, debounce_ms=50, long_press_ms=3000)
         short_cb = Mock()
         long_cb = Mock()
         handler.register_callbacks(short_press=short_cb, long_press=long_cb)
         assert handler.short_press_callback is short_cb
         assert handler.long_press_callback is long_cb
-        handler.button.irq.assert_called() # type: ignore
+        handler.button.irq.assert_called()  # type: ignore
 
     def test_dual_isr_short_press(self):
         """Short press (< long_press_ms) triggers short_press_callback."""
         from lib.led_button import LEDButtonHandler
+
         handler = LEDButtonHandler(5, 9, debounce_ms=50, long_press_ms=3000)
         short_cb = Mock()
         long_cb = Mock()
@@ -228,7 +245,7 @@ class TestLEDButtonHandler:
 
         mock_pin = MagicMock()
         # Simulate press (FALLING: value=0) then release (RISING: value=1) after 500ms
-        with patch('lib.led_button._ticks_ms', side_effect=[1000, 1500]):
+        with patch("lib.led_button._ticks_ms", side_effect=[1000, 1500]):
             mock_pin.value.return_value = 0
             handler._button_dual_isr(mock_pin)  # press at t=1000
             mock_pin.value.return_value = 1
@@ -240,6 +257,7 @@ class TestLEDButtonHandler:
     def test_dual_isr_long_press(self):
         """Long press (>= long_press_ms) triggers long_press_callback."""
         from lib.led_button import LEDButtonHandler
+
         handler = LEDButtonHandler(5, 9, debounce_ms=50, long_press_ms=3000)
         short_cb = Mock()
         long_cb = Mock()
@@ -247,7 +265,7 @@ class TestLEDButtonHandler:
 
         mock_pin = MagicMock()
         # Simulate press then release after 3500ms
-        with patch('lib.led_button._ticks_ms', side_effect=[1000, 4500]):
+        with patch("lib.led_button._ticks_ms", side_effect=[1000, 4500]):
             mock_pin.value.return_value = 0
             handler._button_dual_isr(mock_pin)  # press at t=1000
             mock_pin.value.return_value = 1
@@ -259,13 +277,14 @@ class TestLEDButtonHandler:
     def test_dual_isr_debounce(self):
         """Rapid edges within debounce window are ignored."""
         from lib.led_button import LEDButtonHandler
+
         handler = LEDButtonHandler(5, 9, debounce_ms=50, long_press_ms=3000)
         short_cb = Mock()
         handler.register_callbacks(short_press=short_cb)
 
         mock_pin = MagicMock()
         # Two presses within debounce window — second ignored
-        with patch('lib.led_button._ticks_ms', side_effect=[1000, 1010]):
+        with patch("lib.led_button._ticks_ms", side_effect=[1000, 1010]):
             mock_pin.value.return_value = 0
             handler._button_dual_isr(mock_pin)  # t=1000: accepted
             handler._button_dual_isr(mock_pin)  # t=1010: ignored (10ms < 50ms)
@@ -276,15 +295,16 @@ class TestLEDButtonHandler:
     def test_dual_isr_callback_error_handled(self):
         """If callback raises in dual ISR, error is caught."""
         from lib.led_button import LEDButtonHandler
+
         handler = LEDButtonHandler(5, 9, debounce_ms=0, long_press_ms=3000)
 
         def bad_cb():
-            raise RuntimeError('callback error')
+            raise RuntimeError("callback error")
 
         handler.register_callbacks(short_press=bad_cb)
 
         mock_pin = MagicMock()
-        with patch('lib.led_button._ticks_ms', side_effect=[1000, 1500]):
+        with patch("lib.led_button._ticks_ms", side_effect=[1000, 1500]):
             mock_pin.value.return_value = 0
             handler._button_dual_isr(mock_pin)
             mock_pin.value.return_value = 1
@@ -296,13 +316,15 @@ class TestLEDButtonHandler:
 # ServiceReminder
 # ============================================================================
 
+
 class TestServiceReminder:
     """Tests for ServiceReminder task."""
 
     def test_initialization(self, time_provider):
         """ServiceReminder initializes with correct state."""
         from lib.led_button import LEDButtonHandler, ServiceReminder
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             handler = LEDButtonHandler(5, 9)
             reminder = ServiceReminder(time_provider, handler, days_interval=7)
         assert reminder.days_interval == 7
@@ -311,7 +333,8 @@ class TestServiceReminder:
     def test_reset_updates_timestamp(self, time_provider):
         """reset() updates last_serviced_timestamp."""
         from lib.led_button import LEDButtonHandler, ServiceReminder
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             handler = LEDButtonHandler(5, 9)
             reminder = ServiceReminder(time_provider, handler)
             reminder.reset()
@@ -320,11 +343,13 @@ class TestServiceReminder:
     def test_days_elapsed_non_negative(self, time_provider):
         """_days_since_Service() returns non-negative value."""
         from lib.led_button import LEDButtonHandler, ServiceReminder
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             handler = LEDButtonHandler(5, 9)
             reminder = ServiceReminder(
-                time_provider, handler,
-                last_serviced_timestamp='2026-01-01 00:00:00',
+                time_provider,
+                handler,
+                last_serviced_timestamp="2026-01-01 00:00:00",
             )
             days = reminder._days_since_Service()
         assert days >= 0
@@ -332,69 +357,78 @@ class TestServiceReminder:
     def test_init_saves_when_no_storage(self, time_provider, tmp_path):
         """When no storage file exists, saves current timestamp."""
         from lib.led_button import LEDButtonHandler, ServiceReminder
+
         storage = tmp_path / "reminder.txt"
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             handler = LEDButtonHandler(5, 9)
             ServiceReminder(
-                time_provider, handler,
+                time_provider,
+                handler,
                 storage_path=str(storage),
             )
         assert storage.exists()
-        assert '2026' in storage.read_text()
+        assert "2026" in storage.read_text()
 
     def test_init_loads_from_storage(self, time_provider, tmp_path):
         """When storage file exists, load timestamp from it."""
         from lib.led_button import LEDButtonHandler, ServiceReminder
+
         storage = tmp_path / "reminder.txt"
-        storage.write_text('2026-01-15 10:00:00')
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+        storage.write_text("2026-01-15 10:00:00")
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             handler = LEDButtonHandler(5, 9)
             reminder = ServiceReminder(
-                time_provider, handler,
+                time_provider,
+                handler,
                 storage_path=str(storage),
             )
-        assert reminder.last_serviced_timestamp == '2026-01-15 10:00:00'
+        assert reminder.last_serviced_timestamp == "2026-01-15 10:00:00"
 
     def test_reset_persists_to_file(self, time_provider, tmp_path):
         """reset() writes new timestamp to storage file."""
         from lib.led_button import LEDButtonHandler, ServiceReminder
+
         storage = tmp_path / "reminder.txt"
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             handler = LEDButtonHandler(5, 9)
             reminder = ServiceReminder(
-                time_provider, handler,
+                time_provider,
+                handler,
                 storage_path=str(storage),
             )
             reminder.reset()
         content = storage.read_text()
-        assert '2026' in content
+        assert "2026" in content
 
     def test_parse_date_from_timestamp(self, time_provider):
         """_parse_date_from_timestamp parses correctly."""
         from lib.led_button import LEDButtonHandler, ServiceReminder
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             handler = LEDButtonHandler(5, 9)
             reminder = ServiceReminder(time_provider, handler)
-        result = reminder._parse_date_from_timestamp('2026-01-29 14:23:45')
+        result = reminder._parse_date_from_timestamp("2026-01-29 14:23:45")
         assert result == (2026, 1, 29)
 
     def test_parse_date_from_invalid_timestamp(self, time_provider):
         """_parse_date_from_timestamp returns None for invalid input."""
         from lib.led_button import LEDButtonHandler, ServiceReminder
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             handler = LEDButtonHandler(5, 9)
             reminder = ServiceReminder(time_provider, handler)
-        assert reminder._parse_date_from_timestamp('invalid') is None
+        assert reminder._parse_date_from_timestamp("invalid") is None
 
     @pytest.mark.asyncio
     async def test_monitor_triggers_blink_when_due(self, time_provider):
         """When days_interval=0, monitor triggers blink."""
         from lib.led_button import LEDButtonHandler, ServiceReminder
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             handler = LEDButtonHandler(5, 9)
             reminder = ServiceReminder(
-                time_provider, handler,
+                time_provider,
+                handler,
                 days_interval=0,  # Always due
             )
 
@@ -407,14 +441,15 @@ class TestServiceReminder:
         handler.blink_pattern_async = mock_blink
 
         call_count = 0
+
         async def limited_sleep(duration):
             nonlocal call_count
             call_count += 1
             if call_count >= 2:
                 raise asyncio.CancelledError()
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            with patch('asyncio.sleep', side_effect=limited_sleep):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with patch("asyncio.sleep", side_effect=limited_sleep):
                 with pytest.raises(asyncio.CancelledError):
                     await reminder.monitor()
 
@@ -424,11 +459,12 @@ class TestServiceReminder:
     async def test_monitor_cancelled_error(self, time_provider):
         """CancelledError in monitor turns off LED and re-raises."""
         from lib.led_button import LEDButtonHandler, ServiceReminder
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             handler = LEDButtonHandler(5, 9)
             reminder = ServiceReminder(time_provider, handler)
 
-        with patch('asyncio.sleep', side_effect=asyncio.CancelledError):
+        with patch("asyncio.sleep", side_effect=asyncio.CancelledError):
             with pytest.raises(asyncio.CancelledError):
                 await reminder.monitor()
 
@@ -437,14 +473,16 @@ class TestServiceReminder:
         """Monitor clears reminder when reset() is called between blink and re-check."""
         from lib.led_button import LEDButtonHandler, ServiceReminder
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             handler = LEDButtonHandler(5, 9)
             reminder = ServiceReminder(
-                time_provider, handler,
+                time_provider,
+                handler,
                 days_interval=0,  # Always due initially
             )
 
         blink_count = 0
+
         async def mock_blink(*args, **kwargs):
             nonlocal blink_count
             blink_count += 1
@@ -456,14 +494,15 @@ class TestServiceReminder:
         handler.blink_pattern_async = mock_blink
 
         call_count = 0
+
         async def counting_sleep(duration):
             nonlocal call_count
             call_count += 1
             if call_count >= 2:
                 raise asyncio.CancelledError()
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            with patch('asyncio.sleep', side_effect=counting_sleep):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with patch("asyncio.sleep", side_effect=counting_sleep):
                 with pytest.raises(asyncio.CancelledError):
                     await reminder.monitor()
 
@@ -475,14 +514,16 @@ class TestServiceReminder:
         """Monitor detects transition from not-due to due."""
         from lib.led_button import LEDButtonHandler, ServiceReminder
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             handler = LEDButtonHandler(5, 9)
             reminder = ServiceReminder(
-                time_provider, handler,
+                time_provider,
+                handler,
                 days_interval=999,  # Start as not-due
             )
 
         call_count = 0
+
         async def limited_sleep(duration):
             nonlocal call_count
             call_count += 1
@@ -493,14 +534,15 @@ class TestServiceReminder:
                 raise asyncio.CancelledError()
 
         blink_called = False
+
         async def mock_blink(*args, **kwargs):
             nonlocal blink_called
             blink_called = True
 
         handler.blink_pattern_async = mock_blink
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            with patch('asyncio.sleep', side_effect=limited_sleep):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with patch("asyncio.sleep", side_effect=limited_sleep):
                 with pytest.raises(asyncio.CancelledError):
                     await reminder.monitor()
 
@@ -511,30 +553,32 @@ class TestServiceReminder:
         """Generic exception in monitor is caught, loop continues after 60s sleep."""
         from lib.led_button import LEDButtonHandler, ServiceReminder
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             handler = LEDButtonHandler(5, 9)
             reminder = ServiceReminder(time_provider, handler, days_interval=7)
 
         # Make _days_since_Service raise on first call, then work normally
         original_days = reminder._days_since_Service
         call_count = 0
+
         def failing_days():
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                raise RuntimeError('unexpected')
+                raise RuntimeError("unexpected")
             return original_days()
 
         reminder._days_since_Service = failing_days
 
         sleep_durations = []
+
         async def tracking_sleep(duration):
             sleep_durations.append(duration)
             if len(sleep_durations) >= 2:
                 raise asyncio.CancelledError()
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            with patch('asyncio.sleep', side_effect=tracking_sleep):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with patch("asyncio.sleep", side_effect=tracking_sleep):
                 with pytest.raises(asyncio.CancelledError):
                     await reminder.monitor()
 

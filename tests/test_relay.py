@@ -12,13 +12,14 @@ from tests.conftest import FAKE_LOCALTIME
 # RelayController
 # ============================================================================
 
+
 class TestRelayController:
     """Tests for RelayController base class."""
 
     def test_initialization_off(self, relay_controller):
         """Relay initializes to OFF state."""
         assert relay_controller.is_on() is False
-        assert relay_controller.name == 'TestRelay'
+        assert relay_controller.name == "TestRelay"
         assert relay_controller.invert is True
 
     def test_turn_on(self, relay_controller):
@@ -42,17 +43,18 @@ class TestRelayController:
     def test_get_state(self, relay_controller):
         """get_state() returns dict with expected keys."""
         state = relay_controller.get_state()
-        assert 'name' in state
-        assert 'is_on' in state
-        assert 'pin' in state
-        assert 'invert' in state
-        assert state['name'] == 'TestRelay'
-        assert state['is_on'] is False
+        assert "name" in state
+        assert "is_on" in state
+        assert "pin" in state
+        assert "invert" in state
+        assert state["name"] == "TestRelay"
+        assert state["is_on"] is False
 
     def test_non_inverted_mode(self):
         """Relay with invert=False: ON=HIGH, OFF=LOW."""
         from lib.relay import RelayController
-        relay = RelayController(16, invert=False, name='NonInv')
+
+        relay = RelayController(16, invert=False, name="NonInv")
         assert relay.invert is False
         relay.turn_on()
         assert relay.is_on() is True
@@ -62,36 +64,40 @@ class TestRelayController:
     def test_pin_value_inverted(self):
         """Inverted relay: turn_on() calls pin.value(0), turn_off() calls pin.value(1)."""
         from lib.relay import RelayController
+
         relay = RelayController(16, invert=True)
         relay.turn_on()
-        relay.pin.value.assert_called_with(0) # type: ignore
+        relay.pin.value.assert_called_with(0)  # type: ignore
         relay.turn_off()
-        relay.pin.value.assert_called_with(1) # type: ignore
+        relay.pin.value.assert_called_with(1)  # type: ignore
 
     def test_pin_value_non_inverted(self):
         """Non-inverted relay: turn_on() calls pin.value(1)."""
         from lib.relay import RelayController
+
         relay = RelayController(16, invert=False)
         relay.turn_on()
-        relay.pin.value.assert_called_with(1) # type: ignore
+        relay.pin.value.assert_called_with(1)  # type: ignore
 
     def test_default_name_from_pin(self):
         """Default name is 'Relay_{pin}'."""
         from lib.relay import RelayController
+
         relay = RelayController(42, invert=True)
-        assert relay.name == 'Relay_42'
+        assert relay.name == "Relay_42"
 
 
 # ============================================================================
 # FanController
 # ============================================================================
 
+
 class TestFanController:
     """Tests for FanController (time-of-day + thermostat)."""
 
     def test_initialization(self, fan_controller):
         """FanController initializes with correct parameters."""
-        assert fan_controller.name == 'TestFan'
+        assert fan_controller.name == "TestFan"
         assert fan_controller.interval_s == 600
         assert fan_controller.on_time_s == 20
         assert fan_controller.max_temp == 24.0
@@ -103,13 +109,13 @@ class TestFanController:
         mock_dht_logger.last_temperature = 24.5
 
         async def run_once():
-            with patch('asyncio.sleep', side_effect=RuntimeError('stop')):
+            with patch("asyncio.sleep", side_effect=RuntimeError("stop")):
                 try:
                     await fan_controller.start_cycle()
                 except RuntimeError:
                     pass
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             asyncio.run(run_once())
         assert fan_controller.thermostat_active is True
         assert fan_controller.thermostat_on_count == 1
@@ -121,13 +127,13 @@ class TestFanController:
         fan_controller.thermostat_active = False
 
         async def activate():
-            with patch('asyncio.sleep', side_effect=RuntimeError('stop')):
+            with patch("asyncio.sleep", side_effect=RuntimeError("stop")):
                 try:
                     await fan_controller.start_cycle()
                 except RuntimeError:
                     pass
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             asyncio.run(activate())
         assert fan_controller.thermostat_active is True
 
@@ -135,13 +141,13 @@ class TestFanController:
         mock_dht_logger.last_temperature = 22.5
 
         async def release():
-            with patch('asyncio.sleep', side_effect=RuntimeError('stop')):
+            with patch("asyncio.sleep", side_effect=RuntimeError("stop")):
                 try:
                     await fan_controller.start_cycle()
                 except RuntimeError:
                     pass
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             asyncio.run(release())
         assert fan_controller.thermostat_active is False
 
@@ -151,20 +157,25 @@ class TestFanController:
         mock_dht.last_temperature = None
 
         from lib.relay import FanController
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             fan = FanController(
-                pin=16, time_provider=time_provider, dht_logger=mock_dht,
-                logger=mock_event_logger, interval_s=600, on_time_s=20,
+                pin=16,
+                time_provider=time_provider,
+                dht_logger=mock_dht,
+                logger=mock_event_logger,
+                interval_s=600,
+                on_time_s=20,
             )
 
         async def run_once():
-            with patch('asyncio.sleep', side_effect=RuntimeError('stop')):
+            with patch("asyncio.sleep", side_effect=RuntimeError("stop")):
                 try:
                     await fan.start_cycle()
                 except RuntimeError:
                     pass
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             asyncio.run(run_once())
         assert fan.thermostat_active is False
 
@@ -172,22 +183,28 @@ class TestFanController:
         """on_time_s > interval_s gets clamped and warning logged."""
         mock_logger = Mock()
         from lib.relay import FanController
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             fan = FanController(
-                pin=16, time_provider=time_provider, dht_logger=mock_dht_logger,
-                logger=mock_logger, interval_s=10, on_time_s=20,
+                pin=16,
+                time_provider=time_provider,
+                dht_logger=mock_dht_logger,
+                logger=mock_logger,
+                interval_s=10,
+                on_time_s=20,
             )
         assert fan.on_time_s == 10  # Clamped to interval_s
         mock_logger.warning.assert_called()
 
     def test_start_cycle_cancelled_error(self, fan_controller):
         """CancelledError turns off fan and re-raises."""
+
         async def run():
-            with patch('asyncio.sleep', side_effect=asyncio.CancelledError):
+            with patch("asyncio.sleep", side_effect=asyncio.CancelledError):
                 with pytest.raises(asyncio.CancelledError):
                     await fan_controller.start_cycle()
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             asyncio.run(run())
         assert fan_controller.is_on() is False
 
@@ -199,11 +216,11 @@ class TestFanController:
             nonlocal call_count
             call_count += 1
             if call_count >= 2:
-                raise RuntimeError('stop test')
-            raise ValueError('simulated error')
+                raise RuntimeError("stop test")
+            raise ValueError("simulated error")
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
-            with patch('asyncio.sleep', side_effect=counting_sleep):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with patch("asyncio.sleep", side_effect=counting_sleep):
                 try:
                     asyncio.run(fan_controller.start_cycle())
                 except RuntimeError:
@@ -215,49 +232,49 @@ class TestFanController:
     def test_get_state_includes_thermostat(self, fan_controller, mock_dht_logger):
         """get_state() includes thermostat fields."""
         state = fan_controller.get_state()
-        assert 'thermostat_active' in state
-        assert 'thermostat_activations' in state
-        assert 'max_temp' in state
-        assert 'current_temp' in state
-        assert state['current_temp'] == 22.5
+        assert "thermostat_active" in state
+        assert "thermostat_activations" in state
+        assert "max_temp" in state
+        assert "current_temp" in state
+        assert state["current_temp"] == 22.5
 
     def test_schedule_state_change_logging(self, fan_controller, mock_dht_logger):
         """Schedule transitions log SCHEDULE ON or SCHEDULE OFF."""
         mock_dht_logger.last_temperature = None  # No thermostat
 
         async def run_once():
-            with patch('asyncio.sleep', side_effect=RuntimeError('stop')):
+            with patch("asyncio.sleep", side_effect=RuntimeError("stop")):
                 try:
                     await fan_controller.start_cycle()
                 except RuntimeError:
                     pass
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             asyncio.run(run_once())
 
         # Should have logged a schedule state (either ON or OFF)
         calls = [str(c) for c in fan_controller.logger.info.call_args_list]
-        schedule_logged = any('SCHEDULE' in c for c in calls)
+        schedule_logged = any("SCHEDULE" in c for c in calls)
         assert schedule_logged
 
     def test_thermostat_turn_on_error(self, fan_controller, mock_dht_logger):
         """When turn_on() raises during thermostat activation, error is logged."""
         mock_dht_logger.last_temperature = 25.0  # Above max_temp=24.0
-        fan_controller.pin.value = Mock(side_effect=OSError('pin fault'))
+        fan_controller.pin.value = Mock(side_effect=OSError("pin fault"))
 
         async def run():
-            with patch('asyncio.sleep', side_effect=RuntimeError('stop')):
+            with patch("asyncio.sleep", side_effect=RuntimeError("stop")):
                 try:
                     await fan_controller.start_cycle()
                 except RuntimeError:
                     pass
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             asyncio.run(run())
 
         # Error should have been logged for the failed turn_on
         error_calls = [str(c) for c in fan_controller.logger.error.call_args_list]
-        assert any('failed to turn ON' in c for c in error_calls)
+        assert any("failed to turn ON" in c for c in error_calls)
 
     def test_thermostat_deactivation_turn_off_error(self, fan_controller, mock_dht_logger):
         """When turn_off() raises after thermostat deactivation, error is logged."""
@@ -267,48 +284,53 @@ class TestFanController:
         # Temperature below hysteresis threshold: 24.0 - 1.0 = 23.0
         mock_dht_logger.last_temperature = 22.5
         # Make turn_off raise
-        fan_controller.pin.value = Mock(side_effect=OSError('pin fault'))
+        fan_controller.pin.value = Mock(side_effect=OSError("pin fault"))
 
         async def run():
-            with patch('asyncio.sleep', side_effect=RuntimeError('stop')):
+            with patch("asyncio.sleep", side_effect=RuntimeError("stop")):
                 try:
                     await fan_controller.start_cycle()
                 except RuntimeError:
                     pass
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             asyncio.run(run())
 
         error_calls = [str(c) for c in fan_controller.logger.error.call_args_list]
-        assert any('failed to turn OFF after thermostat deactivation' in c for c in error_calls)
+        assert any("failed to turn OFF after thermostat deactivation" in c for c in error_calls)
 
     def test_schedule_transition_error(self, fan_controller, mock_dht_logger):
         """When turn_on/turn_off raises during schedule transition, error is logged."""
         mock_dht_logger.last_temperature = None  # No thermostat
         fan_controller.last_schedule_state = None  # Force state change
-        fan_controller.pin.value = Mock(side_effect=OSError('pin fault'))
+        fan_controller.pin.value = Mock(side_effect=OSError("pin fault"))
 
         async def run():
-            with patch('asyncio.sleep', side_effect=RuntimeError('stop')):
+            with patch("asyncio.sleep", side_effect=RuntimeError("stop")):
                 try:
                     await fan_controller.start_cycle()
                 except RuntimeError:
                     pass
 
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             asyncio.run(run())
 
         error_calls = [str(c) for c in fan_controller.logger.error.call_args_list]
-        assert any('failed to update' in c for c in error_calls)
+        assert any("failed to update" in c for c in error_calls)
 
     def test_invalid_timing_logged(self, time_provider, mock_dht_logger):
         """on_time <= 0 or interval <= 0 logs error."""
         mock_logger = Mock()
         from lib.relay import FanController
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             FanController(
-                pin=16, time_provider=time_provider, dht_logger=mock_dht_logger,
-                logger=mock_logger, interval_s=0, on_time_s=0,
+                pin=16,
+                time_provider=time_provider,
+                dht_logger=mock_dht_logger,
+                logger=mock_logger,
+                interval_s=0,
+                on_time_s=0,
             )
         mock_logger.error.assert_called()
 
@@ -317,12 +339,13 @@ class TestFanController:
 # GrowlightController
 # ============================================================================
 
+
 class TestGrowlightController:
     """Tests for GrowlightController (dawn/sunset scheduling)."""
 
     def test_initialization(self, growlight_controller):
         """GrowlightController initializes with schedule."""
-        assert growlight_controller.name == 'TestGrowlight'
+        assert growlight_controller.name == "TestGrowlight"
         assert growlight_controller.dawn_hour == 6
         assert growlight_controller.sunset_hour == 20
 
@@ -332,7 +355,7 @@ class TestGrowlightController:
         growlight_controller.time_provider.get_seconds_since_midnight = Mock(return_value=36000)
 
         async def run_once():
-            with patch('asyncio.sleep', side_effect=RuntimeError('stop')):
+            with patch("asyncio.sleep", side_effect=RuntimeError("stop")):
                 try:
                     await growlight_controller.start_scheduler()
                 except RuntimeError:
@@ -347,7 +370,7 @@ class TestGrowlightController:
         growlight_controller.time_provider.get_seconds_since_midnight = Mock(return_value=79200)
 
         async def run_once():
-            with patch('asyncio.sleep', side_effect=RuntimeError('stop')):
+            with patch("asyncio.sleep", side_effect=RuntimeError("stop")):
                 try:
                     await growlight_controller.start_scheduler()
                 except RuntimeError:
@@ -362,7 +385,7 @@ class TestGrowlightController:
         growlight_controller.time_provider.get_seconds_since_midnight = Mock(return_value=dawn_seconds)
 
         async def run():
-            with patch('asyncio.sleep', side_effect=RuntimeError('stop')):
+            with patch("asyncio.sleep", side_effect=RuntimeError("stop")):
                 try:
                     await growlight_controller.start_scheduler()
                 except RuntimeError:
@@ -377,7 +400,7 @@ class TestGrowlightController:
         growlight_controller.time_provider.get_seconds_since_midnight = Mock(return_value=sunset_seconds)
 
         async def run():
-            with patch('asyncio.sleep', side_effect=RuntimeError('stop')):
+            with patch("asyncio.sleep", side_effect=RuntimeError("stop")):
                 try:
                     await growlight_controller.start_scheduler()
                 except RuntimeError:
@@ -389,10 +412,13 @@ class TestGrowlightController:
     def test_auto_sunrise_sunset_derivation(self, time_provider, mock_event_logger):
         """Omitting dawn/sunset derives them from time_provider.sunrise_sunset()."""
         from lib.relay import GrowlightController
-        with patch('time.localtime', return_value=FAKE_LOCALTIME):
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
             gl = GrowlightController(
-                pin=17, time_provider=time_provider, logger=mock_event_logger,
-                name='AutoLight',
+                pin=17,
+                time_provider=time_provider,
+                logger=mock_event_logger,
+                name="AutoLight",
             )
         # Should have derived dawn/sunset from sunrise_sunset()
         assert gl.dawn_hour > 0 or gl.dawn_minute > 0
@@ -403,7 +429,7 @@ class TestGrowlightController:
         growlight_controller.time_provider.get_seconds_since_midnight = Mock(return_value=36000)
 
         async def run():
-            with patch('asyncio.sleep', side_effect=asyncio.CancelledError):
+            with patch("asyncio.sleep", side_effect=asyncio.CancelledError):
                 with pytest.raises(asyncio.CancelledError):
                     await growlight_controller.start_scheduler()
 
@@ -413,15 +439,15 @@ class TestGrowlightController:
     def test_start_scheduler_unexpected_error(self, growlight_controller):
         """Generic exception is logged, loop continues."""
         call_count = 0
-        growlight_controller.time_provider.get_seconds_since_midnight = Mock(side_effect=ValueError('bad'))
+        growlight_controller.time_provider.get_seconds_since_midnight = Mock(side_effect=ValueError("bad"))
 
         async def counting_sleep(duration):
             nonlocal call_count
             call_count += 1
             if call_count >= 2:
-                raise RuntimeError('stop test')
+                raise RuntimeError("stop test")
 
-        with patch('asyncio.sleep', side_effect=counting_sleep):
+        with patch("asyncio.sleep", side_effect=counting_sleep):
             try:
                 asyncio.run(growlight_controller.start_scheduler())
             except RuntimeError:
@@ -432,7 +458,7 @@ class TestGrowlightController:
     def test_get_state_includes_schedule(self, growlight_controller):
         """get_state() includes dawn and sunset."""
         state = growlight_controller.get_state()
-        assert 'dawn' in state
-        assert 'sunset' in state
-        assert state['dawn'] == '06:00'
-        assert state['sunset'] == '20:00'
+        assert "dawn" in state
+        assert "sunset" in state
+        assert state["dawn"] == "06:00"
+        assert state["sunset"] == "20:00"

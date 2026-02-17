@@ -11,7 +11,7 @@ PIN_SCK = 10
 PIN_MOSI = 11
 PIN_MISO = 12
 PIN_CS = 13
-MOUNT_POINT = '/sd'
+MOUNT_POINT = "/sd"
 
 
 # ---------------------------------------------------------------------------
@@ -65,25 +65,20 @@ async def check_sd_card(
                     safe_umount()
                     time.sleep_ms(200)
                     remount()
-                    print('[RECOVERY] SD card mounted successfully')
+                    print("[RECOVERY] SD card mounted successfully")
                     read_block()
                     mbr_ok = True
                     consecutive_failures = 0
                     recovery_backoff_ms = initial_backoff_ms
                 except Exception as remount_error:
                     if consecutive_failures == 1 or (consecutive_failures % 5 == 0):
-                        print(
-                            f"[RECOVERY ERROR] Failed to re-mount SD card: "
-                            f"{remount_error}"
-                        )
-                    recovery_backoff_ms = min(
-                        recovery_backoff_ms * 2, max_backoff_ms
-                    )
+                        print(f"[RECOVERY ERROR] Failed to re-mount SD card: {remount_error}")
+                    recovery_backoff_ms = min(recovery_backoff_ms * 2, max_backoff_ms)
 
             if mbr_ok != last_state_ok:
                 print(
                     "MBR: {mbr}".format(
-                        mbr='OK' if mbr_ok else 'NOT ACCESSIBLE',
+                        mbr="OK" if mbr_ok else "NOT ACCESSIBLE",
                     )
                 )
                 last_state_ok = mbr_ok
@@ -148,10 +143,10 @@ async def main():  # pragma: no cover
     init_sd, read_block, safe_umount = _build_hardware()
     try:
         init_sd()
-        print('[STARTUP] SD card mounted successfully')
+        print("[STARTUP] SD card mounted successfully")
     except OSError as e:
-        print(f'[STARTUP ERROR] Failed to mount SD card: {e}')
-        print('[STARTUP ERROR] Please insert SD card and restart the device.')
+        print(f"[STARTUP ERROR] Failed to mount SD card: {e}")
+        print("[STARTUP ERROR] Please insert SD card and restart the device.")
 
     await check_sd_card(
         read_block=read_block,

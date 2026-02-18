@@ -12,8 +12,6 @@ import dht
 import machine
 import uasyncio as asyncio
 
-from lib.led_button import LED
-
 
 class DHTLogger:
     """
@@ -56,7 +54,9 @@ class DHTLogger:
         interval=60,
         filename="dht_log.csv",
         max_retries=3,
-        status_led_pin=None,
+        status_manager=None,
+        dht_warn_threshold=3,
+        dht_error_threshold=10,
     ):
         """
         Initialize DHTLogger with dependency injection.
@@ -69,7 +69,9 @@ class DHTLogger:
             interval (int): Logging interval in seconds (default: 60)
             filename (str): CSV filename (default: 'dht_log.csv')
             max_retries (int): Sensor read retries (default: 3)
-            status_led_pin (int, optional): GPIO pin for status LED feedback
+            status_manager: StatusManager instance for LED feedback (optional)
+            dht_warn_threshold (int): Consecutive failures before warning (default: 3)
+            dht_error_threshold (int): Consecutive failures before error (default: 10)
         """
         self.dht_sensor = dht.DHT22(machine.Pin(pin))
         self.interval = interval
@@ -78,13 +80,16 @@ class DHTLogger:
         self.buffer_manager = buffer_manager
         self.logger = logger
         self.max_retries = max_retries
-        self.status_led = LED(status_led_pin) if status_led_pin is not None else None
+        self.status_manager = status_manager
+        self._dht_warn_threshold = dht_warn_threshold
+        self._dht_error_threshold = dht_error_threshold
 
         # State
         self.last_temperature = None
         self.last_humidity = None
         self.read_failures = 0
         self.write_failures = 0
+        self._consecutive_failures = 0
         self.current_date = None
         self._created_files = set()  # relpaths confirmed created this session
 
@@ -169,6 +174,8 @@ class DHTLogger:
                 hum = self.dht_sensor.humidity()
 
                 if -40 <= temp <= 80 and 0 <= hum <= 100:
+                    self._consecutive_failures = 0
+                    self._update_dht_status()
                     return temp, hum
                 else:
                     self.logger.warning("DHTLogger", f"Reading out of range: {temp}°C, {hum}%")
@@ -180,7 +187,23 @@ class DHTLogger:
                     time.sleep(0.5)
 
         self.read_failures += 1
+        self._consecutive_failures += 1
+        self._update_dht_status()
         return None, None
+
+    def _update_dht_status(self) -> None:
+        """Update StatusManager warning/error based on consecutive DHT failures."""
+        if self.status_manager is None:
+            return
+        if self._consecutive_failures >= self._dht_error_threshold:
+            self.status_manager.set_error("dht_dead", True)
+            self.status_manager.set_warning("dht_intermittent", False)
+        elif self._consecutive_failures >= self._dht_warn_threshold:
+            self.status_manager.set_warning("dht_intermittent", True)
+            self.status_manager.set_error("dht_dead", False)
+        else:
+            self.status_manager.clear_warning("dht_intermittent")
+            self.status_manager.clear_error("dht_dead")
 
     def _check_date_changed(self) -> bool:
         """
@@ -221,29 +244,25 @@ class DHTLogger:
 
         Handles date-based file rollover at midnight.
 
-        LED feedback patterns (via injected status_led):
-        - 1 pulse (0.1s): Reading started
-        - 2 pulses (0.1s): Read successful, data logged
-        - 3 pulses (0.15s): Sensor read failed
+        LED feedback (via StatusManager):
+        - Activity blink on each successful read+write cycle.
+        - Warning LED (solid) on 3+ consecutive failures.
+        - Error LED (solid) on 10+ consecutive failures.
         """
-        led = self.status_led
+        sm = self.status_manager
 
         while True:
             try:
                 # Check for date rollover
                 self._check_date_changed()
 
-                # LED: Single pulse = reading started
-                if led:
-                    await led.blink_pattern_async([100, 100])
-
                 # Read sensor
                 temp, hum = self.read_sensor()
 
                 if temp is not None and hum is not None:
-                    # LED: Double pulse = read successful
-                    if led:
-                        await led.blink_pattern_async([100, 100, 100, 100])
+                    # Activity blink on successful read
+                    if sm:
+                        await sm.blink_activity()
 
                     # Cache for thermostat queries
                     self.last_temperature = temp
@@ -271,9 +290,6 @@ class DHTLogger:
                         self.logger.error("DHTLogger", f"Failed to write: {e}")
                         self.write_failures += 1
                 else:
-                    # LED: Triple pulse = sensor read failed
-                    if led:
-                        await led.blink_pattern_async([150, 150, 150, 150, 150, 150])
                     self.logger.warning("DHTLogger", f"Sensor read failed (total: {self.read_failures})")
 
                 self.logger.check_size()
@@ -284,8 +300,6 @@ class DHTLogger:
                 raise
             except Exception as e:
                 self.logger.error("DHTLogger", f"Unexpected error: {e}")
-                if led:
-                    await led.blink_pattern_async([500, 500, 500, 500, 500, 500])
                 await asyncio.sleep(1)
 
     @staticmethod

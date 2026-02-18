@@ -39,6 +39,7 @@ from lib.event_logger import EventLogger
 from lib.hardware_factory import HardwareFactory
 from lib.led_button import LEDButtonHandler, ServiceReminder
 from lib.relay import FanController, GrowlightController
+from lib.status_manager import StatusManager
 from lib.time_provider import RTCTimeProvider
 
 
@@ -72,6 +73,31 @@ async def main():
     rtc = hardware.get_rtc()
     time_provider = RTCTimeProvider(rtc)
 
+    # Step 3b: Create StatusManager (owns activity/SD/warning/error/heartbeat LEDs)
+    status_led_config = DEVICE_CONFIG.get("status_leds", {})
+    status_manager = StatusManager(
+        activity_pin=DEVICE_CONFIG["pins"]["activity_led"],
+        sd_pin=DEVICE_CONFIG["pins"]["sd_led"],
+        warning_pin=DEVICE_CONFIG["pins"]["warning_led"],
+        error_pin=DEVICE_CONFIG["pins"]["error_led"],
+        heartbeat_pin=DEVICE_CONFIG["pins"]["onboard_led"],
+        activity_blink_ms=status_led_config.get("activity_blink_ms", 50),
+    )
+
+    # Check RTC validity (year out of range → warning)
+    if not time_provider.time_valid:
+        status_manager.set_warning("rtc_invalid", True)
+        print("[STARTUP] WARNING: RTC time appears invalid (battery loss?)")
+
+    # Reflect initial SD state
+    status_manager.set_sd_status(hardware.is_sd_mounted())
+
+    # Run POST (visual LED walk) if enabled
+    if status_led_config.get("post_enabled", True):
+        post_step = status_led_config.get("post_step_ms", 150)
+        await status_manager.run_post(step_ms=post_step)
+        print("[STARTUP] POST complete — all status LEDs verified")
+
     # Step 4: Create BufferManager
     buffer_config = DEVICE_CONFIG.get("buffer_manager", {})
     buffer_manager = BufferManager(
@@ -87,9 +113,13 @@ async def main():
         buffer_manager,
         logfile=logger_config.get("logfile", "/sd/system.log"),
         max_size=logger_config.get("max_size", 50000),
+        status_manager=status_manager,
     )
 
     logger.info("MAIN", "System startup")
+
+    # Wire logger into StatusManager for condition-change logging
+    status_manager.set_logger(logger)
 
     # Step 6: Create DHTLogger
     dht_config = DEVICE_CONFIG.get("dht_logger", {})
@@ -103,11 +133,13 @@ async def main():
             interval=dht_config.get("interval_s", 60),
             filename=f"/sd/{files_config.get('dht_log_base', 'dht_log.csv')}",
             max_retries=dht_config.get("max_retries", 3),
-            status_led_pin=DEVICE_CONFIG["pins"]["status_led"],
+            status_manager=status_manager,
+            dht_warn_threshold=status_led_config.get("dht_warn_threshold", 3),
+            dht_error_threshold=status_led_config.get("dht_error_threshold", 10),
         )
     except Exception as e:
         logger.error("MAIN", f"DHTLogger init failed: {e}")
-        # Create a minimal DHTLogger without status LED to keep system running
+        # Create a minimal DHTLogger without status manager to keep system running
         dht_logger = DHTLogger(
             pin=DEVICE_CONFIG["pins"]["dht22"],
             time_provider=time_provider,
@@ -172,6 +204,7 @@ async def main():
             )
             await buzzer.startup()
             logger.info("MAIN", "Buzzer initialized")
+            status_manager.set_buzzer(buzzer)
         except Exception as e:
             logger.warning("MAIN", f"Buzzer init failed (non-critical): {e}")
             buzzer = None
@@ -234,6 +267,9 @@ async def main():
     while True:
         await asyncio.sleep(health_interval)
 
+        # Heartbeat: toggle on-board LED to prove loop is alive
+        status_manager.heartbeat_tick()
+
         # Periodic health checks
         metrics = buffer_manager.get_metrics()
         buffered = metrics["buffer_entries"]
@@ -248,6 +284,9 @@ async def main():
         if sd_needs_check:
             if hardware.refresh_sd():
                 logger.info("MAIN", "SD card re-mounted after hot-swap")
+                status_manager.set_sd_status(True)
+                # Clear any stale logged_error that was SD-related
+                status_manager.clear_error("logged_error")
                 # Flush in-memory buffer now that primary is back
                 if buffered > 0:
                     buffer_manager.flush()
@@ -255,8 +294,12 @@ async def main():
                 health_interval = normal_interval
             else:
                 logger.warning("MAIN", "SD card not accessible, retrying soon")
+                status_manager.set_sd_status(False)
+                status_manager.set_warning("fallback_active", True)
                 health_interval = recovery_interval
         else:
+            status_manager.set_sd_status(True)
+            status_manager.clear_warning("fallback_active")
             health_interval = normal_interval
 
         # Log buffer warning AFTER the SD check so the reader sees
@@ -264,6 +307,9 @@ async def main():
         new_buffered = sum(len(v) for v in buffer_manager._buffers.values())
         if new_buffered > 0:
             logger.warning("MAIN", f"Buffer has {new_buffered} entries (SD may be unavailable)")
+            status_manager.set_warning("buffer_backlog", True)
+        else:
+            status_manager.clear_warning("buffer_backlog")
 
         # Attempt to migrate fallback entries if primary became available
         if metrics["writes_to_fallback"] > metrics["fallback_migrations"]:

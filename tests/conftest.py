@@ -8,7 +8,7 @@
 import asyncio
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 # ---------------------------------------------------------------------------
 # Path setup: ensure project root is importable
@@ -260,8 +260,30 @@ def dht_logger(time_provider, buffer_manager, mock_event_logger, mock_dht_sensor
 
 
 # ---------------------------------------------------------------------------
-# Fixtures: LED / Button
+# Fixtures: LED / Button / Status Manager
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mock_status_manager():
+    """Lightweight mock StatusManager for tests that don't need real LED control."""
+    sm = Mock()
+    sm.blink_activity = AsyncMock()
+    sm.set_sd_status = Mock()
+    sm.set_warning = Mock()
+    sm.clear_warning = Mock()
+    sm.set_error = Mock()
+    sm.clear_error = Mock()
+    sm.heartbeat_tick = Mock()
+    sm.get_status = Mock(
+        return_value={
+            "warnings": [],
+            "errors": [],
+            "sd_healthy": True,
+            "heartbeat_count": 0,
+        }
+    )
+    return sm
 
 
 @pytest.fixture

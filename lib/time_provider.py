@@ -198,6 +198,9 @@ class RTCTimeProvider(TimeProvider):
         self.rtc = rtc
         self._sync_interval_s = 3600
         self._last_sync_epoch = None
+        self._time_valid = True
+        self._rtc_min_year = 2025
+        self._rtc_max_year = 2035
         self._sync_from_rtc(force=True)
 
     def _sync_from_rtc(self, force: bool = False) -> None:
@@ -227,6 +230,8 @@ class RTCTimeProvider(TimeProvider):
                     int(time_tuple[5]),
                     int(time_tuple[6]),
                 )
+                # Validate year range to detect RTC battery loss / reset
+                self._time_valid = self._rtc_min_year <= year <= self._rtc_max_year
                 try:
                     import machine
 
@@ -243,6 +248,11 @@ class RTCTimeProvider(TimeProvider):
 
         if now is not None:
             self._last_sync_epoch = now
+
+    @property
+    def time_valid(self) -> bool:
+        """Whether the RTC time is considered valid (year within expected range)."""
+        return self._time_valid
 
     def now_timestamp(self) -> str:
         """

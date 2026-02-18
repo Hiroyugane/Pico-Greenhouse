@@ -27,7 +27,7 @@ class EventLogger:
         flush_count: Number of successful flush operations
     """
 
-    def __init__(self, time_provider, buffer_manager, logfile="/sd/system.log", max_size=50000):
+    def __init__(self, time_provider, buffer_manager, logfile="/sd/system.log", max_size=50000, status_manager=None):
         """
         Initialize EventLogger with dependency injection.
 
@@ -38,6 +38,7 @@ class EventLogger:
             buffer_manager: BufferManager instance for writes
             logfile (str): Path to log file (default: '/sd/system.log')
             max_size (int): Max log size before rotation in bytes (default: 50000)
+            status_manager: StatusManager instance for LED feedback (optional)
         """
         self.time_provider = time_provider
         self.buffer_manager = buffer_manager
@@ -46,6 +47,7 @@ class EventLogger:
         self.buffer = []
         self.flush_count = 0
         self._log_size = 0
+        self.status_manager = status_manager
 
         print(f"[EventLogger] Initialized: {self.logfile}")
 
@@ -108,6 +110,9 @@ class EventLogger:
         print(log_entry.rstrip())
         self.buffer.append(log_entry)
         self.flush()  # Flush errors immediately
+
+        if self.status_manager is not None:
+            self.status_manager.set_error("logged_error", True)
 
     def flush(self) -> None:
         """

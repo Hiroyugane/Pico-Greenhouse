@@ -230,16 +230,23 @@ class HardwareFactory:
         Initialize all GPIO pins (relays, LEDs, buttons).
 
         Sets output pins to initial states from config.py output_pins section.
+        LEDs owned by StatusManager (activity, sd, warning, error, onboard)
+        are skipped — StatusManager creates its own LED instances for those.
         Configures input pins (buttons) for interrupts.
 
         Returns True if all pins initialized (non-fatal if some fail).
         """
+        # LED pins managed by StatusManager — skip in generic init
+        _SM_OWNED = {"activity_led", "sd_led", "warning_led", "error_led", "onboard_led"}
+
         try:
             pins_config = self.config.get("pins", {})
             output_pins_config = self.config.get("output_pins", {})
 
             # Output pins: relays, LEDs (initialize to state specified in config)
             for pin_name, initial_high in output_pins_config.items():
+                if pin_name in _SM_OWNED:
+                    continue  # StatusManager owns these
                 if pin_name in pins_config:
                     pin_num = pins_config[pin_name]
                     try:

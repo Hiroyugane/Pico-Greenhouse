@@ -34,10 +34,10 @@ HEARTBEAT_PIN = 25  # On-board LED for progress indication
 PINS = {
     "dht22": 15,
     "onboard_led": 25,
-    "status_led": 4,
+    "activity_led": 4,
     "reminder_led": 5,
     "sd_led": 6,
-    "fan_led": 7,
+    "warning_led": 7,
     "error_led": 8,
     "button_menu": 9,
     "button_reserved": 14,
@@ -194,6 +194,7 @@ def probe_platform():
         freq = "unknown"
     try:
         import uos  # type: ignore[import-not-found]
+
         uname = uos.uname()
         uname_dict = {
             "sysname": uname.sysname,
@@ -933,10 +934,10 @@ def probe_led_timing():
     from machine import Pin
 
     led_pins = {
-        "status_led_gp4": PINS["status_led"],
+        "activity_led_gp4": PINS["activity_led"],
         "reminder_led_gp5": PINS["reminder_led"],
         "sd_led_gp6": PINS["sd_led"],
-        "fan_led_gp7": PINS["fan_led"],
+        "warning_led_gp7": PINS["warning_led"],
         "error_led_gp8": PINS["error_led"],
         "onboard_led_gp25": PINS["onboard_led"],
     }

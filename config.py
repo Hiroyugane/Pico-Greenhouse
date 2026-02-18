@@ -11,7 +11,11 @@ DEVICE_CONFIG = {
     # Pico GPIO layout (active header pins only):
     #   GP0-GP1:   CO2 sensor UART0 (TX/RX)
     #   GP2-GP3:   I2C1 bus (RTC + OLED display, shared)
-    #   GP4-GP8:   Status LEDs (5×)
+    #   GP4:       Activity LED (brief blink on I/O actions)
+    #   GP5:       Service-reminder LED (blinks when due)
+    #   GP6:       SD-problem LED (solid = SD missing/failed)
+    #   GP7:       Warning LED (solid = degraded condition)
+    #   GP8:       Error LED (solid = fault needs attention)
     #   GP9:       Menu button (short=cycle, long=action)
     #   GP10-GP13: SPI1 (SD card)
     #   GP14:      Reserved button (future use)
@@ -25,11 +29,11 @@ DEVICE_CONFIG = {
     "pins": {
         "dht22": 15,  # DHT22 data pin
         "onboard_led": 25,  # Pico on-board LED (heartbeat)
-        "status_led": 4,  # Status LED 1 (DHT read feedback)
-        "reminder_led": 5,  # Status LED 2 (service reminder)
-        "sd_led": 6,  # Status LED 3 (SD card status)
-        "fan_led": 7,  # Status LED 4 (fan status)
-        "error_led": 8,  # Status LED 5 (system/error)
+        "activity_led": 4,  # Activity LED (brief blink on I/O actions)
+        "reminder_led": 5,  # Service-reminder LED (blinks when due)
+        "sd_led": 6,  # SD-problem LED (solid = SD missing/failed)
+        "warning_led": 7,  # Warning LED (solid = degraded condition)
+        "error_led": 8,  # Error LED (solid = fault needs attention)
         "button_menu": 9,  # Menu button (short=cycle menu, long≥3s=action)
         "button_reserved": 14,  # Reserved button (future use)
         "rtc_i2c_port": 0,  # I2C1 peripheral (shared: RTC + OLED)
@@ -90,7 +94,19 @@ DEVICE_CONFIG = {
     # Service Reminder Configuration
     "Service_reminder": {
         "days_interval": 7,  # Remind every 7 days
-        "blink_pattern_ms": [2000, 2000, 2000, 2000],  # ON 200ms, OFF 200ms, ON 200ms, OFF 800ms
+        "blink_pattern_ms": [200, 200, 200, 800],  # ON 200ms, OFF 200ms, ON 200ms, OFF 800ms
+    },
+    # Status LED Manager Configuration
+    # Design: solid = problem, blink = activity, dark = all good
+    "status_leds": {
+        "activity_blink_ms": 50,  # Activity LED pulse duration (ms)
+        "heartbeat_interval_ms": 2000,  # GP25 toggle period (ms)
+        "dht_warn_threshold": 3,  # Consecutive DHT failures → warning
+        "dht_error_threshold": 10,  # Consecutive DHT failures → error
+        "rtc_min_year": 2025,  # Year below this → RTC invalid warning
+        "rtc_max_year": 2035,  # Year above this → RTC invalid warning
+        "post_enabled": True,  # Run LED power-on self-test at startup
+        "post_step_ms": 150,  # Duration each LED stays on during POST walk (ms)
     },
     # Buffer Manager Configuration
     "buffer_manager": {
@@ -140,10 +156,10 @@ DEVICE_CONFIG = {
         "relay_fan_1": True,  # HIGH = off (relay module inverted logic)
         "relay_fan_2": True,  # HIGH = off (relay module inverted logic)
         "relay_growlight": True,  # HIGH = off (relay module inverted logic)
-        "status_led": False,  # LOW = off (active high LED)
+        "activity_led": False,  # LOW = off (active high LED)
         "reminder_led": False,  # LOW = off (active high LED)
         "sd_led": False,  # LOW = off (active high LED)
-        "fan_led": False,  # LOW = off (active high LED)
+        "warning_led": False,  # LOW = off (active high LED)
         "error_led": False,  # LOW = off (active high LED)
         "onboard_led": False,  # LOW = off (active high LED)
     },
@@ -174,10 +190,10 @@ def validate_config():
     required_keys = {
         "pins": [
             "dht22",
-            "status_led",
+            "activity_led",
             "reminder_led",
             "sd_led",
-            "fan_led",
+            "warning_led",
             "error_led",
             "onboard_led",
             "button_menu",
@@ -208,12 +224,20 @@ def validate_config():
             "relay_fan_1",
             "relay_fan_2",
             "relay_growlight",
-            "status_led",
+            "activity_led",
             "reminder_led",
             "sd_led",
-            "fan_led",
+            "warning_led",
             "error_led",
             "onboard_led",
+        ],
+        "status_leds": [
+            "activity_blink_ms",
+            "heartbeat_interval_ms",
+            "dht_warn_threshold",
+            "dht_error_threshold",
+            "rtc_min_year",
+            "rtc_max_year",
         ],
         "display": ["type", "width", "height", "i2c_address"],
         "system": [

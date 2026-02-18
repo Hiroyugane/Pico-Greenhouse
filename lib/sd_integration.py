@@ -119,6 +119,5 @@ def is_mounted(sd, spi=None, return_instances: bool = False):
             sd, spi = _init_sd_local()
             _read_mbr(sd)
             return (True, sd, spi) if return_instances else True
-    except Exception as e:
-        print(f"[SD] SD card not accessible: {e}")
+    except Exception:
         return (False, None, None) if return_instances else False

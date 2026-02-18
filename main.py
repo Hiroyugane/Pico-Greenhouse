@@ -223,9 +223,16 @@ async def main():
 
     logger.info("MAIN", "All tasks spawned. System running.")
 
-    # Main event loop (keep running)
+    # Main event loop with adaptive health-check interval:
+    # - Normal: 60 s (configurable via system.health_check_interval_s)
+    # - SD recovery: 10 s (configurable via system.sd_recovery_interval_s)
+    system_config = DEVICE_CONFIG.get("system", {})
+    normal_interval = system_config.get("health_check_interval_s", 60)
+    recovery_interval = system_config.get("sd_recovery_interval_s", 10)
+    health_interval = normal_interval
+
     while True:
-        await asyncio.sleep(60)
+        await asyncio.sleep(health_interval)
 
         # Periodic health checks
         metrics = buffer_manager.get_metrics()
@@ -245,6 +252,12 @@ async def main():
                 if buffered > 0:
                     buffer_manager.flush()
                     logger.info("MAIN", f"Flushed {buffered} buffered entries to SD")
+                health_interval = normal_interval
+            else:
+                logger.warning("MAIN", "SD card not accessible, retrying soon")
+                health_interval = recovery_interval
+        else:
+            health_interval = normal_interval
 
         # Log buffer warning AFTER the SD check so the reader sees
         # the recovery attempt first, then the remaining state.

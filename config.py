@@ -152,6 +152,8 @@ DEVICE_CONFIG = {
         "require_sd_startup": False,  # If True, system won't start without SD; if False, runs with buffering only # noqa: E501
         "button_debounce_ms": 200,  # Debounce delay for button presses
         "long_press_ms": 3000,  # Long-press threshold for menu action button
+        "health_check_interval_s": 60,  # Normal health-check loop interval
+        "sd_recovery_interval_s": 10,  # Fast retry interval when SD is unavailable
     },
 }
 
@@ -214,7 +216,13 @@ def validate_config():
             "onboard_led",
         ],
         "display": ["type", "width", "height", "i2c_address"],
-        "system": ["require_sd_startup", "button_debounce_ms", "long_press_ms"],
+        "system": [
+            "require_sd_startup",
+            "button_debounce_ms",
+            "long_press_ms",
+            "health_check_interval_s",
+            "sd_recovery_interval_s",
+        ],
     }
 
     # Check all required sections and keys exist

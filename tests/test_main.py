@@ -287,3 +287,115 @@ class TestMainHealthCheck:
                 await main_module.main()
 
         mock_buffer.migrate_fallback.assert_called()
+
+    async def test_adaptive_interval_uses_recovery_when_sd_down(self, monkeypatch):
+        """When SD is unavailable, health loop switches to the fast recovery interval."""
+        import main as main_module
+
+        monkeypatch.setattr(main_module, "validate_config", lambda: True)
+
+        mock_hw = Mock()
+        mock_hw.setup.return_value = True
+        mock_hw.get_rtc.return_value = Mock()
+        mock_hw.refresh_sd.return_value = False  # SD stays down
+        monkeypatch.setattr(main_module, "HardwareFactory", lambda *a, **kw: mock_hw)
+
+        mock_buffer = Mock()
+        mock_buffer.get_metrics.return_value = {"buffer_entries": 0, "writes_to_fallback": 0, "fallback_migrations": 0}
+        mock_buffer.is_primary_available.return_value = False
+        mock_buffer._buffers = {}
+        monkeypatch.setattr(main_module, "BufferManager", lambda *a, **kw: mock_buffer)
+
+        mock_logger = Mock()
+        monkeypatch.setattr(main_module, "EventLogger", lambda *a, **kw: mock_logger)
+        monkeypatch.setattr(main_module, "DHTLogger", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "FanController", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "GrowlightController", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "ServiceReminder", lambda *a, **kw: Mock())
+        mock_buzzer = Mock()
+        mock_buzzer.startup = AsyncMock()
+        monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
+        monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: Mock())
+
+        sleep_durations = []
+
+        async def tracking_sleep(duration):
+            sleep_durations.append(duration)
+            if len(sleep_durations) >= 3:
+                raise asyncio.CancelledError()
+
+        monkeypatch.setattr(main_module.asyncio, "sleep", tracking_sleep)
+        monkeypatch.setattr(main_module.asyncio, "sleep_ms", tracking_sleep)
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with pytest.raises(asyncio.CancelledError):
+                await main_module.main()
+
+        # First sleep uses normal interval (60), subsequent ones use recovery (10)
+        assert sleep_durations[0] == 60
+        assert sleep_durations[1] == 10
+
+        # Should log SD unavailability warning
+        warning_calls = [str(c) for c in mock_logger.warning.call_args_list]
+        assert any("SD card not accessible" in c for c in warning_calls)
+
+    async def test_adaptive_interval_restores_after_recovery(self, monkeypatch):
+        """After SD recovery, health loop restores the normal interval."""
+        import main as main_module
+
+        monkeypatch.setattr(main_module, "validate_config", lambda: True)
+
+        mock_hw = Mock()
+        mock_hw.setup.return_value = True
+        mock_hw.get_rtc.return_value = Mock()
+        # First call: SD comes back
+        mock_hw.refresh_sd.return_value = True
+        monkeypatch.setattr(main_module, "HardwareFactory", lambda *a, **kw: mock_hw)
+
+        call_count = 0
+
+        def get_metrics():
+            nonlocal call_count
+            call_count += 1
+            # First iteration: primary down, buffer has entries
+            if call_count == 1:
+                return {"buffer_entries": 5, "writes_to_fallback": 0, "fallback_migrations": 0}
+            # After recovery: everything good
+            return {"buffer_entries": 0, "writes_to_fallback": 0, "fallback_migrations": 0}
+
+        mock_buffer = Mock()
+        mock_buffer.get_metrics = get_metrics
+        mock_buffer.is_primary_available.return_value = False
+        mock_buffer._buffers = {}
+        monkeypatch.setattr(main_module, "BufferManager", lambda *a, **kw: mock_buffer)
+
+        mock_logger = Mock()
+        monkeypatch.setattr(main_module, "EventLogger", lambda *a, **kw: mock_logger)
+        monkeypatch.setattr(main_module, "DHTLogger", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "FanController", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "GrowlightController", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "ServiceReminder", lambda *a, **kw: Mock())
+        mock_buzzer = Mock()
+        mock_buzzer.startup = AsyncMock()
+        monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
+        monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: Mock())
+
+        sleep_durations = []
+
+        async def tracking_sleep(duration):
+            sleep_durations.append(duration)
+            if len(sleep_durations) >= 3:
+                raise asyncio.CancelledError()
+
+        monkeypatch.setattr(main_module.asyncio, "sleep", tracking_sleep)
+        monkeypatch.setattr(main_module.asyncio, "sleep_ms", tracking_sleep)
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with pytest.raises(asyncio.CancelledError):
+                await main_module.main()
+
+        # First sleep = normal (60), after recovery: still normal (60)
+        assert sleep_durations[0] == 60
+        assert sleep_durations[1] == 60

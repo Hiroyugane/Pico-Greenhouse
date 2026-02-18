@@ -109,6 +109,7 @@ class FanController(RelayController):
         on_time_s: int = 20,
         max_temp: float = 24.0,
         temp_hysteresis: float = 1.0,
+        poll_interval_s: int = 5,
         name=None,
     ):
         """
@@ -123,6 +124,7 @@ class FanController(RelayController):
             on_time_s (int): ON duration per cycle (default: 20)
             max_temp (float): Temperature threshold in °C (default: 24.0)
             temp_hysteresis (float): Hysteresis in °C (default: 1.0)
+            poll_interval_s (int): Schedule/thermostat check interval (default: 5)
             name (str, optional): Relay name
         """
         super().__init__(pin, invert=True, name=name or f"Fan_{pin}")
@@ -134,6 +136,7 @@ class FanController(RelayController):
         self.on_time_s = on_time_s
         self.max_temp = max_temp
         self.temp_hysteresis = temp_hysteresis
+        self.poll_interval_s = poll_interval_s
 
         # State machine
         self.thermostat_active = False
@@ -158,7 +161,7 @@ class FanController(RelayController):
         Async coroutine for continuous dual-mode control.
 
         Runs time-of-day schedule + temperature thermostat.
-        Checks every 5 seconds.
+        Check interval controlled by poll_interval_s.
         """
         while True:
             try:
@@ -219,7 +222,7 @@ class FanController(RelayController):
                             self.logger.error("FanController", f"{self.name} failed to update: {e}")
                         self.last_schedule_state = schedule_should_be_on
 
-                await asyncio.sleep(5)
+                await asyncio.sleep(self.poll_interval_s)
 
             except asyncio.CancelledError:
                 self.turn_off()
@@ -268,6 +271,7 @@ class GrowlightController(RelayController):
         dawn_minute=None,
         sunset_hour=None,
         sunset_minute=None,
+        poll_interval_s: int = 60,
         name=None,
     ):
         """
@@ -281,12 +285,14 @@ class GrowlightController(RelayController):
             dawn_minute (int): Minute to turn ON (0-59)
             sunset_hour (int): Hour to turn OFF (0-23)
             sunset_minute (int): Minute to turn OFF (0-59)
+            poll_interval_s (int): Schedule check interval in seconds (default: 60)
             name (str, optional): Relay name
         """
         super().__init__(pin, invert=True, name=name or f"Growlight_{pin}")
 
         self.time_provider = time_provider
         self.logger = logger
+        self.poll_interval_s = poll_interval_s
 
         # If dawn/sunset not provided, derive from sunrise_sunset() for today
         if dawn_hour is None or dawn_minute is None or sunset_hour is None or sunset_minute is None:
@@ -320,7 +326,7 @@ class GrowlightController(RelayController):
         """
         Async coroutine for time-based light scheduling.
 
-        Checks every 60 seconds and updates relay based on schedule.
+        Check interval controlled by poll_interval_s.
         """
         while True:
             try:
@@ -340,7 +346,7 @@ class GrowlightController(RelayController):
                         self.logger.info("GrowlightController", f"{self.name} OFF")
                     self.last_state = should_be_on
 
-                await asyncio.sleep(60)  # Check every minute
+                await asyncio.sleep(self.poll_interval_s)
 
             except asyncio.CancelledError:
                 self.turn_off()

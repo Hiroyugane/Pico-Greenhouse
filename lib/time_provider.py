@@ -184,23 +184,26 @@ class RTCTimeProvider(TimeProvider):
     Handles format conversions internally to provide clean API.
     """
 
-    def __init__(self, rtc):
+    def __init__(self, rtc, sync_interval_s: int = 3600, rtc_min_year: int = 2025, rtc_max_year: int = 2035):
         """
         Wrap an existing ds3231.RTC instance.
 
         Args:
             rtc: lib.ds3231.RTC instance (already initialized with I2C pins)
+            sync_interval_s (int): RTC-to-Pico clock sync interval in seconds (default: 3600)
+            rtc_min_year (int): Minimum valid RTC year (default: 2025)
+            rtc_max_year (int): Maximum valid RTC year (default: 2035)
 
         Example:
             rtc_hw = ds3231.RTC(sda_pin=0, scl_pin=1)
             time_provider = RTCTimeProvider(rtc_hw)
         """
         self.rtc = rtc
-        self._sync_interval_s = 3600
+        self._sync_interval_s = sync_interval_s
         self._last_sync_epoch = None
         self._time_valid = True
-        self._rtc_min_year = 2025
-        self._rtc_max_year = 2035
+        self._rtc_min_year = rtc_min_year
+        self._rtc_max_year = rtc_max_year
         self._sync_from_rtc(force=True)
 
     def _sync_from_rtc(self, force: bool = False) -> None:

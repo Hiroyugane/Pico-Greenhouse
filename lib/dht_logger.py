@@ -57,6 +57,7 @@ class DHTLogger:
         status_manager=None,
         dht_warn_threshold=3,
         dht_error_threshold=10,
+        retry_delay_s: float = 0.5,
     ):
         """
         Initialize DHTLogger with dependency injection.
@@ -72,6 +73,7 @@ class DHTLogger:
             status_manager: StatusManager instance for LED feedback (optional)
             dht_warn_threshold (int): Consecutive failures before warning (default: 3)
             dht_error_threshold (int): Consecutive failures before error (default: 10)
+            retry_delay_s (float): Delay between sensor read retries in seconds (default: 0.5)
         """
         self.dht_sensor = dht.DHT22(machine.Pin(pin))
         self.interval = interval
@@ -83,6 +85,7 @@ class DHTLogger:
         self.status_manager = status_manager
         self._dht_warn_threshold = dht_warn_threshold
         self._dht_error_threshold = dht_error_threshold
+        self.retry_delay_s = retry_delay_s
 
         # State
         self.last_temperature = None
@@ -161,7 +164,7 @@ class DHTLogger:
         """
         Read temperature and humidity from DHT22.
 
-        Implements retry logic with 0.5s delay between attempts.
+        Implements retry logic with configurable delay between attempts.
         Validates readings are in range: -40°C to 80°C, 0% to 100%.
 
         Returns:
@@ -184,7 +187,7 @@ class DHTLogger:
                 if attempt < self.max_retries - 1:
                     import time  # importing time here to avoid global import in async context - useful?
 
-                    time.sleep(0.5)
+                    time.sleep(self.retry_delay_s)
 
         self.read_failures += 1
         self._consecutive_failures += 1

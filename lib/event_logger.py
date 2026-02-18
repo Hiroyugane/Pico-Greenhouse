@@ -27,7 +27,16 @@ class EventLogger:
         flush_count: Number of successful flush operations
     """
 
-    def __init__(self, time_provider, buffer_manager, logfile="/sd/system.log", max_size=50000, status_manager=None):
+    def __init__(
+        self,
+        time_provider,
+        buffer_manager,
+        logfile="/sd/system.log",
+        max_size=50000,
+        status_manager=None,
+        info_flush_threshold: int = 5,
+        warn_flush_threshold: int = 3,
+    ):
         """
         Initialize EventLogger with dependency injection.
 
@@ -39,6 +48,8 @@ class EventLogger:
             logfile (str): Path to log file (default: '/sd/system.log')
             max_size (int): Max log size before rotation in bytes (default: 50000)
             status_manager: StatusManager instance for LED feedback (optional)
+            info_flush_threshold (int): Flush after N info entries buffered (default: 5)
+            warn_flush_threshold (int): Flush after N warning entries buffered (default: 3)
         """
         self.time_provider = time_provider
         self.buffer_manager = buffer_manager
@@ -48,6 +59,8 @@ class EventLogger:
         self.flush_count = 0
         self._log_size = 0
         self.status_manager = status_manager
+        self.info_flush_threshold = info_flush_threshold
+        self.warn_flush_threshold = warn_flush_threshold
 
         print(f"[EventLogger] Initialized: {self.logfile}")
 
@@ -76,7 +89,7 @@ class EventLogger:
         print(log_entry.rstrip())
         self.buffer.append(log_entry)
 
-        if len(self.buffer) >= 5:
+        if len(self.buffer) >= self.info_flush_threshold:
             self.flush()
 
     def warning(self, module: str, message: str) -> None:
@@ -92,7 +105,7 @@ class EventLogger:
         print(log_entry.rstrip())
         self.buffer.append(log_entry)
 
-        if len(self.buffer) >= 3:
+        if len(self.buffer) >= self.warn_flush_threshold:
             self.flush()
 
     def error(self, module: str, message: str) -> None:

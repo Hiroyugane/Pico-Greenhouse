@@ -142,3 +142,149 @@ class TestValidateConfig:
                 config.validate_config()
         finally:
             config.DEVICE_CONFIG["event_logger"]["max_size"] = original
+
+    # --- New validation tests for externalized constants ---
+
+    def test_zero_info_flush_threshold_raises(self):
+        """event_logger.info_flush_threshold = 0 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["event_logger"]["info_flush_threshold"]
+        config.DEVICE_CONFIG["event_logger"]["info_flush_threshold"] = 0
+        try:
+            with pytest.raises(ValueError, match="info_flush_threshold"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["event_logger"]["info_flush_threshold"] = original
+
+    def test_zero_warn_flush_threshold_raises(self):
+        """event_logger.warn_flush_threshold = 0 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["event_logger"]["warn_flush_threshold"]
+        config.DEVICE_CONFIG["event_logger"]["warn_flush_threshold"] = 0
+        try:
+            with pytest.raises(ValueError, match="warn_flush_threshold"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["event_logger"]["warn_flush_threshold"] = original
+
+    def test_zero_retry_delay_raises(self):
+        """dht_logger.retry_delay_s = 0 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["dht_logger"]["retry_delay_s"]
+        config.DEVICE_CONFIG["dht_logger"]["retry_delay_s"] = 0
+        try:
+            with pytest.raises(ValueError, match="retry_delay_s"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["dht_logger"]["retry_delay_s"] = original
+
+    def test_zero_fan1_poll_interval_raises(self):
+        """fan_1.poll_interval_s = 0 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["fan_1"]["poll_interval_s"]
+        config.DEVICE_CONFIG["fan_1"]["poll_interval_s"] = 0
+        try:
+            with pytest.raises(ValueError, match="poll_interval_s"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["fan_1"]["poll_interval_s"] = original
+
+    def test_zero_fan2_poll_interval_raises(self):
+        """fan_2.poll_interval_s = 0 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["fan_2"]["poll_interval_s"]
+        config.DEVICE_CONFIG["fan_2"]["poll_interval_s"] = 0
+        try:
+            with pytest.raises(ValueError, match="poll_interval_s"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["fan_2"]["poll_interval_s"] = original
+
+    def test_zero_growlight_poll_interval_raises(self):
+        """growlight.poll_interval_s = 0 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["growlight"]["poll_interval_s"]
+        config.DEVICE_CONFIG["growlight"]["poll_interval_s"] = 0
+        try:
+            with pytest.raises(ValueError, match="poll_interval_s"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["growlight"]["poll_interval_s"] = original
+
+    def test_negative_blink_after_days_raises(self):
+        """Service_reminder.blink_after_days = -1 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["Service_reminder"]["blink_after_days"]
+        config.DEVICE_CONFIG["Service_reminder"]["blink_after_days"] = -1
+        try:
+            with pytest.raises(ValueError, match="blink_after_days"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["Service_reminder"]["blink_after_days"] = original
+
+    def test_zero_monitor_interval_raises(self):
+        """Service_reminder.monitor_interval_s = 0 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["Service_reminder"]["monitor_interval_s"]
+        config.DEVICE_CONFIG["Service_reminder"]["monitor_interval_s"] = 0
+        try:
+            with pytest.raises(ValueError, match="monitor_interval_s"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["Service_reminder"]["monitor_interval_s"] = original
+
+    def test_zero_i2c_freq_raises(self):
+        """system.i2c_freq = 0 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["system"]["i2c_freq"]
+        config.DEVICE_CONFIG["system"]["i2c_freq"] = 0
+        try:
+            with pytest.raises(ValueError, match="i2c_freq"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["system"]["i2c_freq"] = original
+
+    def test_zero_sd_mount_retries_raises(self):
+        """system.sd_mount_retries = 0 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["system"]["sd_mount_retries"]
+        config.DEVICE_CONFIG["system"]["sd_mount_retries"] = 0
+        try:
+            with pytest.raises(ValueError, match="sd_mount_retries"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["system"]["sd_mount_retries"] = original
+
+    def test_zero_rtc_sync_interval_raises(self):
+        """system.rtc_sync_interval_s = 0 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["system"]["rtc_sync_interval_s"]
+        config.DEVICE_CONFIG["system"]["rtc_sync_interval_s"] = 0
+        try:
+            with pytest.raises(ValueError, match="rtc_sync_interval_s"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["system"]["rtc_sync_interval_s"] = original
+
+    def test_zero_button_poll_ms_raises(self):
+        """system.button_poll_ms = 0 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["system"]["button_poll_ms"]
+        config.DEVICE_CONFIG["system"]["button_poll_ms"] = 0
+        try:
+            with pytest.raises(ValueError, match="button_poll_ms"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["system"]["button_poll_ms"] = original

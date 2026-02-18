@@ -69,6 +69,7 @@ DEVICE_CONFIG = {
         "interval_s": 30,  # Log interval in seconds
         "max_retries": 3,  # Sensor read retries
         "max_buffer_size": 200,  # Max in-memory readings
+        "retry_delay_s": 0.5,  # Delay between sensor read retries (seconds)
     },
     # Fan Control - Fan 1 (Time-based + Thermostat)
     "fan_1": {
@@ -76,6 +77,7 @@ DEVICE_CONFIG = {
         "on_time_s": 20,  # Time ON per cycle
         "max_temp": 23.8,  # Temperature threshold (°C)
         "temp_hysteresis": 0.5,  # Hysteresis for thermostat (°C)
+        "poll_interval_s": 5,  # Schedule/thermostat check interval (seconds)
     },
     # Fan Control - Fan 2 (Time-based + Thermostat)
     "fan_2": {
@@ -83,6 +85,7 @@ DEVICE_CONFIG = {
         "on_time_s": 20,  # Time ON per cycle
         "max_temp": 27.0,  # Temperature threshold (°C)
         "temp_hysteresis": 0.5,  # Hysteresis for thermostat (°C)
+        "poll_interval_s": 5,  # Schedule/thermostat check interval (seconds)
     },
     # Grow Light Configuration
     "growlight": {
@@ -90,11 +93,15 @@ DEVICE_CONFIG = {
         "dawn_minute": 0,
         "sunset_hour": 19,  # Light OFF at 19:00 (10 PM)
         "sunset_minute": 0,
+        "poll_interval_s": 60,  # Schedule check interval (seconds)
     },
     # Service Reminder Configuration
     "Service_reminder": {
         "days_interval": 7,  # Remind every 7 days
         "blink_pattern_ms": [200, 200, 200, 800],  # ON 200ms, OFF 200ms, ON 200ms, OFF 800ms
+        "blink_after_days": 3,  # Days overdue before LED switches from solid to blink
+        "storage_path": "/service_reminder.txt",  # Persistence file for last-serviced timestamp
+        "monitor_interval_s": 3600,  # Re-check interval when not due (seconds)
     },
     # Status LED Manager Configuration
     # Design: solid = problem, blink = activity, dark = all good
@@ -118,6 +125,8 @@ DEVICE_CONFIG = {
     "event_logger": {
         "logfile": "/sd/system.log",
         "max_size": 50000,  # Max log file size (bytes) before rotation
+        "info_flush_threshold": 5,  # Flush after N info-level entries buffered
+        "warn_flush_threshold": 3,  # Flush after N warning-level entries buffered
     },
     # Buzzer Configuration (passive buzzer via PWM)
     "buzzer": {
@@ -170,6 +179,12 @@ DEVICE_CONFIG = {
         "long_press_ms": 3000,  # Long-press threshold for menu action button
         "health_check_interval_s": 60,  # Normal health-check loop interval
         "sd_recovery_interval_s": 10,  # Fast retry interval when SD is unavailable
+        "i2c_freq": 100000,  # I2C bus frequency in Hz (100 kHz standard, 400 kHz fast)
+        "sd_power_up_ms": 250,  # SD card power-up stabilization delay (ms)
+        "sd_mount_retries": 3,  # Number of SD mount attempts at cold boot
+        "sd_retry_delay_ms": 500,  # Delay between SD mount retries (ms)
+        "rtc_sync_interval_s": 3600,  # RTC-to-Pico clock sync interval (seconds)
+        "button_poll_ms": 50,  # Button ISR flag polling interval (ms)
     },
 }
 
@@ -212,14 +227,20 @@ def validate_config():
         ],
         "spi": ["id", "baudrate", "sck", "mosi", "miso", "cs", "mount_point"],
         "files": ["dht_log_base", "system_log", "fallback_path"],
-        "dht_logger": ["interval_s", "max_retries", "max_buffer_size"],
-        "fan_1": ["interval_s", "on_time_s", "max_temp", "temp_hysteresis"],
-        "fan_2": ["interval_s", "on_time_s", "max_temp", "temp_hysteresis"],
-        "growlight": ["dawn_hour", "dawn_minute", "sunset_hour", "sunset_minute"],
-        "Service_reminder": ["days_interval", "blink_pattern_ms"],
+        "dht_logger": ["interval_s", "max_retries", "max_buffer_size", "retry_delay_s"],
+        "fan_1": ["interval_s", "on_time_s", "max_temp", "temp_hysteresis", "poll_interval_s"],
+        "fan_2": ["interval_s", "on_time_s", "max_temp", "temp_hysteresis", "poll_interval_s"],
+        "growlight": ["dawn_hour", "dawn_minute", "sunset_hour", "sunset_minute", "poll_interval_s"],
+        "Service_reminder": [
+            "days_interval",
+            "blink_pattern_ms",
+            "blink_after_days",
+            "storage_path",
+            "monitor_interval_s",
+        ],
         "buzzer": ["enabled", "default_freq", "default_duty_pct"],
         "buffer_manager": ["sd_mount_point", "fallback_path", "max_buffer_entries"],
-        "event_logger": ["logfile", "max_size"],
+        "event_logger": ["logfile", "max_size", "info_flush_threshold", "warn_flush_threshold"],
         "output_pins": [
             "relay_fan_1",
             "relay_fan_2",
@@ -246,6 +267,12 @@ def validate_config():
             "long_press_ms",
             "health_check_interval_s",
             "sd_recovery_interval_s",
+            "i2c_freq",
+            "sd_power_up_ms",
+            "sd_mount_retries",
+            "sd_retry_delay_ms",
+            "rtc_sync_interval_s",
+            "button_poll_ms",
         ],
     }
 
@@ -281,5 +308,40 @@ def validate_config():
 
     if DEVICE_CONFIG["event_logger"]["max_size"] <= 0:
         raise ValueError("event_logger.max_size must be > 0")
+
+    if DEVICE_CONFIG["event_logger"]["info_flush_threshold"] < 1:
+        raise ValueError("event_logger.info_flush_threshold must be >= 1")
+
+    if DEVICE_CONFIG["event_logger"]["warn_flush_threshold"] < 1:
+        raise ValueError("event_logger.warn_flush_threshold must be >= 1")
+
+    if DEVICE_CONFIG["dht_logger"]["retry_delay_s"] <= 0:
+        raise ValueError("dht_logger.retry_delay_s must be > 0")
+
+    for fan_key in ("fan_1", "fan_2"):
+        if DEVICE_CONFIG[fan_key]["poll_interval_s"] <= 0:
+            raise ValueError(f"{fan_key}.poll_interval_s must be > 0")
+
+    if DEVICE_CONFIG["growlight"]["poll_interval_s"] <= 0:
+        raise ValueError("growlight.poll_interval_s must be > 0")
+
+    if DEVICE_CONFIG["Service_reminder"]["blink_after_days"] < 0:
+        raise ValueError("Service_reminder.blink_after_days must be >= 0")
+
+    if DEVICE_CONFIG["Service_reminder"]["monitor_interval_s"] <= 0:
+        raise ValueError("Service_reminder.monitor_interval_s must be > 0")
+
+    sys_cfg = DEVICE_CONFIG["system"]
+    if sys_cfg["i2c_freq"] <= 0:
+        raise ValueError("system.i2c_freq must be > 0")
+
+    if sys_cfg["sd_mount_retries"] < 1:
+        raise ValueError("system.sd_mount_retries must be >= 1")
+
+    if sys_cfg["rtc_sync_interval_s"] <= 0:
+        raise ValueError("system.rtc_sync_interval_s must be > 0")
+
+    if sys_cfg["button_poll_ms"] <= 0:
+        raise ValueError("system.button_poll_ms must be > 0")
 
     return True

@@ -28,37 +28,25 @@ SD_BENCHMARK_BLOCKS = 100  # Number of block reads/writes for benchmarks
 BUTTON_TIMEOUT_S = 60  # Seconds to wait for button presses
 BUTTON_PRESSES = 10  # Number of button presses to collect
 LED_TOGGLE_COUNT = 1000  # Number of LED toggles for timing
-HEARTBEAT_PIN = 25  # On-board LED for progress indication
 
-# ── Pin map (mirrors config.py) ──────────────────────────────────────────
-PINS = {
-    "dht22": 15,
-    "onboard_led": 25,
-    "activity_led": 4,
-    "reminder_led": 5,
-    "sd_led": 6,
-    "warning_led": 7,
-    "error_led": 8,
-    "button_menu": 9,
-    "button_reserved": 14,
-    "rtc_sda": 0,
-    "rtc_scl": 1,
-    "relay_fan_1": 16,
-    "relay_fan_2": 18,
-    "relay_growlight": 17,
-    "spi_sck": 10,
-    "spi_mosi": 11,
-    "spi_miso": 12,
-    "spi_cs": 13,
-    "co2_uart_tx": 2,
-    "co2_uart_rx": 3,
-}
-I2C_PORT = 0
-I2C_FREQ = 100_000
-SPI_ID = 1
-SPI_BAUDRATE = 40_000_000
+# ── Pin map (derived from config.py) ─────────────────────────────────────
+from config import DEVICE_CONFIG as _CFG  # noqa: E402
+
+PINS = dict(_CFG["pins"])
+# Also expose SPI pins under spi_* aliases (probe code references these)
+_spi = _CFG["spi"]
+PINS["spi_sck"] = _spi["sck"]
+PINS["spi_mosi"] = _spi["mosi"]
+PINS["spi_miso"] = _spi["miso"]
+PINS["spi_cs"] = _spi["cs"]
+
+HEARTBEAT_PIN = PINS["onboard_led"]
+I2C_PORT = PINS["rtc_i2c_port"]
+I2C_FREQ = _CFG.get("system", {}).get("i2c_freq", 100_000)
+SPI_ID = _spi["id"]
+SPI_BAUDRATE = _spi["baudrate"]
 DS3231_ADDR = 0x68
-SSD1306_ADDR = 0x3C
+SSD1306_ADDR = _CFG.get("display", {}).get("i2c_address", 0x3C)
 
 # ── Results accumulator ──────────────────────────────────────────────────
 _results = {}

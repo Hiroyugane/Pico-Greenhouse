@@ -71,7 +71,13 @@ async def main():
 
     # Step 3: Create TimeProvider (wraps RTC)
     rtc = hardware.get_rtc()
-    time_provider = RTCTimeProvider(rtc)
+    system_config = DEVICE_CONFIG.get("system", {})
+    time_provider = RTCTimeProvider(
+        rtc,
+        sync_interval_s=system_config.get("rtc_sync_interval_s", 3600),
+        rtc_min_year=system_config.get("rtc_min_year", 2025),
+        rtc_max_year=system_config.get("rtc_max_year", 2035),
+    )
 
     # Step 3b: Create StatusManager (owns activity/SD/warning/error/heartbeat LEDs)
     status_led_config = DEVICE_CONFIG.get("status_leds", {})
@@ -103,7 +109,7 @@ async def main():
     buffer_manager = BufferManager(
         sd_mount_point=buffer_config.get("sd_mount_point", "/sd"),
         fallback_path=buffer_config.get("fallback_path", "/local/fallback.csv"),
-        max_buffer_entries=buffer_config.get("max_buffer_entries", 1000),
+        max_buffer_entries=buffer_config.get("max_buffer_entries", 200),
     )
 
     # Step 5: Create EventLogger
@@ -114,6 +120,8 @@ async def main():
         logfile=logger_config.get("logfile", "/sd/system.log"),
         max_size=logger_config.get("max_size", 50000),
         status_manager=status_manager,
+        info_flush_threshold=logger_config.get("info_flush_threshold", 5),
+        warn_flush_threshold=logger_config.get("warn_flush_threshold", 3),
     )
 
     logger.info("MAIN", "System startup")
@@ -130,12 +138,13 @@ async def main():
             time_provider=time_provider,
             buffer_manager=buffer_manager,
             logger=logger,
-            interval=dht_config.get("interval_s", 60),
+            interval=dht_config.get("interval_s", 30),
             filename=f"/sd/{files_config.get('dht_log_base', 'dht_log.csv')}",
             max_retries=dht_config.get("max_retries", 3),
             status_manager=status_manager,
             dht_warn_threshold=status_led_config.get("dht_warn_threshold", 3),
             dht_error_threshold=status_led_config.get("dht_error_threshold", 10),
+            retry_delay_s=dht_config.get("retry_delay_s", 0.5),
         )
     except Exception as e:
         logger.error("MAIN", f"DHTLogger init failed: {e}")
@@ -145,9 +154,10 @@ async def main():
             time_provider=time_provider,
             buffer_manager=buffer_manager,
             logger=logger,
-            interval=dht_config.get("interval_s", 60),
+            interval=dht_config.get("interval_s", 30),
             filename=f"/sd/{files_config.get('dht_log_base', 'dht_log.csv')}",
             max_retries=dht_config.get("max_retries", 3),
+            retry_delay_s=dht_config.get("retry_delay_s", 0.5),
         )
 
     # Step 7: Create relay controllers with dependency injection
@@ -165,8 +175,9 @@ async def main():
             logger=logger,
             interval_s=config.get("interval_s", 600),
             on_time_s=config.get("on_time_s", 20),
-            max_temp=config.get("max_temp", 24.0),
-            temp_hysteresis=config.get("temp_hysteresis", 1.0),
+            max_temp=config.get("max_temp", 23.8),
+            temp_hysteresis=config.get("temp_hysteresis", 0.5),
+            poll_interval_s=config.get("poll_interval_s", 5),
             name=name,
         )
         fans.append(fan)
@@ -178,10 +189,11 @@ async def main():
         pin=DEVICE_CONFIG["pins"]["relay_growlight"],
         time_provider=time_provider,
         logger=logger,
-        dawn_hour=light_config.get("dawn_hour", 6),
+        dawn_hour=light_config.get("dawn_hour", 7),
         dawn_minute=light_config.get("dawn_minute", 0),
-        sunset_hour=light_config.get("sunset_hour", 22),
+        sunset_hour=light_config.get("sunset_hour", 19),
         sunset_minute=light_config.get("sunset_minute", 0),
+        poll_interval_s=light_config.get("poll_interval_s", 60),
         name="Growlight",
     )
 
@@ -216,7 +228,7 @@ async def main():
     led_handler = LEDButtonHandler(
         led_pin=DEVICE_CONFIG["pins"]["reminder_led"],
         button_pin=DEVICE_CONFIG["pins"]["button_menu"],
-        debounce_ms=DEVICE_CONFIG.get("system", {}).get("button_debounce_ms", 50),
+        debounce_ms=DEVICE_CONFIG.get("system", {}).get("button_debounce_ms", 200),
         long_press_ms=DEVICE_CONFIG.get("system", {}).get("long_press_ms", 3000),
     )
 
@@ -226,6 +238,9 @@ async def main():
         led_handler=led_handler,
         days_interval=Service_config.get("days_interval", 7),
         blink_pattern_ms=Service_config.get("blink_pattern_ms", [200, 200, 200, 800]),
+        blink_after_days=Service_config.get("blink_after_days", 3),
+        storage_path=Service_config.get("storage_path", "/service_reminder.txt"),
+        monitor_interval_s=Service_config.get("monitor_interval_s", 3600),
         auto_register_button=False,
     )
 
@@ -252,14 +267,17 @@ async def main():
     asyncio.create_task(growlight.start_scheduler())
     asyncio.create_task(dht_logger.log_loop())
     asyncio.create_task(reminder.monitor())
-    asyncio.create_task(led_handler.poll_button())
+    asyncio.create_task(
+        led_handler.poll_button(
+            interval_ms=system_config.get("button_poll_ms", 50),
+        )
+    )
 
     logger.info("MAIN", "All tasks spawned. System running.")
 
     # Main event loop with adaptive health-check interval:
     # - Normal: 60 s (configurable via system.health_check_interval_s)
     # - SD recovery: 10 s (configurable via system.sd_recovery_interval_s)
-    system_config = DEVICE_CONFIG.get("system", {})
     normal_interval = system_config.get("health_check_interval_s", 60)
     recovery_interval = system_config.get("sd_recovery_interval_s", 10)
     health_interval = normal_interval

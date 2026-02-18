@@ -310,6 +310,7 @@ class ServiceReminder:
         storage_path: str = "/service_reminder.txt",
         auto_register_button: bool = True,
         blink_after_days: int = 3,
+        monitor_interval_s: int = 3600,
     ):
         """
         Initialize Service reminder.
@@ -327,6 +328,8 @@ class ServiceReminder:
                 for multi-function button support).  Default: True.
             blink_after_days (int): Days overdue before LED switches from
                 solid-on to blinking pattern (default: 3).
+            monitor_interval_s (int): Re-check interval in seconds when
+                reminder is not due or is solid-on (default: 3600).
 
         Example:
             >>> reminder = ServiceReminder(time_provider, led_handler, days_interval=7)
@@ -337,6 +340,7 @@ class ServiceReminder:
         self.days_interval = days_interval
         self.blink_pattern_ms = blink_pattern_ms or [5000, 2000]  # SOS
         self.blink_after_days = blink_after_days
+        self.monitor_interval_s = monitor_interval_s
 
         self.storage_path = storage_path
 
@@ -484,16 +488,16 @@ class ServiceReminder:
                             was_blinking = False
                             self.led_handler.set_off()
                             print("[ServiceReminder] Reminder cleared")
-                            await asyncio.sleep(3600)
+                            await asyncio.sleep(self.monitor_interval_s)
                         else:
                             await asyncio.sleep(0.5)
                     else:
                         # Due but < blink_after_days overdue: solid on
                         self.led_handler.set_on()
-                        await asyncio.sleep(3600)  # Re-check every hour
+                        await asyncio.sleep(self.monitor_interval_s)
                 else:
-                    # Not due: check every hour
-                    await asyncio.sleep(3600)
+                    # Not due: re-check after monitor_interval_s
+                    await asyncio.sleep(self.monitor_interval_s)
 
             except asyncio.CancelledError:
                 self.led_handler.set_off()

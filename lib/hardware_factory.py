@@ -118,7 +118,8 @@ class HardwareFactory:
             sda = pins.get("rtc_sda", 2)
             scl = pins.get("rtc_scl", 3)
 
-            self.i2c1 = I2C(i2c_port, sda=Pin(sda), scl=Pin(scl), freq=100000)
+            i2c_freq = self.config.get("system", {}).get("i2c_freq", 100000)
+            self.i2c1 = I2C(i2c_port, sda=Pin(sda), scl=Pin(scl), freq=i2c_freq)
             return True
         except Exception as e:
             self.errors.append(f"I2C1 init failed: {e}")
@@ -204,11 +205,14 @@ class HardwareFactory:
 
             # Allow the SD card to stabilize after power-on before
             # attempting SPI initialization (cold-boot timing).
-            time.sleep_ms(250)
+            sys_cfg = self.config.get("system", {})
+            sd_power_up_ms = sys_cfg.get("sd_power_up_ms", 250)
+            time.sleep_ms(sd_power_up_ms)
 
-            # Retry mount up to 3 times for cards that need extra
-            # power-up time on standalone (non-Thonny) boot.
-            max_retries = 3
+            # Retry mount for cards that need extra power-up time
+            # on standalone (non-Thonny) boot.
+            max_retries = sys_cfg.get("sd_mount_retries", 3)
+            sd_retry_delay_ms = sys_cfg.get("sd_retry_delay_ms", 500)
             for attempt in range(max_retries):
                 ok, sd = mount_sd(self.spi, cs, mount_point)
                 if ok:
@@ -217,7 +221,7 @@ class HardwareFactory:
                     return True
                 if attempt < max_retries - 1:
                     print(f"[HardwareFactory] SD mount attempt {attempt + 1} failed, retrying...")
-                    time.sleep_ms(500)
+                    time.sleep_ms(sd_retry_delay_ms)
 
             self.errors.append("SD card mount failed after retries (will use fallback buffering)")
             return False

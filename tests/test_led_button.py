@@ -522,6 +522,7 @@ class TestServiceReminder:
                 time_provider,
                 handler,
                 days_interval=0,  # Always due
+                blink_after_days=0,  # Blink immediately when due
             )
 
         blink_called = False
@@ -571,6 +572,7 @@ class TestServiceReminder:
                 time_provider,
                 handler,
                 days_interval=0,  # Always due initially
+                blink_after_days=0,  # Blink immediately when due
             )
 
         blink_count = 0
@@ -612,6 +614,7 @@ class TestServiceReminder:
                 time_provider,
                 handler,
                 days_interval=999,  # Start as not-due
+                blink_after_days=0,  # Blink immediately when due
             )
 
         call_count = 0
@@ -676,3 +679,103 @@ class TestServiceReminder:
 
         # After the error, should sleep 60 seconds
         assert 60 in sleep_durations
+
+    @pytest.mark.asyncio
+    async def test_monitor_solid_on_when_due_under_blink_threshold(self, time_provider):
+        """LED is solid on when due but overdue by less than blink_after_days."""
+        from lib.led_button import LEDButtonHandler, ServiceReminder
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            handler = LEDButtonHandler(5, 9)
+            reminder = ServiceReminder(
+                time_provider,
+                handler,
+                days_interval=7,
+                blink_after_days=3,  # Don't blink until 3 days overdue
+            )
+
+        # Mock _days_since_Service to return 8 (1 day past due, under blink threshold)
+        reminder._days_since_Service = lambda: 8
+
+        set_on_called = False
+        original_set_on = handler.set_on
+
+        def tracking_set_on():
+            nonlocal set_on_called
+            set_on_called = True
+            original_set_on()
+
+        handler.set_on = tracking_set_on
+
+        blink_called = False
+
+        async def mock_blink(*args, **kwargs):
+            nonlocal blink_called
+            blink_called = True
+
+        handler.blink_pattern_async = mock_blink
+
+        call_count = 0
+
+        async def limited_sleep(duration):
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 2:
+                raise asyncio.CancelledError()
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with patch("asyncio.sleep", side_effect=limited_sleep):
+                with pytest.raises(asyncio.CancelledError):
+                    await reminder.monitor()
+
+        assert set_on_called, "LED should be solid on when under blink threshold"
+        assert not blink_called, "LED should NOT blink when under blink threshold"
+
+    @pytest.mark.asyncio
+    async def test_monitor_blinks_when_overdue_past_threshold(self, time_provider):
+        """LED blinks when overdue by >= blink_after_days."""
+        from lib.led_button import LEDButtonHandler, ServiceReminder
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            handler = LEDButtonHandler(5, 9)
+            reminder = ServiceReminder(
+                time_provider,
+                handler,
+                days_interval=7,
+                blink_after_days=3,  # Blink after 3 more days overdue
+            )
+
+        # Mock _days_since_Service to return 11 (4 days past threshold)
+        reminder._days_since_Service = lambda: 11
+
+        blink_called = False
+
+        async def mock_blink(*args, **kwargs):
+            nonlocal blink_called
+            blink_called = True
+
+        handler.blink_pattern_async = mock_blink
+
+        call_count = 0
+
+        async def limited_sleep(duration):
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 2:
+                raise asyncio.CancelledError()
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with patch("asyncio.sleep", side_effect=limited_sleep):
+                with pytest.raises(asyncio.CancelledError):
+                    await reminder.monitor()
+
+        assert blink_called, "LED should blink when overdue past blink_after_days"
+
+    def test_blink_after_days_default(self, time_provider):
+        """blink_after_days defaults to 3."""
+        from lib.led_button import LEDButtonHandler, ServiceReminder
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            handler = LEDButtonHandler(5, 9)
+            reminder = ServiceReminder(time_provider, handler)
+        assert reminder.blink_after_days == 3

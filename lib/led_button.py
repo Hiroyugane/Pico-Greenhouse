@@ -295,6 +295,7 @@ class ServiceReminder:
         led_handler: LEDButtonHandler instance
         days_interval: Days between Service reminders
         blink_pattern_ms: LED blink pattern
+        blink_after_days: Days overdue before LED switches from solid to blink
         last_serviced_timestamp: ISO timestamp of last Service
         last_serviced_date: Date tuple (year, month, day) for elapsed days calc
     """
@@ -308,6 +309,7 @@ class ServiceReminder:
         blink_pattern_ms=None,
         storage_path: str = "/service_reminder.txt",
         auto_register_button: bool = True,
+        blink_after_days: int = 3,
     ):
         """
         Initialize Service reminder.
@@ -323,6 +325,8 @@ class ServiceReminder:
                 button callback via register_button_callback().  Set False when
                 the caller wires callbacks externally (e.g. via register_callbacks
                 for multi-function button support).  Default: True.
+            blink_after_days (int): Days overdue before LED switches from
+                solid-on to blinking pattern (default: 3).
 
         Example:
             >>> reminder = ServiceReminder(time_provider, led_handler, days_interval=7)
@@ -332,6 +336,7 @@ class ServiceReminder:
         self.led_handler = led_handler
         self.days_interval = days_interval
         self.blink_pattern_ms = blink_pattern_ms or [5000, 2000]  # SOS
+        self.blink_after_days = blink_after_days
 
         self.storage_path = storage_path
 
@@ -439,14 +444,18 @@ class ServiceReminder:
         Async loop that monitors days elapsed and signals LED.
 
         Checks every hour if reminder is due.
-        When due, plays blink pattern repeatedly until button pressed.
+        When due for < blink_after_days: LED solid on.
+        When overdue by >= blink_after_days: plays blink pattern repeatedly.
         """
         reminder_due = False
+        was_blinking = False
 
         while True:
             try:
                 days_elapsed = self._days_since_Service()
                 is_due = days_elapsed >= self.days_interval
+                days_overdue = days_elapsed - self.days_interval if is_due else 0
+                should_blink = is_due and days_overdue >= self.blink_after_days
 
                 # Detect transition from not-due to due
                 if is_due and not reminder_due:
@@ -455,24 +464,33 @@ class ServiceReminder:
 
                 elif not is_due and reminder_due:
                     reminder_due = False
+                    was_blinking = False
                     self.led_handler.set_off()
                     print("[ServiceReminder] Reminder cleared")
 
-                # When reminder is due, play blink pattern repeatedly
                 if reminder_due:
-                    await self.led_handler.blink_pattern_async(self.blink_pattern_ms)
+                    if should_blink:
+                        # Overdue by >= blink_after_days: blink pattern
+                        if not was_blinking:
+                            was_blinking = True
+                            print(f"[ServiceReminder] {days_overdue}d overdue, switching to blink")
+                        await self.led_handler.blink_pattern_async(self.blink_pattern_ms)
 
-                    # Re-check condition after completing pattern to avoid unnecessary repeats
-                    days_elapsed = self._days_since_Service()
-                    is_due = days_elapsed >= self.days_interval
-                    if not is_due:
-                        reminder_due = False
-                        self.led_handler.set_off()
-                        print("[ServiceReminder] Reminder cleared")
-                        # After clearing, fall back to hourly checks
-                        await asyncio.sleep(3600)
+                        # Re-check after pattern completes
+                        days_elapsed = self._days_since_Service()
+                        is_due = days_elapsed >= self.days_interval
+                        if not is_due:
+                            reminder_due = False
+                            was_blinking = False
+                            self.led_handler.set_off()
+                            print("[ServiceReminder] Reminder cleared")
+                            await asyncio.sleep(3600)
+                        else:
+                            await asyncio.sleep(0.5)
                     else:
-                        await asyncio.sleep(0.5)  # Brief pause before next pattern
+                        # Due but < blink_after_days overdue: solid on
+                        self.led_handler.set_on()
+                        await asyncio.sleep(3600)  # Re-check every hour
                 else:
                     # Not due: check every hour
                     await asyncio.sleep(3600)

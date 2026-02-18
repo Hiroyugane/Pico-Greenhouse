@@ -18,7 +18,7 @@ if False:  # This block exists only for type checking
     from os import mount as _mount_typecheck  # noqa: F401
 
 
-def mount_sd(spi, cs_pin, mount_point: str = "/sd"):
+def mount_sd(spi, cs_pin, mount_point: str = "/sd", debug_callback=None):
     """
     Attempt to mount SD card on specified mount point.
 
@@ -26,6 +26,7 @@ def mount_sd(spi, cs_pin, mount_point: str = "/sd"):
         spi: machine.SPI instance (already initialized)
         cs_pin: machine.Pin object or int for chip select
         mount_point (str): Mount point path (default: '/sd')
+        debug_callback: Optional callable(msg) for debug output
 
     Returns:
         tuple: (bool, SDCard | None) -- success flag and the SDCard instance
@@ -33,7 +34,10 @@ def mount_sd(spi, cs_pin, mount_point: str = "/sd"):
     try:
         if not _IS_DEVICE:
             os.makedirs(mount_point, exist_ok=True)
-            print(f"[SD] Host mount simulated at {mount_point}")
+            if debug_callback:
+                debug_callback(f"Host mount simulated at {mount_point}")
+            else:
+                print(f"[SD] Host mount simulated at {mount_point}")
             return True, None
         from machine import Pin
 
@@ -45,18 +49,26 @@ def mount_sd(spi, cs_pin, mount_point: str = "/sd"):
 
         sd = sdcard.SDCard(spi, cs_pin)
         os.mount(sd, mount_point)  # type: ignore[attr-defined]
+        if debug_callback:
+            debug_callback(f"SD mounted at {mount_point}")
         return True, sd
     except Exception as e:
-        print(f"[SD] Mount failed at {mount_point}: {e}")
+        if debug_callback:
+            debug_callback(f"SD mount failed at {mount_point}: {e}")
+        else:
+            print(f"[SD] Mount failed at {mount_point}: {e}")
         return False, None
 
 
-def is_mounted(sd, spi=None, return_instances: bool = False):
+def is_mounted(sd, spi=None, return_instances: bool = False, debug_callback=None):
     """
     Check if SD card is inserted in reader.
 
     If an existing SDCard or SPI instance is provided, reuse it to avoid
     reinitializing hardware and contending with active mounts.
+
+    Args:
+        debug_callback: Optional callable(msg) for debug output
     """
     try:
         if not _IS_DEVICE:
@@ -104,11 +116,17 @@ def is_mounted(sd, spi=None, return_instances: bool = False):
 
         if sd is None:
             sd, spi = _init_sd_local()
+            if debug_callback:
+                debug_callback("is_mounted: created new SD/SPI instances")
 
         try:
             _read_mbr(sd)
+            if debug_callback:
+                debug_callback("is_mounted: MBR read OK")
             return (True, sd, spi) if return_instances else True
         except Exception:
+            if debug_callback:
+                debug_callback("is_mounted: MBR failed, reinitializing")
             _safe_umount()
             try:
                 if spi is not None:

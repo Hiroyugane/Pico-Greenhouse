@@ -288,3 +288,50 @@ class TestValidateConfig:
                 config.validate_config()
         finally:
             config.DEVICE_CONFIG["system"]["button_poll_ms"] = original
+
+    def test_invalid_log_level_raises(self):
+        """event_logger.log_level with invalid value raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["event_logger"]["log_level"]
+        config.DEVICE_CONFIG["event_logger"]["log_level"] = "TRACE"
+        try:
+            with pytest.raises(ValueError, match="log_level"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["event_logger"]["log_level"] = original
+
+    def test_debug_to_sd_non_bool_raises(self):
+        """event_logger.debug_to_sd with non-bool raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["event_logger"]["debug_to_sd"]
+        config.DEVICE_CONFIG["event_logger"]["debug_to_sd"] = "yes"
+        try:
+            with pytest.raises(ValueError, match="debug_to_sd"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["event_logger"]["debug_to_sd"] = original
+
+    def test_zero_debug_flush_threshold_raises(self):
+        """event_logger.debug_flush_threshold = 0 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["event_logger"]["debug_flush_threshold"]
+        config.DEVICE_CONFIG["event_logger"]["debug_flush_threshold"] = 0
+        try:
+            with pytest.raises(ValueError, match="debug_flush_threshold"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["event_logger"]["debug_flush_threshold"] = original
+
+    def test_valid_debug_log_level(self):
+        """event_logger.log_level='DEBUG' passes validation."""
+        import config
+
+        original = config.DEVICE_CONFIG["event_logger"]["log_level"]
+        config.DEVICE_CONFIG["event_logger"]["log_level"] = "DEBUG"
+        try:
+            assert config.validate_config() is True
+        finally:
+            config.DEVICE_CONFIG["event_logger"]["log_level"] = original

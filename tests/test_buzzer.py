@@ -31,10 +31,10 @@ class TestBuzzerControllerInit:
         buzzer_controller.pwm.duty_u16.assert_called_with(0)
 
     def test_init_logs(self, buzzer_controller, mock_event_logger):
-        """Logger.info called during init."""
-        mock_event_logger.info.assert_called()
+        """Logger.debug called during init."""
+        mock_event_logger.debug.assert_called()
         # Find the Buzzer init log call
-        calls = [c for c in mock_event_logger.info.call_args_list if c[0][0] == "Buzzer"]
+        calls = [c for c in mock_event_logger.debug.call_args_list if c[0][0] == "Buzzer"]
         assert len(calls) >= 1
 
     def test_init_no_logger(self):
@@ -281,7 +281,7 @@ class TestBuzzerMuteEnable:
         """mute/unmute log events."""
         buzzer_controller.mute()
         buzzer_controller.unmute()
-        info_calls = [c for c in mock_event_logger.info.call_args_list if "Muted" in str(c) or "Unmuted" in str(c)]
+        info_calls = [c for c in mock_event_logger.debug.call_args_list if "Muted" in str(c) or "Unmuted" in str(c)]
         assert len(info_calls) >= 2
 
 
@@ -302,5 +302,5 @@ class TestBuzzerDeinit:
     def test_deinit_logs(self, buzzer_controller, mock_event_logger):
         """deinit() logs deinitialization."""
         buzzer_controller.deinit()
-        deinit_calls = [c for c in mock_event_logger.info.call_args_list if "Deinitialized" in str(c)]
+        deinit_calls = [c for c in mock_event_logger.debug.call_args_list if "Deinitialized" in str(c)]
         assert len(deinit_calls) >= 1

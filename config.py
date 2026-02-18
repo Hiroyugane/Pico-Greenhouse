@@ -127,6 +127,9 @@ DEVICE_CONFIG = {
         "max_size": 50000,  # Max log file size (bytes) before rotation
         "info_flush_threshold": 5,  # Flush after N info-level entries buffered
         "warn_flush_threshold": 3,  # Flush after N warning-level entries buffered
+        "log_level": "INFO",  # Minimum severity: DEBUG, INFO, WARN, ERR
+        "debug_to_sd": False,  # Whether DEBUG messages are written to SD card
+        "debug_flush_threshold": 10,  # Flush after N debug entries buffered (when debug_to_sd=True)
     },
     # Buzzer Configuration (passive buzzer via PWM)
     "buzzer": {
@@ -240,7 +243,15 @@ def validate_config():
         ],
         "buzzer": ["enabled", "default_freq", "default_duty_pct"],
         "buffer_manager": ["sd_mount_point", "fallback_path", "max_buffer_entries"],
-        "event_logger": ["logfile", "max_size", "info_flush_threshold", "warn_flush_threshold"],
+        "event_logger": [
+            "logfile",
+            "max_size",
+            "info_flush_threshold",
+            "warn_flush_threshold",
+            "log_level",
+            "debug_to_sd",
+            "debug_flush_threshold",
+        ],
         "output_pins": [
             "relay_fan_1",
             "relay_fan_2",
@@ -314,6 +325,15 @@ def validate_config():
 
     if DEVICE_CONFIG["event_logger"]["warn_flush_threshold"] < 1:
         raise ValueError("event_logger.warn_flush_threshold must be >= 1")
+
+    if DEVICE_CONFIG["event_logger"]["log_level"] not in ("DEBUG", "INFO", "WARN", "ERR"):
+        raise ValueError("event_logger.log_level must be one of: DEBUG, INFO, WARN, ERR")
+
+    if not isinstance(DEVICE_CONFIG["event_logger"]["debug_to_sd"], bool):
+        raise ValueError("event_logger.debug_to_sd must be a bool")
+
+    if DEVICE_CONFIG["event_logger"]["debug_flush_threshold"] < 1:
+        raise ValueError("event_logger.debug_flush_threshold must be >= 1")
 
     if DEVICE_CONFIG["dht_logger"]["retry_delay_s"] <= 0:
         raise ValueError("dht_logger.retry_delay_s must be > 0")

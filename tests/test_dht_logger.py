@@ -33,7 +33,7 @@ class TestDHTLoggerInit:
                 with patch.object(buffer_manager, "has_data_for", return_value=False):
                     DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
         # Should log fallback message, not primary
-        info_calls = [str(c) for c in mock_event_logger.info.call_args_list]
+        info_calls = [str(c) for c in mock_event_logger.debug.call_args_list]
         assert any("fallback" in c for c in info_calls)
 
     def test_init_sets_interval(self, time_provider, buffer_manager, mock_event_logger):

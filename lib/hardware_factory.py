@@ -46,7 +46,7 @@ class HardwareFactory:
         errors (list): Errors encountered during initialization
     """
 
-    def __init__(self, config=None):
+    def __init__(self, config=None, debug_callback=None):
         """
         Initialize hardware factory with configuration.
 
@@ -54,6 +54,7 @@ class HardwareFactory:
 
         Args:
             config (dict, optional): Device configuration (default: DEVICE_CONFIG from config.py)
+            debug_callback: Optional callable(msg) for debug output (pre-logger)
         """
         self.config = config or DEVICE_CONFIG
         self.i2c1 = None
@@ -63,6 +64,7 @@ class HardwareFactory:
         self.sd_mounted = False
         self.pins = {}
         self.errors = []
+        self._debug = debug_callback
 
     def setup(self) -> bool:
         """
@@ -120,6 +122,8 @@ class HardwareFactory:
 
             i2c_freq = self.config.get("system", {}).get("i2c_freq", 100000)
             self.i2c1 = I2C(i2c_port, sda=Pin(sda), scl=Pin(scl), freq=i2c_freq)
+            if self._debug:
+                self._debug(f"I2C1 init: port={i2c_port}, sda={sda}, scl={scl}, freq={i2c_freq}")
             return True
         except Exception as e:
             self.errors.append(f"I2C1 init failed: {e}")
@@ -148,6 +152,8 @@ class HardwareFactory:
             # Verify RTC is responding
             result = self.rtc.ReadTime(1)
             if isinstance(result, tuple) and len(result) >= 7:
+                if self._debug:
+                    self._debug(f"RTC responding: ReadTime={result}")
                 return True
             else:
                 self.errors.append("RTC not responding to ReadTime()")
@@ -171,6 +177,8 @@ class HardwareFactory:
             miso = spi_config.get("miso", 12)
 
             self.spi = SPI(spi_id, baudrate=baudrate, sck=Pin(sck), mosi=Pin(mosi), miso=Pin(miso))
+            if self._debug:
+                self._debug(f"SPI init: id={spi_id}, baud={baudrate}, sck={sck}, mosi={mosi}, miso={miso}")
             return True
         except Exception as e:
             self.errors.append(f"SPI init failed: {e}")
@@ -214,10 +222,12 @@ class HardwareFactory:
             max_retries = sys_cfg.get("sd_mount_retries", 3)
             sd_retry_delay_ms = sys_cfg.get("sd_retry_delay_ms", 500)
             for attempt in range(max_retries):
-                ok, sd = mount_sd(self.spi, cs, mount_point)
+                ok, sd = mount_sd(self.spi, cs, mount_point, debug_callback=self._debug)
                 if ok:
                     self.sd = sd
                     self.sd_mounted = True
+                    if self._debug:
+                        self._debug(f"SD mounted: attempt={attempt + 1}, mount_point={mount_point}")
                     return True
                 if attempt < max_retries - 1:
                     print(f"[HardwareFactory] SD mount attempt {attempt + 1} failed, retrying...")
@@ -257,6 +267,8 @@ class HardwareFactory:
                         pin = Pin(pin_num, Pin.OUT)
                         pin.value(1 if initial_high else 0)
                         self.pins[pin_name] = pin
+                        if self._debug:
+                            self._debug(f"Pin {pin_name}: GP{pin_num} OUT, initial={'HIGH' if initial_high else 'LOW'}")
                     except Exception as e:
                         self.errors.append(f"Failed to init output pin {pin_name}: {e}")
 
@@ -306,12 +318,14 @@ class HardwareFactory:
         Returns True if SD is accessible after refresh, False otherwise.
         """
         try:
-            result = is_mounted(self.sd, self.spi, return_instances=True)
+            result = is_mounted(self.sd, self.spi, return_instances=True, debug_callback=self._debug)
             if isinstance(result, tuple) and len(result) == 3:
                 ok, sd, spi = result
                 self.sd = sd
                 self.spi = spi
                 self.sd_mounted = ok
+                if self._debug:
+                    self._debug(f"refresh_sd: ok={ok}")
                 return ok
 
             self.sd_mounted = bool(result)

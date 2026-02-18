@@ -103,7 +103,7 @@ class DHTLogger:
         try:
             if not self._file_exists():
                 self._create_file()
-            logger.info("DHTLogger", f"Initialized: {self.filename}")
+            logger.debug("DHTLogger", f"Initialized: {self.filename}")
         except Exception as e:
             logger.error("DHTLogger", f"Init error: {e}")
 
@@ -120,6 +120,7 @@ class DHTLogger:
 
             base = self.filename_base.replace(".csv", "")
             self.filename = f"{base}_{year:04d}-{month:02d}-{day:02d}.csv"
+            self.logger.debug("DHTLogger", f"Filename updated: {self.filename}")
         except Exception as e:
             self.logger.error("DHTLogger", f"Error updating filename: {e}")
             self.filename = self.filename_base
@@ -129,8 +130,11 @@ class DHTLogger:
         relpath = self._strip_sd_prefix(self.filename)
         # Fast path: already created this session (avoids unreliable FAT VFS check)
         if relpath in self._created_files:
+            self.logger.debug("DHTLogger", f"_file_exists({relpath}): fast-path hit")
             return True
-        return self.buffer_manager.has_data_for(relpath)
+        exists = self.buffer_manager.has_data_for(relpath)
+        self.logger.debug("DHTLogger", f"_file_exists({relpath}): has_data_for={exists}")
+        return exists
 
     def _resolve_path(self, file_path: str) -> str:
         if sys.implementation.name == "micropython":
@@ -153,9 +157,9 @@ class DHTLogger:
             wrote_to_primary = self.buffer_manager.write(relpath, "Timestamp,Temperature,Humidity\n")
             self._created_files.add(relpath)
             if wrote_to_primary:
-                self.logger.info("DHTLogger", f"Created CSV file: {self.filename}")
+                self.logger.debug("DHTLogger", f"Created CSV file: {self.filename}")
             else:
-                self.logger.info("DHTLogger", f"Created CSV header (fallback): {self.filename}")
+                self.logger.debug("DHTLogger", f"Created CSV header (fallback): {self.filename}")
         except Exception as e:
             self.logger.error("DHTLogger", f"Failed to create file: {e}")
             raise
@@ -179,11 +183,12 @@ class DHTLogger:
                 if -40 <= temp <= 80 and 0 <= hum <= 100:
                     self._consecutive_failures = 0
                     self._update_dht_status()
+                    self.logger.debug("DHTLogger", f"Sensor read OK: {temp:.1f}°C, {hum:.1f}%")
                     return temp, hum
                 else:
                     self.logger.warning("DHTLogger", f"Reading out of range: {temp}°C, {hum}%")
             except Exception as e:
-                self.logger.warning("DHTLogger", f"Read attempt {attempt + 1}/{self.max_retries} failed: {e}")
+                self.logger.debug("DHTLogger", f"Read attempt {attempt + 1}/{self.max_retries} failed: {e}")
                 if attempt < self.max_retries - 1:
                     import time  # importing time here to avoid global import in async context - useful?
 
@@ -199,9 +204,11 @@ class DHTLogger:
         if self.status_manager is None:
             return
         if self._consecutive_failures >= self._dht_error_threshold:
+            self.logger.debug("DHTLogger", f"Status: error (failures={self._consecutive_failures})")
             self.status_manager.set_error("dht_dead", True)
             self.status_manager.set_warning("dht_intermittent", False)
         elif self._consecutive_failures >= self._dht_warn_threshold:
+            self.logger.debug("DHTLogger", f"Status: warning (failures={self._consecutive_failures})")
             self.status_manager.set_warning("dht_intermittent", True)
             self.status_manager.set_error("dht_dead", False)
         else:
@@ -228,6 +235,7 @@ class DHTLogger:
                 self.logger.info("DHTLogger", f"Date changed - switched from {old_filename} to {self.filename}")
                 return True
 
+            self.logger.debug("DHTLogger", "Date rollover check: no change")
             return False
         except Exception as e:
             self.logger.error("DHTLogger", f"Error during date check: {e}")
@@ -275,19 +283,24 @@ class DHTLogger:
                     relpath = self._strip_sd_prefix(self.filename)
                     row = f"{timestamp},{temp:.1f},{hum:.1f}\n"
 
+                    self.logger.debug("DHTLogger", f"Writing row to {relpath}: {row.rstrip()}")
+
                     # Ensure CSV file exists on SD (recreate header if
                     # init-time creation failed, e.g. SD timing issues).
                     if not self._file_exists():
                         try:
                             self._create_file()
-                        except Exception:
+                        except Exception as exc:
+                            self.logger.debug("DHTLogger", f"CSV re-create failed (will use fallback): {exc}")
                             pass  # write() below will route to fallback
 
                     # Write to storage via BufferManager
                     # BufferManager handles: primary → fallback → in-memory buffer
                     try:
                         wrote_primary = self.buffer_manager.write(relpath, row)
-                        if not wrote_primary:
+                        if wrote_primary:
+                            self.logger.debug("DHTLogger", f"Primary write OK for {relpath}")
+                        else:
                             self.logger.warning("DHTLogger", f"Write went to fallback (SD unavailable?) for {relpath}")
                     except Exception as e:
                         self.logger.error("DHTLogger", f"Failed to write: {e}")

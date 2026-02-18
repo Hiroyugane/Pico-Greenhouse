@@ -184,7 +184,14 @@ class RTCTimeProvider(TimeProvider):
     Handles format conversions internally to provide clean API.
     """
 
-    def __init__(self, rtc, sync_interval_s: int = 3600, rtc_min_year: int = 2025, rtc_max_year: int = 2035):
+    def __init__(
+        self,
+        rtc,
+        sync_interval_s: int = 3600,
+        rtc_min_year: int = 2025,
+        rtc_max_year: int = 2035,
+        debug_callback=None,
+    ):
         """
         Wrap an existing ds3231.RTC instance.
 
@@ -193,6 +200,7 @@ class RTCTimeProvider(TimeProvider):
             sync_interval_s (int): RTC-to-Pico clock sync interval in seconds (default: 3600)
             rtc_min_year (int): Minimum valid RTC year (default: 2025)
             rtc_max_year (int): Maximum valid RTC year (default: 2035)
+            debug_callback: Optional callable(msg) for debug output (avoids circular dep with EventLogger)
 
         Example:
             rtc_hw = ds3231.RTC(sda_pin=0, scl_pin=1)
@@ -204,6 +212,7 @@ class RTCTimeProvider(TimeProvider):
         self._time_valid = True
         self._rtc_min_year = rtc_min_year
         self._rtc_max_year = rtc_max_year
+        self._debug = debug_callback
         self._sync_from_rtc(force=True)
 
     def _sync_from_rtc(self, force: bool = False) -> None:
@@ -217,6 +226,8 @@ class RTCTimeProvider(TimeProvider):
         if not force and self._last_sync_epoch is not None and now is not None:
             try:
                 if (now - self._last_sync_epoch) < self._sync_interval_s:
+                    if self._debug:
+                        self._debug("RTC sync skipped: interval not elapsed")
                     return
             except Exception:
                 pass
@@ -235,6 +246,11 @@ class RTCTimeProvider(TimeProvider):
                 )
                 # Validate year range to detect RTC battery loss / reset
                 self._time_valid = self._rtc_min_year <= year <= self._rtc_max_year
+                if self._debug:
+                    self._debug(
+                        f"RTC ReadTime: {year:04d}-{month:02d}-{day:02d} "
+                        f"{hour:02d}:{minute:02d}:{sec:02d}, valid={self._time_valid}"
+                    )
                 try:
                     import machine
 
@@ -247,6 +263,8 @@ class RTCTimeProvider(TimeProvider):
                     self._last_sync_epoch = now
                 return
         except Exception:
+            if self._debug:
+                self._debug("RTC ReadTime failed")
             pass
 
         if now is not None:

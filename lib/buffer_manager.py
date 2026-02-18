@@ -29,7 +29,13 @@ class BufferManager:
         _fallback_available (bool): Cached state of fallback file availability
     """
 
-    def __init__(self, sd_mount_point="/sd", fallback_path="/local/fallback.csv", max_buffer_entries=1000):
+    def __init__(
+        self,
+        sd_mount_point="/sd",
+        fallback_path="/local/fallback.csv",
+        max_buffer_entries=1000,
+        debug_callback=None,
+    ):
         """
         Initialize BufferManager with SD and fallback paths.
 
@@ -40,6 +46,7 @@ class BufferManager:
             sd_mount_point (str): Mount point for SD card (default: '/sd')
             fallback_path (str): Local fallback file path (default: '/local/fallback.csv')
             max_buffer_entries (int): Max in-memory buffer size (default: 1000)
+            debug_callback: Optional callable(str) for debug output (avoids circular dep with EventLogger)
         """
         # Host compatibility: map /sd and /local to local folders on CPython
         if self._is_host():
@@ -49,6 +56,7 @@ class BufferManager:
         self.sd_mount_point = sd_mount_point
         self.fallback_path = fallback_path
         self.max_buffer_entries = max_buffer_entries
+        self._debug = debug_callback
 
         if self._is_host():
             try:
@@ -88,8 +96,13 @@ class BufferManager:
             with open(test_file, "r") as f:
                 readback = f.read()
             os.remove(test_file)
-            return readback == test_data
-        except Exception:
+            result = readback == test_data
+            if self._debug:
+                self._debug(f"is_primary_available: verify={'OK' if result else 'MISMATCH'}")
+            return result
+        except Exception as exc:
+            if self._debug:
+                self._debug(f"is_primary_available: FAILED ({exc})")
             return False
 
     def _ensure_fallback_dir(self) -> bool:
@@ -105,8 +118,12 @@ class BufferManager:
             fallback_dir = self._path_dirname(self.fallback_path) or "."
             if not self._dir_exists(fallback_dir):
                 os.makedirs(fallback_dir, exist_ok=True)
+                if self._debug:
+                    self._debug(f"_ensure_fallback_dir: created {fallback_dir}")
             return True
-        except Exception:
+        except Exception as exc:
+            if self._debug:
+                self._debug(f"_ensure_fallback_dir: FAILED ({exc})")
             return False
 
     def _dir_exists(self, path: str) -> bool:
@@ -196,19 +213,23 @@ class BufferManager:
             True if data for this relpath already exists somewhere.
         """
         if relpath.startswith("/sd/"):
-            relpath = relpath[4:]
+            relpath = relpath[4:]  # Remove '/sd/' prefix for consistent handling
 
         # 1. Check primary
         primary_path = f"{self.sd_mount_point}/{relpath}"
         try:
             with open(primary_path, "r") as f:
                 if f.read(1):
+                    if self._debug:
+                        self._debug(f"has_data_for({relpath}): found on primary")
                     return True
         except Exception:
             pass
 
         # 2. Check in-memory buffers
         if relpath in self._buffers and self._buffers[relpath]:
+            if self._debug:
+                self._debug(f"has_data_for({relpath}): found in RAM buffer")
             return True
 
         # 3. Check fallback file for entries tagged with this relpath
@@ -216,10 +237,14 @@ class BufferManager:
             with open(self.fallback_path, "r") as f:
                 for line in f:
                     if line.startswith(f"{relpath}|"):
+                        if self._debug:
+                            self._debug(f"has_data_for({relpath}): found in fallback")
                         return True
         except Exception:
             pass
 
+        if self._debug:
+            self._debug(f"has_data_for({relpath}): not found anywhere")
         return False
 
     def write(self, relpath: str, data: str) -> bool:
@@ -270,10 +295,17 @@ class BufferManager:
         # silently route data to fallback.
         primary_ok = self.is_primary_available()
 
+        if self._debug:
+            self._debug(f"write({relpath}, {len(data)}B): primary_ok={primary_ok}")
+
         if primary_ok:
             if self._has_fallback_entries():
+                if self._debug:
+                    self._debug("write: migrating fallback entries before primary write")
                 self.migrate_fallback()
             if self._buffers:
+                if self._debug:
+                    self._debug(f"write: flushing {sum(len(v) for v in self._buffers.values())} RAM entries")
                 self.flush()
 
         # Try primary first
@@ -282,9 +314,13 @@ class BufferManager:
                 with open(primary_path, "a") as f:
                     f.write(data)
                 self.writes_to_primary += 1
+                if self._debug:
+                    self._debug(f"write: primary OK -> {primary_path}")
                 return True
-            except Exception:
+            except Exception as exc:
                 # Primary write failed (e.g., file locked, permissions)
+                if self._debug:
+                    self._debug(f"write: primary FAILED despite ok=True ({exc})")
                 pass
 
         # Primary unavailable or write failed; try fallback file first,
@@ -299,15 +335,22 @@ class BufferManager:
                 with open(self.fallback_path, "a") as f:
                     for buffered in self._buffers[relpath]:
                         f.write(f"{relpath}|{buffered}")
-                self.writes_to_fallback += len(self._buffers[relpath])
+                drained = len(self._buffers[relpath])
+                self.writes_to_fallback += drained
                 self._buffers[relpath] = []
+                if self._debug:
+                    self._debug(f"write: drained {drained} RAM entries to fallback")
 
             with open(self.fallback_path, "a") as f:
                 f.write(f"{relpath}|{data}")  # Include relpath in fallback for migration
             self.writes_to_fallback += 1
+            if self._debug:
+                self._debug(f"write: fallback OK ({self.writes_to_fallback} total)")
             return False
-        except Exception:
+        except Exception as exc:
             # Both primary and fallback failed; buffer in RAM as last resort
+            if self._debug:
+                self._debug(f"write: both FAILED ({exc}), buffering in RAM")
             if relpath not in self._buffers:
                 self._buffers[relpath] = []
             self._buffers[relpath].append(data)
@@ -319,6 +362,8 @@ class BufferManager:
                 for path_key, entries in self._buffers.items():
                     if entries:
                         entries.pop(0)
+                        if self._debug:
+                            self._debug(f"write: RAM overflow, dropped oldest from {path_key}")
                         break
 
             self.write_failures += 1
@@ -365,10 +410,14 @@ class BufferManager:
                     with open(primary_path, "a") as f:
                         for entry in self._buffers[path]:
                             f.write(entry)
+                    if self._debug:
+                        self._debug(f"flush: {len(self._buffers[path])} entries -> primary {primary_path}")
                     self._buffers[path] = []
                     flushed_to_primary = True
                     continue
-                except Exception:
+                except Exception as exc:
+                    if self._debug:
+                        self._debug(f"flush: primary write FAILED for {path} ({exc})")
                     pass  # Fall through to fallback
 
             # Primary unavailable or write failed — drain to fallback file
@@ -377,9 +426,13 @@ class BufferManager:
                     with open(self.fallback_path, "a") as f:
                         for entry in self._buffers[path]:
                             f.write(f"{path}|{entry}")
+                    if self._debug:
+                        self._debug(f"flush: {len(self._buffers[path])} entries -> fallback for {path}")
                     self.writes_to_fallback += len(self._buffers[path])
                     self._buffers[path] = []
-                except Exception:
+                except Exception as exc:
+                    if self._debug:
+                        self._debug(f"flush: fallback write FAILED for {path} ({exc})")
                     pass  # Entries stay in RAM as last resort
 
         return flushed_to_primary
@@ -418,6 +471,9 @@ class BufferManager:
             if not lines:
                 return 0
 
+            if self._debug:
+                self._debug(f"migrate_fallback: {len(lines)} lines to migrate")
+
             # Migrate each entry
             for line in lines:
                 try:
@@ -431,7 +487,9 @@ class BufferManager:
                         f.write(data)
 
                     entries_migrated += 1
-                except Exception:
+                except Exception as exc:
+                    if self._debug:
+                        self._debug(f"migrate_fallback: malformed entry skipped ({exc})")
                     pass  # Skip malformed entries
 
             # Clear fallback file on success
@@ -440,11 +498,17 @@ class BufferManager:
                     with open(self.fallback_path, "w") as f:
                         f.write("")
                     self.fallback_migrations += 1
-                except Exception:
+                    if self._debug:
+                        self._debug(f"migrate_fallback: {entries_migrated} entries migrated, fallback cleared")
+                except Exception as exc:
+                    if self._debug:
+                        self._debug(f"migrate_fallback: fallback clear FAILED ({exc})")
                     pass
 
             return entries_migrated
-        except Exception:
+        except Exception as exc:
+            if self._debug:
+                self._debug(f"migrate_fallback: outer FAILED ({exc})")
             return 0
 
     def rename(self, old_relpath: str, new_relpath: str) -> bool:

@@ -5,14 +5,36 @@
 # Uses dependency injection for TimeProvider and BufferManager.
 # Decoupled from global RTC and SD initialization.
 
+# ── Log-level constants ──────────────────────────────────────────────
+LOG_DEBUG = 0
+LOG_INFO = 1
+LOG_WARN = 2
+LOG_ERR = 3
+
+LEVEL_NAMES = {
+    "DEBUG": LOG_DEBUG,
+    "INFO": LOG_INFO,
+    "WARN": LOG_WARN,
+    "ERR": LOG_ERR,
+}
+
 
 class EventLogger:
     """
     Centralized system event logger.
 
     Logs events to console and SD card (via BufferManager) with timestamps.
-    Supports three severity levels: info, warning, error.
-    Implements buffering and log rotation.
+    Supports four severity levels: debug, info, warning, error.
+    Implements buffering, log-level gating, and log rotation.
+
+    Level gating (``log_level``):
+        DEBUG < INFO < WARN < ERR.  Messages below the configured level
+        are silently discarded.
+
+    Debug-to-SD (``debug_to_sd``):
+        When *False* (default), ``debug()`` messages are printed to the
+        console but never buffered or written to SD — keeping the card
+        lean in normal operation.  Set *True* to persist debug output.
 
     Dependencies injected:
     - time_provider: For consistent timestamp formatting
@@ -36,6 +58,9 @@ class EventLogger:
         status_manager=None,
         info_flush_threshold: int = 5,
         warn_flush_threshold: int = 3,
+        log_level: str = "INFO",
+        debug_to_sd: bool = False,
+        debug_flush_threshold: int = 10,
     ):
         """
         Initialize EventLogger with dependency injection.
@@ -50,6 +75,9 @@ class EventLogger:
             status_manager: StatusManager instance for LED feedback (optional)
             info_flush_threshold (int): Flush after N info entries buffered (default: 5)
             warn_flush_threshold (int): Flush after N warning entries buffered (default: 3)
+            log_level (str): Minimum level to emit — "DEBUG", "INFO", "WARN", or "ERR" (default: "INFO")
+            debug_to_sd (bool): Whether debug messages are buffered/written to SD (default: False)
+            debug_flush_threshold (int): Flush after N debug entries buffered (default: 10)
         """
         self.time_provider = time_provider
         self.buffer_manager = buffer_manager
@@ -61,8 +89,13 @@ class EventLogger:
         self.status_manager = status_manager
         self.info_flush_threshold = info_flush_threshold
         self.warn_flush_threshold = warn_flush_threshold
+        self._level = LEVEL_NAMES.get(log_level, LOG_INFO)
+        self._debug_to_sd = debug_to_sd
+        self.debug_flush_threshold = debug_flush_threshold
 
-        print(f"[EventLogger] Initialized: {self.logfile}")
+        print(f"[EventLogger] Initialized: {self.logfile} (level={log_level}, debug_to_sd={debug_to_sd})")
+
+    # ── Formatting helpers ────────────────────────────────────────────
 
     def _get_timestamp(self) -> str:
         """
@@ -73,8 +106,49 @@ class EventLogger:
         """
         try:
             return self.time_provider.now_timestamp()
-        except Exception:
+        except Exception as exc:
+            # Use raw print to avoid recursion through debug()
+            print(f"[EventLogger] _get_timestamp error: {exc}")
             return "TIME_ERROR"
+
+    def _format(self, level_tag: str, module: str, message: str) -> str:
+        """
+        Build a formatted log line.
+
+        Args:
+            level_tag: One of "DEBUG", "INFO", "WARN", "ERR"
+            module: Module/component name
+            message: Log message
+
+        Returns:
+            str: Formatted log entry with trailing newline
+        """
+        timestamp = self._get_timestamp()
+        return f"[{timestamp}] [{level_tag}] [{module}] {message}\n"
+
+    # ── Public logging methods ────────────────────────────────────────
+
+    def debug(self, module: str, message: str) -> None:
+        """
+        Log debug/diagnostic message (lowest severity).
+
+        When ``debug_to_sd`` is *False* (default), the message is
+        printed to console but **not** buffered or written to SD.
+        When *True*, it follows the same buffer→flush pipeline as
+        ``info()`` using ``debug_flush_threshold``.
+
+        Args:
+            module (str): Module/component name
+            message (str): Debug message
+        """
+        if self._level > LOG_DEBUG:
+            return
+        log_entry = self._format("DEBUG", module, message)
+        print(log_entry.rstrip())
+        if self._debug_to_sd:
+            self.buffer.append(log_entry)
+            if len(self.buffer) >= self.debug_flush_threshold:
+                self.flush()
 
     def info(self, module: str, message: str) -> None:
         """
@@ -84,8 +158,9 @@ class EventLogger:
             module (str): Module/component name
             message (str): Log message
         """
-        timestamp = self._get_timestamp()
-        log_entry = f"[{timestamp}] [INFO] [{module}] {message}\n"
+        if self._level > LOG_INFO:
+            return
+        log_entry = self._format("INFO", module, message)
         print(log_entry.rstrip())
         self.buffer.append(log_entry)
 
@@ -100,8 +175,9 @@ class EventLogger:
             module (str): Module/component name
             message (str): Warning message
         """
-        timestamp = self._get_timestamp()
-        log_entry = f"[{timestamp}] [WARN] [{module}] {message}\n"
+        if self._level > LOG_WARN:
+            return
+        log_entry = self._format("WARN", module, message)
         print(log_entry.rstrip())
         self.buffer.append(log_entry)
 
@@ -118,14 +194,16 @@ class EventLogger:
             module (str): Module/component name
             message (str): Error message
         """
-        timestamp = self._get_timestamp()
-        log_entry = f"[{timestamp}] [ERR] [{module}] {message}\n"
+        # error() is never gated — always emitted regardless of _level
+        log_entry = self._format("ERR", module, message)
         print(log_entry.rstrip())
         self.buffer.append(log_entry)
         self.flush()  # Flush errors immediately
 
         if self.status_manager is not None:
             self.status_manager.set_error("logged_error", True)
+
+    # ── Flush / rotation ──────────────────────────────────────────────
 
     def flush(self) -> None:
         """
@@ -139,12 +217,16 @@ class EventLogger:
 
         # If buffer_manager not yet initialized, skip persistent write
         if self.buffer_manager is None:
+            count = len(self.buffer)
             self.buffer = []
+            # Use raw print to avoid recursion
+            print(f"[EventLogger] flush: discarded {count} entries (no buffer_manager)")
             return
 
         try:
             # Normalize logfile path (strip only '/sd/' prefix)
             relpath = self._strip_sd_prefix(self.logfile)
+            count = len(self.buffer)
 
             for entry in self.buffer:
                 self.buffer_manager.write(relpath, entry)

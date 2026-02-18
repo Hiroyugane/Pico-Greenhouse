@@ -564,11 +564,11 @@ class TestStatusManagerLoggerIntegration:
         sm.set_logger(logger)
 
         sm.set_sd_status(False)
-        logger.info.assert_called_with("StatusMgr", "SD status changed: FAILED")
-        logger.info.reset_mock()
+        logger.debug.assert_called_with("StatusMgr", "SD status changed: FAILED")
+        logger.debug.reset_mock()
 
         sm.set_sd_status(True)
-        logger.info.assert_called_with("StatusMgr", "SD status changed: healthy")
+        logger.debug.assert_called_with("StatusMgr", "SD status changed: healthy")
 
     def test_sd_same_status_not_logged(self):
         """SD status set to same value doesn't produce log."""

@@ -1,5 +1,6 @@
 # Tests for lib/event_logger.py
-# Covers info/warning/error logging, flush thresholds, rotation, error paths
+# Covers info/warning/error logging, flush thresholds, rotation, error paths,
+# debug level, level gating, and _format helper.
 
 from unittest.mock import Mock, patch
 
@@ -192,3 +193,153 @@ class TestEventLoggerStripPrefix:
         from lib.event_logger import EventLogger
 
         assert EventLogger._strip_sd_prefix("system.log") == "system.log"
+
+
+class TestEventLoggerDebug:
+    """Tests for debug() method and debug_to_sd behavior."""
+
+    def test_debug_prints_to_console(self, time_provider, buffer_manager):
+        """debug() prints to console with [DEBUG] tag when log_level=DEBUG."""
+        from lib.event_logger import EventLogger
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            logger = EventLogger(time_provider, buffer_manager, logfile="/sd/test.log", log_level="DEBUG")
+            import io
+            import sys
+
+            captured = io.StringIO()
+            sys.stdout = captured
+            try:
+                logger.debug("TEST", "debug message")
+            finally:
+                sys.stdout = sys.__stdout__
+            output = captured.getvalue()
+            assert "[DEBUG]" in output
+            assert "debug message" in output
+
+    def test_debug_suppressed_at_info_level(self, time_provider, buffer_manager, capsys):
+        """debug() is suppressed when log_level=INFO (default)."""
+        from lib.event_logger import EventLogger
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            logger = EventLogger(time_provider, buffer_manager, logfile="/sd/test.log", log_level="INFO")
+            logger.debug("TEST", "should not appear")
+        captured = capsys.readouterr()
+        assert "should not appear" not in captured.out
+
+    def test_debug_to_sd_buffers_when_true(self, time_provider, buffer_manager):
+        """debug() buffers to SD when debug_to_sd=True and log_level=DEBUG."""
+        from lib.event_logger import EventLogger
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            logger = EventLogger(
+                time_provider,
+                buffer_manager,
+                logfile="/sd/test.log",
+                log_level="DEBUG",
+                debug_to_sd=True,
+                debug_flush_threshold=5,
+            )
+            logger.debug("TEST", "buffered debug")
+        assert len(logger.buffer) == 1
+
+    def test_debug_not_buffered_when_debug_to_sd_false(self, time_provider, buffer_manager):
+        """debug() does NOT buffer when debug_to_sd=False (console only)."""
+        from lib.event_logger import EventLogger
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            logger = EventLogger(
+                time_provider,
+                buffer_manager,
+                logfile="/sd/test.log",
+                log_level="DEBUG",
+                debug_to_sd=False,
+            )
+            logger.debug("TEST", "console only")
+        assert len(logger.buffer) == 0
+
+    def test_debug_flushes_at_threshold(self, time_provider, buffer_manager):
+        """debug() triggers flush when debug_flush_threshold reached."""
+        from lib.event_logger import EventLogger
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            logger = EventLogger(
+                time_provider,
+                buffer_manager,
+                logfile="/sd/test.log",
+                log_level="DEBUG",
+                debug_to_sd=True,
+                debug_flush_threshold=3,
+            )
+            logger.debug("T", "1")
+            logger.debug("T", "2")
+            assert logger.flush_count == 0
+            logger.debug("T", "3")
+            assert logger.flush_count == 1
+
+
+class TestEventLoggerLevelGating:
+    """Tests for log level gating."""
+
+    def test_info_suppressed_at_warn_level(self, time_provider, buffer_manager, capsys):
+        """info() is suppressed when log_level=WARN."""
+        from lib.event_logger import EventLogger
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            logger = EventLogger(time_provider, buffer_manager, logfile="/sd/test.log", log_level="WARN")
+            logger.info("TEST", "should not appear")
+        captured = capsys.readouterr()
+        assert "should not appear" not in captured.out
+        assert len(logger.buffer) == 0
+
+    def test_warning_suppressed_at_err_level(self, time_provider, buffer_manager, capsys):
+        """warning() is suppressed when log_level=ERR."""
+        from lib.event_logger import EventLogger
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            logger = EventLogger(time_provider, buffer_manager, logfile="/sd/test.log", log_level="ERR")
+            logger.warning("TEST", "should not appear")
+        captured = capsys.readouterr()
+        assert "should not appear" not in captured.out
+
+    def test_error_never_suppressed(self, time_provider, buffer_manager, capsys):
+        """error() is never gated, even at ERR level."""
+        from lib.event_logger import EventLogger
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            logger = EventLogger(time_provider, buffer_manager, logfile="/sd/test.log", log_level="ERR")
+            logger.error("TEST", "always visible")
+        captured = capsys.readouterr()
+        assert "always visible" in captured.out
+
+    def test_debug_level_allows_all(self, time_provider, buffer_manager, capsys):
+        """At DEBUG level, info/warning/error all pass through."""
+        from lib.event_logger import EventLogger
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            logger = EventLogger(time_provider, buffer_manager, logfile="/sd/test.log", log_level="DEBUG")
+            logger.info("T", "info_msg")
+            logger.warning("T", "warn_msg")
+        captured = capsys.readouterr()
+        assert "info_msg" in captured.out
+        assert "warn_msg" in captured.out
+
+
+class TestEventLoggerFormat:
+    """Tests for the _format() shared helper."""
+
+    def test_format_produces_consistent_output(self, event_logger):
+        """_format() returns a consistent formatted string."""
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            result = event_logger._format("INFO", "MOD", "hello")
+        assert "[INFO]" in result
+        assert "[MOD]" in result
+        assert "hello" in result
+        assert result.endswith("\n")
+
+    def test_format_with_debug_tag(self, event_logger):
+        """_format() works with DEBUG tag."""
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            result = event_logger._format("DEBUG", "TEST", "dbg msg")
+        assert "[DEBUG]" in result
+        assert "[TEST]" in result

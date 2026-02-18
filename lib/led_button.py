@@ -127,7 +127,7 @@ class LEDButtonHandler:
         long_press_callback: Registered long-press callback
     """
 
-    def __init__(self, led_pin: int, button_pin: int, debounce_ms: int = 200, long_press_ms: int = 3000):
+    def __init__(self, led_pin: int, button_pin: int, debounce_ms: int = 200, long_press_ms: int = 3000, logger=None):
         """
         Initialize LED and multi-function button.
 
@@ -136,6 +136,7 @@ class LEDButtonHandler:
             button_pin (int): GPIO pin for button
             debounce_ms (int): Debounce delay in milliseconds (default: 200)
             long_press_ms (int): Long-press threshold in ms (default: 3000)
+            logger: EventLogger instance (optional)
         """
         self.led = LED(led_pin)
         self.button = machine.Pin(button_pin, machine.Pin.IN, machine.Pin.PULL_UP)
@@ -150,6 +151,13 @@ class LEDButtonHandler:
         # ISR-safe flags — set in ISR, consumed by poll_button()
         self._pending_short = False
         self._pending_long = False
+        self._logger = logger
+
+        if logger:
+            logger.debug(
+                "LEDButton",
+                f"Initialized: led=GP{led_pin}, btn=GP{button_pin}, debounce={debounce_ms}ms, long={long_press_ms}ms",
+            )
 
     def set_on(self) -> None:
         """Turn LED on."""
@@ -176,6 +184,8 @@ class LEDButtonHandler:
         self.button_callback = callback
         self.short_press_callback = callback
         self.button.irq(trigger=machine.Pin.IRQ_FALLING, handler=self._button_isr)
+        if self._logger:
+            self._logger.debug("LEDButton", "Registered legacy button callback")
 
     def register_callbacks(self, short_press=None, long_press=None) -> None:
         """
@@ -193,6 +203,11 @@ class LEDButtonHandler:
         # Also set legacy alias to short_press for backward compat
         self.button_callback = short_press
         self.button.irq(trigger=machine.Pin.IRQ_FALLING | machine.Pin.IRQ_RISING, handler=self._button_dual_isr)
+        if self._logger:
+            self._logger.debug(
+                "LEDButton",
+                f"Registered callbacks: short={'yes' if short_press else 'no'}, long={'yes' if long_press else 'no'}",
+            )
 
     def _button_isr(self, pin) -> None:
         """ISR (FALLING only): debounce + set flag.  No heap allocation."""
@@ -243,16 +258,26 @@ class LEDButtonHandler:
                 if self.long_press_callback:
                     try:
                         self.long_press_callback()
+                        if self._logger:
+                            self._logger.debug("LEDButton", "Long press dispatched")
                     except Exception as e:
-                        print(f"[LEDButtonHandler] Long press callback error: {e}")
+                        if self._logger:
+                            self._logger.error("LEDButton", f"Long press callback error: {e}")
+                        else:
+                            print(f"[LEDButtonHandler] Long press callback error: {e}")
             if self._pending_short:
                 self._pending_short = False
                 cb = self.short_press_callback or self.button_callback
                 if cb:
                     try:
                         cb()
+                        if self._logger:
+                            self._logger.debug("LEDButton", "Short press dispatched")
                     except Exception as e:
-                        print(f"[LEDButtonHandler] Short press callback error: {e}")
+                        if self._logger:
+                            self._logger.error("LEDButton", f"Short press callback error: {e}")
+                        else:
+                            print(f"[LEDButtonHandler] Short press callback error: {e}")
             await asyncio.sleep(interval_ms / 1000)
 
     async def blink_pattern_async(self, pattern_ms: list, repeats: int = 1) -> None:
@@ -311,6 +336,7 @@ class ServiceReminder:
         auto_register_button: bool = True,
         blink_after_days: int = 3,
         monitor_interval_s: int = 3600,
+        logger=None,
     ):
         """
         Initialize Service reminder.
@@ -330,6 +356,7 @@ class ServiceReminder:
                 solid-on to blinking pattern (default: 3).
             monitor_interval_s (int): Re-check interval in seconds when
                 reminder is not due or is solid-on (default: 3600).
+            logger: EventLogger instance (optional)
 
         Example:
             >>> reminder = ServiceReminder(time_provider, led_handler, days_interval=7)
@@ -341,6 +368,7 @@ class ServiceReminder:
         self.blink_pattern_ms = blink_pattern_ms or [5000, 2000]  # SOS
         self.blink_after_days = blink_after_days
         self.monitor_interval_s = monitor_interval_s
+        self._logger = logger
 
         self.storage_path = storage_path
 
@@ -364,7 +392,18 @@ class ServiceReminder:
         if auto_register_button:
             self.led_handler.register_button_callback(self.reset)
 
-        print(f"[ServiceReminder] Initialized: {self.days_interval} days, last_serviced={self.last_serviced_timestamp}")
+        if self._logger:
+            self._logger.debug(
+                "Reminder",
+                f"Initialized: interval={self.days_interval}d, "
+                f"last_serviced={self.last_serviced_timestamp}, "
+                f"blink_after={self.blink_after_days}d",
+            )
+        else:
+            print(
+                f"[ServiceReminder] Initialized: {self.days_interval} days, "
+                f"last_serviced={self.last_serviced_timestamp}"
+            )
 
     def _parse_date_from_timestamp(self, timestamp: str):
         """
@@ -400,7 +439,10 @@ class ServiceReminder:
             with open(self.storage_path, "w") as f:
                 f.write(timestamp)
         except Exception as e:
-            print(f"[ServiceReminder] ERROR saving timestamp: {e}")
+            if self._logger:
+                self._logger.error("Reminder", f"Failed to save timestamp: {e}")
+            else:
+                print(f"[ServiceReminder] ERROR saving timestamp: {e}")
 
     def _days_since_Service(self) -> int:
         """
@@ -439,9 +481,15 @@ class ServiceReminder:
 
             self.led_handler.set_off()  # Stop blinking immediately
 
-            print(f"[ServiceReminder] Reset: last_serviced={self.last_serviced_timestamp}")
+            if self._logger:
+                self._logger.debug("Reminder", f"Reset: last_serviced={self.last_serviced_timestamp}")
+            else:
+                print(f"[ServiceReminder] Reset: last_serviced={self.last_serviced_timestamp}")
         except Exception as e:
-            print(f"[ServiceReminder] ERROR during reset: {e}")
+            if self._logger:
+                self._logger.error("Reminder", f"Error during reset: {e}")
+            else:
+                print(f"[ServiceReminder] ERROR during reset: {e}")
 
     async def monitor(self) -> None:
         """
@@ -464,20 +512,29 @@ class ServiceReminder:
                 # Detect transition from not-due to due
                 if is_due and not reminder_due:
                     reminder_due = True
-                    print(f"[ServiceReminder] REMINDER DUE: {days_elapsed} days elapsed")
+                    if self._logger:
+                        self._logger.info("Reminder", f"REMINDER DUE: {days_elapsed} days elapsed")
+                    else:
+                        print(f"[ServiceReminder] REMINDER DUE: {days_elapsed} days elapsed")
 
                 elif not is_due and reminder_due:
                     reminder_due = False
                     was_blinking = False
                     self.led_handler.set_off()
-                    print("[ServiceReminder] Reminder cleared")
+                    if self._logger:
+                        self._logger.debug("Reminder", "Reminder cleared")
+                    else:
+                        print("[ServiceReminder] Reminder cleared")
 
                 if reminder_due:
                     if should_blink:
                         # Overdue by >= blink_after_days: blink pattern
                         if not was_blinking:
                             was_blinking = True
-                            print(f"[ServiceReminder] {days_overdue}d overdue, switching to blink")
+                            if self._logger:
+                                self._logger.info("Reminder", f"{days_overdue}d overdue, switching to blink")
+                            else:
+                                print(f"[ServiceReminder] {days_overdue}d overdue, switching to blink")
                         await self.led_handler.blink_pattern_async(self.blink_pattern_ms)
 
                         # Re-check after pattern completes
@@ -487,7 +544,10 @@ class ServiceReminder:
                             reminder_due = False
                             was_blinking = False
                             self.led_handler.set_off()
-                            print("[ServiceReminder] Reminder cleared")
+                            if self._logger:
+                                self._logger.debug("Reminder", "Reminder cleared (post-blink recheck)")
+                            else:
+                                print("[ServiceReminder] Reminder cleared")
                             await asyncio.sleep(self.monitor_interval_s)
                         else:
                             await asyncio.sleep(0.5)
@@ -501,8 +561,14 @@ class ServiceReminder:
 
             except asyncio.CancelledError:
                 self.led_handler.set_off()
-                print("[ServiceReminder] Monitor cancelled")
+                if self._logger:
+                    self._logger.debug("Reminder", "Monitor cancelled")
+                else:
+                    print("[ServiceReminder] Monitor cancelled")
                 raise
             except Exception as e:
-                print(f"[ServiceReminder] ERROR in monitor: {e}")
+                if self._logger:
+                    self._logger.error("Reminder", f"Error in monitor: {e}")
+                else:
+                    print(f"[ServiceReminder] ERROR in monitor: {e}")
                 await asyncio.sleep(60)

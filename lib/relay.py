@@ -23,7 +23,7 @@ class RelayController:
         _state: Current relay state (True=on, False=off)
     """
 
-    def __init__(self, pin: int, invert: bool = True, name=None):
+    def __init__(self, pin: int, invert: bool = True, name=None, logger=None):
         """
         Initialize relay controller.
 
@@ -31,27 +31,35 @@ class RelayController:
             pin (int): GPIO pin number
             invert (bool): If True, HIGH=off (default: True for relay modules)
             name (str, optional): Relay name for logging
+            logger: EventLogger instance (optional, for debug output)
         """
         self.pin = Pin(pin, Pin.OUT)
         self.name = name or f"Relay_{pin}"
         self.invert = invert
         self._state = False
+        self._logger = logger
 
         # Initialize to OFF (HIGH if inverted) without calling overridable methods
         off_value = 1 if self.invert else 0
         self.pin.value(off_value)
+        if self._logger:
+            self._logger.debug("Relay", f"{self.name} init: pin={pin}, invert={invert}, initial_value={off_value}")
 
     def turn_on(self) -> None:
         """Activate relay (physical on)."""
         value = 0 if self.invert else 1
         self.pin.value(value)
         self._state = True
+        if self._logger:
+            self._logger.debug("Relay", f"{self.name} turn_on: gpio={value}")
 
     def turn_off(self) -> None:
         """Deactivate relay (physical off)."""
         value = 1 if self.invert else 0
         self.pin.value(value)
         self._state = False
+        if self._logger:
+            self._logger.debug("Relay", f"{self.name} turn_off: gpio={value}")
 
     def toggle(self) -> None:
         """Toggle relay state."""
@@ -127,7 +135,7 @@ class FanController(RelayController):
             poll_interval_s (int): Schedule/thermostat check interval (default: 5)
             name (str, optional): Relay name
         """
-        super().__init__(pin, invert=True, name=name or f"Fan_{pin}")
+        super().__init__(pin, invert=True, name=name or f"Fan_{pin}", logger=logger)
 
         self.time_provider = time_provider
         self.dht_logger = dht_logger
@@ -150,7 +158,7 @@ class FanController(RelayController):
             logger.warning("FanController", f"on_time ({on_time_s}s) > interval ({interval_s}s), clamping")
             self.on_time_s = interval_s
 
-        logger.info(
+        logger.debug(
             "FanController",
             f"Initialized {self.name}: interval={interval_s}s, on_time={on_time_s}s, "
             f"thermostat=[max={max_temp}°C, hyst={temp_hysteresis}°C]",
@@ -173,6 +181,12 @@ class FanController(RelayController):
                 # Get current temperature
                 current_temp = self.dht_logger.last_temperature
 
+                self.logger.debug(
+                    "FanController",
+                    f"{self.name} poll: ssm={seconds_since_midnight}, pos={position_in_cycle}, "
+                    f"sched={'ON' if schedule_should_be_on else 'OFF'}, temp={current_temp}",
+                )
+
                 # Thermostat logic (priority over schedule)
                 if current_temp is not None:
                     if not self.thermostat_active and current_temp >= self.max_temp:
@@ -191,6 +205,11 @@ class FanController(RelayController):
                     elif self.thermostat_active and current_temp < (self.max_temp - self.temp_hysteresis):
                         # Thermostat no longer required: resume schedule control
                         self.thermostat_active = False
+                        threshold = self.max_temp - self.temp_hysteresis
+                        self.logger.debug(
+                            "FanController",
+                            f"{self.name} thermostat deactivating: {current_temp:.1f}°C < {threshold}°C",
+                        )
                         # Explicitly synchronize fan state with current schedule
                         if not schedule_should_be_on:
                             try:
@@ -206,6 +225,14 @@ class FanController(RelayController):
                             "FanController",
                             f"{self.name} THERMOSTAT RESUME SCHEDULE at "
                             f"{current_temp:.1f}°C < {self.max_temp - self.temp_hysteresis}°C",
+                        )
+
+                    elif self.thermostat_active:
+                        # In hysteresis band — no action
+                        self.logger.debug(
+                            "FanController",
+                            f"{self.name} thermostat: hysteresis band "
+                            f"({self.max_temp - self.temp_hysteresis}°C <= {current_temp:.1f}°C < {self.max_temp}°C)",
                         )
 
                 # Apply time-of-day schedule (only when thermostat inactive)
@@ -288,7 +315,7 @@ class GrowlightController(RelayController):
             poll_interval_s (int): Schedule check interval in seconds (default: 60)
             name (str, optional): Relay name
         """
-        super().__init__(pin, invert=True, name=name or f"Growlight_{pin}")
+        super().__init__(pin, invert=True, name=name or f"Growlight_{pin}", logger=logger)
 
         self.time_provider = time_provider
         self.logger = logger
@@ -298,6 +325,11 @@ class GrowlightController(RelayController):
         if dawn_hour is None or dawn_minute is None or sunset_hour is None or sunset_minute is None:
             year, month, day = self.time_provider.now_date_tuple()
             (sr_h, sr_m), (ss_h, ss_m) = self.time_provider.sunrise_sunset(year, month, day)
+            logger.debug(
+                "GrowlightController",
+                f"Auto-calc sunrise_sunset({year},{month},{day}): "
+                f"sunrise={sr_h:02d}:{sr_m:02d}, sunset={ss_h:02d}:{ss_m:02d}",
+            )
 
             if dawn_hour is None:
                 dawn_hour = sr_h
@@ -315,7 +347,7 @@ class GrowlightController(RelayController):
 
         self.last_state = None
 
-        logger.info(
+        logger.debug(
             "GrowlightController",
             f"Initialized {self.name}: "
             f"dawn={dawn_hour:02d}:{dawn_minute:02d}, "
@@ -335,6 +367,12 @@ class GrowlightController(RelayController):
                 sunset_seconds = self.sunset_hour * 3600 + self.sunset_minute * 60
 
                 should_be_on = dawn_seconds <= seconds_since_midnight < sunset_seconds
+
+                self.logger.debug(
+                    "GrowlightController",
+                    f"{self.name} poll: ssm={seconds_since_midnight}, "
+                    f"dawn={dawn_seconds}, sunset={sunset_seconds}, should={'ON' if should_be_on else 'OFF'}",
+                )
 
                 # Only log state changes
                 if should_be_on != self.last_state:

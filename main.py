@@ -61,7 +61,13 @@ async def main():
         return
 
     # Step 2: Initialize hardware
-    hardware = HardwareFactory(DEVICE_CONFIG)
+    # Create debug callback for pre-logger modules (only active when DEBUG)
+    logger_config = DEVICE_CONFIG.get("event_logger", {})
+    _dbg_cb = None
+    if logger_config.get("log_level", "INFO") == "DEBUG":
+        _dbg_cb = lambda msg: print(f"[DEBUG] {msg}")  # noqa: E731
+
+    hardware = HardwareFactory(DEVICE_CONFIG, debug_callback=_dbg_cb)
     if not hardware.setup():
         print("[STARTUP ERROR] Critical hardware initialization failed (RTC)")
         hardware.print_status()
@@ -77,6 +83,7 @@ async def main():
         sync_interval_s=system_config.get("rtc_sync_interval_s", 3600),
         rtc_min_year=system_config.get("rtc_min_year", 2025),
         rtc_max_year=system_config.get("rtc_max_year", 2035),
+        debug_callback=_dbg_cb,
     )
 
     # Step 3b: Create StatusManager (owns activity/SD/warning/error/heartbeat LEDs)
@@ -110,10 +117,10 @@ async def main():
         sd_mount_point=buffer_config.get("sd_mount_point", "/sd"),
         fallback_path=buffer_config.get("fallback_path", "/local/fallback.csv"),
         max_buffer_entries=buffer_config.get("max_buffer_entries", 200),
+        debug_callback=_dbg_cb,
     )
 
     # Step 5: Create EventLogger
-    logger_config = DEVICE_CONFIG.get("event_logger", {})
     logger = EventLogger(
         time_provider,
         buffer_manager,
@@ -122,9 +129,16 @@ async def main():
         status_manager=status_manager,
         info_flush_threshold=logger_config.get("info_flush_threshold", 5),
         warn_flush_threshold=logger_config.get("warn_flush_threshold", 3),
+        log_level=logger_config.get("log_level", "INFO"),
+        debug_to_sd=logger_config.get("debug_to_sd", False),
+        debug_flush_threshold=logger_config.get("debug_flush_threshold", 10),
     )
 
     logger.info("MAIN", "System startup")
+    logger.debug(
+        "MAIN",
+        f"log_level={logger_config.get('log_level', 'INFO')}, debug_to_sd={logger_config.get('debug_to_sd', False)}",
+    )
 
     # Wire logger into StatusManager for condition-change logging
     status_manager.set_logger(logger)
@@ -182,6 +196,7 @@ async def main():
         )
         fans.append(fan)
     logger.info("MAIN", "Fan controllers initialized")
+    logger.debug("MAIN", f"Fans: {[f.name for f in fans]}")
 
     # Step 7b: Create grow light controller
     light_config = DEVICE_CONFIG.get("growlight", {})
@@ -215,6 +230,7 @@ async def main():
                 },
             )
             await buzzer.startup()
+            logger.debug("MAIN", f"Buzzer GP{DEVICE_CONFIG['pins']['buzzer']}: patterns={list(buzzer.patterns.keys())}")
             logger.info("MAIN", "Buzzer initialized")
             status_manager.set_buzzer(buzzer)
         except Exception as e:
@@ -230,6 +246,7 @@ async def main():
         button_pin=DEVICE_CONFIG["pins"]["button_menu"],
         debounce_ms=DEVICE_CONFIG.get("system", {}).get("button_debounce_ms", 200),
         long_press_ms=DEVICE_CONFIG.get("system", {}).get("long_press_ms", 3000),
+        logger=logger,
     )
 
     Service_config = DEVICE_CONFIG.get("Service_reminder", {})
@@ -242,6 +259,7 @@ async def main():
         storage_path=Service_config.get("storage_path", "/service_reminder.txt"),
         monitor_interval_s=Service_config.get("monitor_interval_s", 3600),
         auto_register_button=False,
+        logger=logger,
     )
 
     # Register button callbacks:
@@ -282,6 +300,8 @@ async def main():
     recovery_interval = system_config.get("sd_recovery_interval_s", 10)
     health_interval = normal_interval
 
+    logger.debug("MAIN", f"health_check={normal_interval}s, sd_recovery={recovery_interval}s")
+
     while True:
         await asyncio.sleep(health_interval)
 
@@ -292,6 +312,13 @@ async def main():
         metrics = buffer_manager.get_metrics()
         buffered = metrics["buffer_entries"]
 
+        logger.debug(
+            "MAIN",
+            f"health tick: buffered={buffered}, "
+            f"primary={'up' if buffer_manager.is_primary_available() else 'down'}, "
+            f"interval={health_interval}s",
+        )
+
         # Hot-swap recovery: attempt SD refresh when primary is
         # reported down OR when the in-memory buffer is growing.
         # The second condition catches the case where is_primary_available()
@@ -300,6 +327,10 @@ async def main():
         # cheap when the card is actually present.
         sd_needs_check = not buffer_manager.is_primary_available() or buffered > 0
         if sd_needs_check:
+            logger.debug(
+                "MAIN",
+                f"SD needs check: primary_avail={buffer_manager.is_primary_available()}, buffered={buffered}",
+            )
             if hardware.refresh_sd():
                 logger.info("MAIN", "SD card re-mounted after hot-swap")
                 status_manager.set_sd_status(True)

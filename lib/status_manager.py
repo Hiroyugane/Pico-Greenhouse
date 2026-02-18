@@ -152,6 +152,8 @@ class StatusManager:
             led.off()
 
         self._post_passed = True
+        if self._logger:
+            self._logger.debug("StatusMgr", f"POST complete: {len(leds)} LEDs walked")
         return True
 
     # ── Activity LED (GP4) ─────────────────────────────────────────────
@@ -166,6 +168,8 @@ class StatusManager:
         self._activity_led.on()
         await asyncio.sleep(self._activity_blink_ms / 1000.0)
         self._activity_led.off()
+        if self._logger:
+            self._logger.debug("StatusMgr", f"blink_activity: {self._activity_blink_ms}ms")
 
     # ── SD Status LED (GP6) ────────────────────────────────────────────
 
@@ -186,7 +190,9 @@ class StatusManager:
 
         if changed and self._logger:
             state = "healthy" if healthy else "FAILED"
-            self._logger.info("StatusMgr", f"SD status changed: {state}")
+            self._logger.debug("StatusMgr", f"SD status changed: {state}")
+        elif not changed and self._logger:
+            self._logger.debug("StatusMgr", f"SD status unchanged: {'healthy' if healthy else 'FAILED'}")
 
     # ── Warning LED (GP7) ──────────────────────────────────────────────
 
@@ -218,6 +224,8 @@ class StatusManager:
         if changed and self._logger:
             action = "SET" if active else "CLEARED"
             self._logger.info("StatusMgr", f"Warning {action}: {key}")
+        elif not changed and self._logger:
+            self._logger.debug("StatusMgr", f"Warning no-op: {key} active={active}")
 
         if changed and active and was_empty and self._buzzer:
             asyncio.create_task(self._buzzer.alert())
@@ -263,6 +271,8 @@ class StatusManager:
         if changed and self._logger:
             action = "SET" if active else "CLEARED"
             self._logger.error("StatusMgr", f"Error {action}: {key}")
+        elif not changed and self._logger:
+            self._logger.debug("StatusMgr", f"Error no-op: {key} active={active}")
 
         if changed and active and was_empty and self._buzzer:
             asyncio.create_task(self._buzzer.error())
@@ -288,6 +298,8 @@ class StatusManager:
         """
         self._heartbeat_led.toggle()
         self._heartbeat_count += 1
+        if self._logger and self._heartbeat_count % 10 == 0:
+            self._logger.debug("StatusMgr", f"heartbeat count={self._heartbeat_count}")
 
     # ── Status Reporting (for OLED integration) ─────────────────────────
 

@@ -280,6 +280,37 @@ class TestDHTLoggerFileOps:
         dht.filename = "/sd/nonexistent_file.csv"
         assert dht._file_exists() is False
 
+    def test_file_exists_true_after_create_even_if_has_data_for_fails(
+        self, time_provider, buffer_manager, mock_event_logger
+    ):
+        """_file_exists returns True from in-memory cache even when has_data_for fails.
+
+        Reproduces the MicroPython FAT VFS bug where has_data_for() returns
+        False for a file that was just written, causing repeated CSV header
+        creation on every log cycle.
+        """
+        from lib.dht_logger import DHTLogger
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
+
+        # Simulate MicroPython FAT failure: has_data_for returns False
+        with patch.object(buffer_manager, "has_data_for", return_value=False):
+            # _file_exists should still return True via _created_files cache
+            assert dht._file_exists() is True
+
+    def test_created_files_not_shared_across_dates(self, time_provider, buffer_manager, mock_event_logger):
+        """After date rollover, new filename is not in _created_files cache."""
+        from lib.dht_logger import DHTLogger
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
+
+        # Change to a new date filename not yet created
+        dht.filename = "/sd/dht_log_2026-01-30.csv"
+        with patch.object(buffer_manager, "has_data_for", return_value=False):
+            assert dht._file_exists() is False
+
     def test_strip_sd_prefix(self):
         """_strip_sd_prefix removes /sd/ prefix."""
         from lib.dht_logger import DHTLogger

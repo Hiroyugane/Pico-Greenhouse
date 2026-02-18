@@ -86,6 +86,7 @@ class DHTLogger:
         self.read_failures = 0
         self.write_failures = 0
         self.current_date = None
+        self._created_files = set()  # relpaths confirmed created this session
 
         # Initialize filename with current date
         self._update_filename_for_date()
@@ -118,6 +119,9 @@ class DHTLogger:
     def _file_exists(self) -> bool:
         """Check if CSV data for this file already exists (primary, fallback, or buffer)."""
         relpath = self._strip_sd_prefix(self.filename)
+        # Fast path: already created this session (avoids unreliable FAT VFS check)
+        if relpath in self._created_files:
+            return True
         return self.buffer_manager.has_data_for(relpath)
 
     def _resolve_path(self, file_path: str) -> str:
@@ -133,11 +137,13 @@ class DHTLogger:
 
         Header: 'Timestamp,Temperature,Humidity'
         Logs actual destination (primary SD or fallback) based on write result.
+        Adds relpath to ``_created_files`` so subsequent same-session checks
+        skip the slow (and sometimes unreliable) FAT VFS existence probe.
         """
+        relpath = self._strip_sd_prefix(self.filename)
         try:
-            wrote_to_primary = self.buffer_manager.write(
-                self._strip_sd_prefix(self.filename), "Timestamp,Temperature,Humidity\n"
-            )
+            wrote_to_primary = self.buffer_manager.write(relpath, "Timestamp,Temperature,Humidity\n")
+            self._created_files.add(relpath)
             if wrote_to_primary:
                 self.logger.info("DHTLogger", f"Created CSV file: {self.filename}")
             else:

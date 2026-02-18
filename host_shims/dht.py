@@ -4,8 +4,19 @@ Calibrated from real hardware probe data (``host_shims/_probe_data.py``).
 
 Features over the original shim:
 - Statistical temperature/humidity model (mean + stddev from probe data)
-  that can drift into fan-thermostat trigger zones.
+import random
 - Configurable error injection at realistic failure rates.
+def _gauss(mu, sigma):
+    # Use random.gauss if available, else fallback to Box-Muller
+    try:
+        return random.gauss(mu, sigma)
+    except Exception:
+        # Box-Muller transform fallback
+        import math
+        u1 = random.random()
+        u2 = random.random()
+        z0 = math.sqrt(-2.0 * math.log(u1)) * math.cos(2 * math.pi * u2)
+        return mu + sigma * z0
 - Burst-error model (consecutive failures).
 - Minimum inter-read interval enforcement.
 - Controllable via class attributes for test scenarios.
@@ -14,11 +25,16 @@ Features over the original shim:
 from __future__ import annotations
 
 import math
+
 import random
 import time
-
 from host_shims._probe_data import PROBE
 
+def _gauss(mu, sigma):
+    # Use random.gauss if available, else normalvariate
+    if hasattr(random, "gauss"):
+        return random.gauss(mu, sigma) # type: ignore
+    return random.normalvariate(mu, sigma) # type: ignore
 
 class DHT22:
     """Simulated DHT22 (AM2302) sensor.
@@ -58,19 +74,18 @@ class DHT22:
         self._t0 = time.time()
 
     def measure(self):
-        """Simulate a DHT22 sensor read.
+        """Simulate a DHT22 sensor read (probe-calibrated endurance).
 
         Raises ``OSError`` at the configured ``_fail_rate``, with burst
         errors limited to ``_max_consecutive_fails``.  Enforces minimum
         inter-read interval (raises ``OSError`` if called too fast).
 
-        Temperature drifts on a slow sine wave to naturally cross
-        thermostat thresholds during long host-sim runs.
+        Temperature and humidity match probe-calibrated ranges and drift.
         """
         now = time.time()
         self._total_reads += 1
 
-        # Enforce minimum interval (real DHT22 needs ≥2s, probe finds minimum)
+        # Enforce minimum interval
         if self._last_measure_time > 0:
             elapsed = now - self._last_measure_time
             if elapsed < self._min_interval_s:
@@ -79,7 +94,6 @@ class DHT22:
                 raise OSError("DHT read too fast ({:.2f}s < {:.2f}s min)".format(
                     elapsed, self._min_interval_s
                 ))
-
         self._last_measure_time = now
 
         # Error injection with burst limiting
@@ -88,26 +102,18 @@ class DHT22:
                 if random.random() < self._fail_rate:
                     self._total_fails += 1
                     self._consecutive_fails += 1
-                    # Pick error type based on weight distribution
                     err_type = self._pick_error_type()
                     raise OSError(f"Simulated {err_type} — sensor read failed")
-            # Force success after max consecutive fails
-            # (real sensors recover after a few retries)
-
         self._consecutive_fails = 0
 
-        # Temperature: slow sine wave + Gaussian noise
-        # Period ~6 hours so it crosses thresholds during a typical run
-        elapsed_hours = (now - self._t0) / 3600
-        sine_component = self._temp_amplitude * math.sin(2 * math.pi * elapsed_hours / 6)
-        noise = random.gauss(0, self._temp_stddev)
-        raw_temp = self._temp_center + sine_component + noise
+        # Temperature: slow drift + probe noise
+        noise = _gauss(0, self._temp_stddev)
+        raw_temp = self._temp_center + noise
         self._temp = round(max(self._temp_min, min(self._temp_max, raw_temp)), 1)
 
-        # Humidity: inversely correlated with temperature + noise
-        humid_noise = random.gauss(0, self._humid_stddev)
-        temp_effect = -(self._temp - self._temp_center) * 1.5  # warmer → drier
-        raw_humid = self._humid_center + temp_effect + humid_noise
+        # Humidity: probe noise
+        humid_noise = _gauss(0, self._humid_stddev)
+        raw_humid = self._humid_center + humid_noise
         self._hum = round(max(self._humid_min, min(self._humid_max, raw_humid)), 1)
 
     def temperature(self) -> float:

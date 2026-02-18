@@ -158,6 +158,7 @@ def run_probe(name, fn):
         result["_mem_after"] = mem_after
         _results[name] = result
         _log(name, "PASS", "completed in {} ms".format(dur))
+        _save_partial_results(name)
         return result
     except Exception as e:
         dur = _tdiff_ms(t0, _tms())
@@ -165,6 +166,7 @@ def run_probe(name, fn):
         _errors.append({"probe": name, "error": err_msg, "elapsed_ms": dur})
         _results[name] = {"_error": err_msg, "_duration_ms": dur}
         _log(name, "FAIL", err_msg)
+        _save_partial_results(name)
         return None
 
 
@@ -1087,18 +1089,16 @@ def write_results():
     payload = {
         "probe_version": "1.0.0",
         "probe_start": _ts(),
-        "probes": _results,
+        "probes": _truncate_large_arrays(_results),
         "errors": _errors,
         "log": [{"ts_ms": e[0], "probe": e[1], "status": e[2], "msg": e[3]} for e in _probe_log],
     }
 
     json_str = json.dumps(payload)
 
-    # Try SD first
     paths_tried = []
     for path in ["/sd/hw_probe_{}.json".format(_ts().replace(" ", "_").replace(":", "")), "/local/hw_probe.json"]:
         try:
-            # Ensure directory exists
             dir_path = "/".join(path.split("/")[:-1])
             if dir_path:
                 try:
@@ -1114,11 +1114,59 @@ def write_results():
             paths_tried.append("{}: {}".format(path, e))
 
     _log("output", "FAIL", "Could not write JSON: {}".format(paths_tried))
-    # Print to console as fallback
     print("\n--- JSON OUTPUT (copy/paste) ---")
     print(json_str)
     print("--- END JSON ---\n")
     return payload
+
+
+def _save_partial_results(probe_name):
+    import os
+
+    partial_payload = {
+        "probe_version": "1.0.0",
+        "probe_start": _ts(),
+        "probes": _truncate_large_arrays(_results),
+        "errors": _errors,
+        "log": [{"ts_ms": e[0], "probe": e[1], "status": e[2], "msg": e[3]} for e in _probe_log],
+        "last_probe": probe_name,
+    }
+    try:
+        json_str = json.dumps(partial_payload)
+        for path in ["/sd/hw_probe_partial.json", "/local/hw_probe_partial.json"]:
+            try:
+                dir_path = "/".join(path.split("/")[:-1])
+                if dir_path:
+                    try:
+                        os.makedirs(dir_path)
+                    except Exception:
+                        pass
+                with open(path, "w") as f:
+                    f.write(json_str)
+                break
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+
+def _truncate_large_arrays(results):
+    # Truncate or summarize large arrays in probe results
+    truncated = {}
+    for k, v in results.items():
+        if k == "rtc_drift" and "measurements" in v:
+            arr = v["measurements"]
+            if len(arr) > 12:
+                v["measurements"] = arr[:6] + arr[-6:]
+                v["measurements_truncated"] = True
+        if k == "dht22_endurance" and "interval_buckets" in v:
+            for bucket in v["interval_buckets"].values():
+                for arr_key in ["errors_sample"]:
+                    if arr_key in bucket and isinstance(bucket[arr_key], list) and len(bucket[arr_key]) > 20:
+                        bucket[arr_key] = bucket[arr_key][:10] + bucket[arr_key][-10:]
+                        bucket[arr_key + "_truncated"] = True
+        truncated[k] = v
+    return truncated
 
 
 def print_summary():

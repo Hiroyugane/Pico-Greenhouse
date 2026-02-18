@@ -249,3 +249,57 @@ class TestRTCTimeProviderErrorFallbacks:
             provider = RTCTimeProvider(mock_rtc)
         with patch("time.localtime", side_effect=OSError):
             assert provider.get_time_tuple() == (0, 0, 0, 0, 0, 0, 0)
+
+
+class TestRTCTimeProviderValidity:
+    """Tests for time_valid property and invalid year range."""
+
+    def test_time_valid_true_after_successful_sync(self, mock_rtc):
+        """time_valid is True after successful sync with valid year."""
+        from lib.time_provider import RTCTimeProvider
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            provider = RTCTimeProvider(mock_rtc)
+        assert provider.time_valid is True
+
+    def test_time_valid_false_for_invalid_year_low(self):
+        """time_valid is False when RTC returns year below rtc_min_year."""
+        from lib.time_provider import RTCTimeProvider
+
+        rtc = Mock()
+        # Year 2000 is below default min_year=2025
+        rtc.ReadTime = Mock(return_value=(0, 0, 12, 3, 15, 1, 2000))
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            provider = RTCTimeProvider(rtc)
+        assert provider.time_valid is False
+
+    def test_time_valid_false_for_invalid_year_high(self):
+        """time_valid is False when RTC returns year above rtc_max_year."""
+        from lib.time_provider import RTCTimeProvider
+
+        rtc = Mock()
+        # Year 2099 is above default max_year=2035
+        rtc.ReadTime = Mock(return_value=(0, 0, 12, 3, 15, 1, 2099))
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            provider = RTCTimeProvider(rtc)
+        assert provider.time_valid is False
+
+    def test_time_valid_at_boundary_years(self):
+        """time_valid is True at exactly rtc_min_year and rtc_max_year."""
+        from lib.time_provider import RTCTimeProvider
+
+        # Test min boundary
+        rtc_min = Mock()
+        rtc_min.ReadTime = Mock(return_value=(0, 0, 12, 3, 15, 1, 2025))
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            provider_min = RTCTimeProvider(rtc_min, rtc_min_year=2025, rtc_max_year=2035)
+        assert provider_min.time_valid is True
+
+        # Test max boundary
+        rtc_max = Mock()
+        rtc_max.ReadTime = Mock(return_value=(0, 0, 12, 3, 15, 1, 2035))
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            provider_max = RTCTimeProvider(rtc_max, rtc_min_year=2025, rtc_max_year=2035)
+        assert provider_max.time_valid is True

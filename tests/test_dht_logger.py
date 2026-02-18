@@ -539,3 +539,143 @@ class TestDHTLoggerLogLoop:
         # Should have warned about fallback write
         warn_calls = [str(c) for c in mock_event_logger.warning.call_args_list]
         assert any("fallback" in c.lower() for c in warn_calls), f"No fallback warning logged: {warn_calls}"
+
+
+class TestDHTStatusUpdate:
+    """Tests for _update_dht_status() status propagation."""
+
+    def _make_dht_with_status(
+        self,
+        time_provider,
+        buffer_manager,
+        mock_event_logger,
+        mock_status_manager,
+        warn_threshold=3,
+        error_threshold=10,
+    ):
+        """Helper: create DHTLogger with a StatusManager wired in."""
+        from lib.dht_logger import DHTLogger
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            dht = DHTLogger(
+                15,
+                time_provider,
+                buffer_manager,
+                mock_event_logger,
+                status_manager=mock_status_manager,
+                dht_warn_threshold=warn_threshold,
+                dht_error_threshold=error_threshold,
+            )
+        return dht
+
+    def test_warning_threshold_sets_warning(
+        self, time_provider, buffer_manager, mock_event_logger, mock_status_manager
+    ):
+        """At warn_threshold consecutive failures, sets dht_intermittent warning."""
+        dht = self._make_dht_with_status(
+            time_provider,
+            buffer_manager,
+            mock_event_logger,
+            mock_status_manager,
+            warn_threshold=3,
+            error_threshold=10,
+        )
+        dht._consecutive_failures = 3
+        dht._update_dht_status()
+
+        mock_status_manager.set_warning.assert_called_with("dht_intermittent", True)
+        mock_status_manager.set_error.assert_called_with("dht_dead", False)
+
+    def test_error_threshold_sets_error(self, time_provider, buffer_manager, mock_event_logger, mock_status_manager):
+        """At error_threshold consecutive failures, sets dht_dead error."""
+        dht = self._make_dht_with_status(
+            time_provider,
+            buffer_manager,
+            mock_event_logger,
+            mock_status_manager,
+            warn_threshold=3,
+            error_threshold=10,
+        )
+        dht._consecutive_failures = 10
+        dht._update_dht_status()
+
+        mock_status_manager.set_error.assert_called_with("dht_dead", True)
+        mock_status_manager.set_warning.assert_called_with("dht_intermittent", False)
+
+    def test_recovery_clears_both(self, time_provider, buffer_manager, mock_event_logger, mock_status_manager):
+        """Below warn_threshold, both warning and error are cleared."""
+        dht = self._make_dht_with_status(
+            time_provider,
+            buffer_manager,
+            mock_event_logger,
+            mock_status_manager,
+            warn_threshold=3,
+            error_threshold=10,
+        )
+        dht._consecutive_failures = 0
+        dht._update_dht_status()
+
+        mock_status_manager.clear_warning.assert_called_with("dht_intermittent")
+        mock_status_manager.clear_error.assert_called_with("dht_dead")
+
+    def test_no_status_manager_no_crash(self, time_provider, buffer_manager, mock_event_logger):
+        """When status_manager is None, _update_dht_status() returns silently."""
+        from lib.dht_logger import DHTLogger
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
+        assert dht.status_manager is None
+        dht._consecutive_failures = 99
+        dht._update_dht_status()  # Should not raise
+
+
+class TestDHTLoggerDateCheckException:
+    """Tests for _check_date_changed() error handling."""
+
+    def test_date_check_exception_returns_false(self, time_provider, buffer_manager, mock_event_logger):
+        """When now_date_tuple() raises, _check_date_changed() returns False."""
+        from lib.dht_logger import DHTLogger
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
+
+        time_provider.now_date_tuple = Mock(side_effect=OSError("RTC fail"))
+        result = dht._check_date_changed()
+        assert result is False
+        mock_event_logger.error.assert_called()
+
+
+class TestDHTReadSensorBoundaries:
+    """Tests for read_sensor() boundary values."""
+
+    def test_upper_bound_80c_100pct(self, time_provider, buffer_manager, mock_event_logger):
+        """80°C and 100% humidity (upper bounds) are accepted."""
+        from lib.dht_logger import DHTLogger
+
+        sensor = Mock()
+        sensor.measure = Mock()
+        sensor.temperature = Mock(return_value=80.0)
+        sensor.humidity = Mock(return_value=100.0)
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with patch("dht.DHT22", return_value=sensor):
+                dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
+        temp, hum = dht.read_sensor()
+        assert temp == 80.0
+        assert hum == 100.0
+
+    def test_out_of_range_above_upper_bound(self, time_provider, buffer_manager, mock_event_logger):
+        """81°C is out of range and rejected."""
+        from lib.dht_logger import DHTLogger
+
+        sensor = Mock()
+        sensor.measure = Mock()
+        sensor.temperature = Mock(return_value=81.0)
+        sensor.humidity = Mock(return_value=50.0)
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with patch("dht.DHT22", return_value=sensor):
+                dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger, max_retries=1)
+        temp, hum = dht.read_sensor()
+        assert temp is None
+        assert hum is None

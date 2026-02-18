@@ -343,3 +343,58 @@ class TestEventLoggerFormat:
             result = event_logger._format("DEBUG", "TEST", "dbg msg")
         assert "[DEBUG]" in result
         assert "[TEST]" in result
+
+
+class TestEventLoggerStatusManager:
+    """Tests for StatusManager integration in error()."""
+
+    def test_error_sets_logged_error_on_status_manager(self, time_provider, buffer_manager):
+        """error() calls status_manager.set_error('logged_error', True)."""
+        from lib.event_logger import EventLogger
+
+        mock_sm = Mock()
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            logger = EventLogger(
+                time_provider,
+                buffer_manager,
+                logfile="/sd/test.log",
+                status_manager=mock_sm,
+            )
+            logger.error("MOD", "something broke")
+        mock_sm.set_error.assert_called_with("logged_error", True)
+
+    def test_error_without_status_manager_no_crash(self, time_provider, buffer_manager):
+        """error() works fine when status_manager is None."""
+        from lib.event_logger import EventLogger
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            logger = EventLogger(
+                time_provider,
+                buffer_manager,
+                logfile="/sd/test.log",
+                status_manager=None,
+            )
+            logger.error("MOD", "something broke")  # Should not raise
+        assert logger.flush_count == 1
+
+    def test_custom_flush_thresholds(self, time_provider, buffer_manager):
+        """Custom info/warn flush thresholds are respected."""
+        from lib.event_logger import EventLogger
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            logger = EventLogger(
+                time_provider,
+                buffer_manager,
+                logfile="/sd/test.log",
+                info_flush_threshold=2,
+                warn_flush_threshold=1,
+            )
+            # Single warning should trigger flush with threshold=1
+            logger.warning("T", "warn")
+            assert logger.flush_count == 1
+
+            # Two info messages should trigger flush with threshold=2
+            logger.info("T", "msg1")
+            assert logger.flush_count == 1
+            logger.info("T", "msg2")
+            assert logger.flush_count == 2

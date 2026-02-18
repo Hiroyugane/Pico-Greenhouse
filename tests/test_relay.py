@@ -462,3 +462,52 @@ class TestGrowlightController:
         assert "sunset" in state
         assert state["dawn"] == "06:00"
         assert state["sunset"] == "20:00"
+
+
+class TestFanControllerHysteresisNoAction:
+    """Tests for thermostat hysteresis no-action band."""
+
+    def test_temp_in_hysteresis_band_no_state_change(self, time_provider, mock_event_logger):
+        """When thermostat_active=True and temp is in hysteresis band, relay state unchanged."""
+        mock_dht = Mock()
+        # max_temp=25.0, hysteresis=1.0 → release threshold = 24.0
+        # temp=24.5 is in the band [24.0, 25.0) → no action
+        mock_dht.last_temperature = 24.5
+
+        from lib.relay import FanController
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            fan = FanController(
+                pin=16,
+                time_provider=time_provider,
+                dht_logger=mock_dht,
+                logger=mock_event_logger,
+                interval_s=600,
+                on_time_s=20,
+                max_temp=25.0,
+                temp_hysteresis=1.0,
+                name="HystFan",
+            )
+        # Pre-set thermostat as active (fan already ON from previous temp spike)
+        fan.thermostat_active = True
+        fan.thermostat_on_count = 1
+        fan.turn_on()  # Fan is ON because thermostat activated it
+
+        # Reset call tracking after setup
+        fan.pin.value.reset_mock()
+
+        # Run one cycle
+        async def run_once():
+            with patch("asyncio.sleep", side_effect=RuntimeError("stop")):
+                try:
+                    await fan.start_cycle()
+                except RuntimeError:
+                    pass
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            asyncio.run(run_once())
+
+        # Thermostat should still be active (temp not below release threshold)
+        assert fan.thermostat_active is True
+        # thermostat_on_count should NOT have increased (no new activation)
+        assert fan.thermostat_on_count == 1

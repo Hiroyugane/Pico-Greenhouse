@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from config import DEVICE_CONFIG
 from tests.conftest import FAKE_LOCALTIME
 
 
@@ -406,3 +407,220 @@ class TestMainHealthCheck:
         # First sleep = normal (60), after recovery: still normal (60)
         assert sleep_durations[0] == 60
         assert sleep_durations[1] == 60
+
+
+@pytest.mark.asyncio
+class TestMainInitFailures:
+    """Tests for main() init-failure resilience paths."""
+
+    async def test_dht_logger_init_failure_creates_fallback(self, monkeypatch):
+        """When DHTLogger init raises (with status_manager), falls back to minimal DHTLogger."""
+        import main as main_module
+
+        monkeypatch.setattr(main_module, "validate_config", lambda: True)
+
+        mock_hw = Mock()
+        mock_hw.setup.return_value = True
+        mock_hw.get_rtc.return_value = Mock()
+        mock_hw.is_sd_mounted.return_value = True
+        monkeypatch.setattr(main_module, "HardwareFactory", lambda *a, **kw: mock_hw)
+
+        mock_buffer = Mock()
+        mock_buffer.get_metrics.return_value = {"buffer_entries": 0, "writes_to_fallback": 0, "fallback_migrations": 0}
+        mock_buffer.is_primary_available.return_value = True
+        mock_buffer._buffers = {}
+        monkeypatch.setattr(main_module, "BufferManager", lambda *a, **kw: mock_buffer)
+
+        mock_logger = Mock()
+        monkeypatch.setattr(main_module, "EventLogger", lambda *a, **kw: mock_logger)
+
+        # First call (with status_manager) raises; second call (without) succeeds
+        call_count = 0
+
+        def dht_factory(*a, **kw):
+            nonlocal call_count
+            call_count += 1
+            if "status_manager" in kw and kw["status_manager"] is not None:
+                raise RuntimeError("sensor init boom")
+            return Mock()
+
+        monkeypatch.setattr(main_module, "DHTLogger", dht_factory)
+        monkeypatch.setattr(main_module, "FanController", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "GrowlightController", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "ServiceReminder", lambda *a, **kw: Mock())
+        mock_buzzer = Mock()
+        mock_buzzer.startup = AsyncMock()
+        monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
+        monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: Mock(run_post=AsyncMock(return_value=True)))
+        monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: Mock())
+
+        async def stop_sleep(duration):
+            raise asyncio.CancelledError()
+
+        monkeypatch.setattr(main_module.asyncio, "sleep", stop_sleep)
+        monkeypatch.setattr(main_module.asyncio, "sleep_ms", stop_sleep)
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with pytest.raises(asyncio.CancelledError):
+                await main_module.main()
+
+        # DHTLogger should have been called twice (first raises, second succeeds)
+        assert call_count == 2
+        # Error should have been logged
+        mock_logger.error.assert_any_call("MAIN", "DHTLogger init failed: sensor init boom")
+
+    async def test_buzzer_init_failure_sets_none(self, monkeypatch):
+        """When BuzzerController init raises, buzzer is None and warning is logged."""
+        import main as main_module
+
+        monkeypatch.setattr(main_module, "validate_config", lambda: True)
+
+        mock_hw = Mock()
+        mock_hw.setup.return_value = True
+        mock_hw.get_rtc.return_value = Mock()
+        mock_hw.is_sd_mounted.return_value = True
+        monkeypatch.setattr(main_module, "HardwareFactory", lambda *a, **kw: mock_hw)
+
+        mock_buffer = Mock()
+        mock_buffer.get_metrics.return_value = {"buffer_entries": 0, "writes_to_fallback": 0, "fallback_migrations": 0}
+        mock_buffer.is_primary_available.return_value = True
+        mock_buffer._buffers = {}
+        monkeypatch.setattr(main_module, "BufferManager", lambda *a, **kw: mock_buffer)
+
+        mock_logger = Mock()
+        monkeypatch.setattr(main_module, "EventLogger", lambda *a, **kw: mock_logger)
+        monkeypatch.setattr(main_module, "DHTLogger", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "FanController", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "GrowlightController", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "ServiceReminder", lambda *a, **kw: Mock())
+
+        # BuzzerController raises on init
+        monkeypatch.setattr(
+            main_module,
+            "BuzzerController",
+            Mock(side_effect=RuntimeError("PWM fail")),
+        )
+
+        mock_sm = Mock(run_post=AsyncMock(return_value=True))
+        monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: mock_sm)
+        monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: Mock())
+
+        async def stop_sleep(duration):
+            raise asyncio.CancelledError()
+
+        monkeypatch.setattr(main_module.asyncio, "sleep", stop_sleep)
+        monkeypatch.setattr(main_module.asyncio, "sleep_ms", stop_sleep)
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with pytest.raises(asyncio.CancelledError):
+                await main_module.main()
+
+        # Should have logged warning about buzzer failure
+        warning_calls = [str(c) for c in mock_logger.warning.call_args_list]
+        assert any("Buzzer init failed" in c for c in warning_calls)
+        # set_buzzer should NOT have been called on status_manager
+        mock_sm.set_buzzer.assert_not_called()
+
+    async def test_rtc_invalid_sets_warning(self, monkeypatch):
+        """When time_provider.time_valid is False, sets rtc_invalid warning."""
+        import main as main_module
+
+        monkeypatch.setattr(main_module, "validate_config", lambda: True)
+
+        mock_hw = Mock()
+        mock_hw.setup.return_value = True
+        mock_hw.get_rtc.return_value = Mock()
+        mock_hw.is_sd_mounted.return_value = True
+        monkeypatch.setattr(main_module, "HardwareFactory", lambda *a, **kw: mock_hw)
+
+        mock_buffer = Mock()
+        mock_buffer.get_metrics.return_value = {"buffer_entries": 0, "writes_to_fallback": 0, "fallback_migrations": 0}
+        mock_buffer.is_primary_available.return_value = True
+        mock_buffer._buffers = {}
+        monkeypatch.setattr(main_module, "BufferManager", lambda *a, **kw: mock_buffer)
+
+        mock_logger = Mock()
+        monkeypatch.setattr(main_module, "EventLogger", lambda *a, **kw: mock_logger)
+        monkeypatch.setattr(main_module, "DHTLogger", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "FanController", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "GrowlightController", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "ServiceReminder", lambda *a, **kw: Mock())
+        mock_buzzer = Mock()
+        mock_buzzer.startup = AsyncMock()
+        monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
+
+        # Create a mock RTCTimeProvider with time_valid=False
+        mock_tp = Mock()
+        mock_tp.time_valid = False
+        monkeypatch.setattr(main_module, "RTCTimeProvider", lambda *a, **kw: mock_tp)
+
+        mock_sm = Mock(run_post=AsyncMock(return_value=True))
+        monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: mock_sm)
+        monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: Mock())
+
+        async def stop_sleep(duration):
+            raise asyncio.CancelledError()
+
+        monkeypatch.setattr(main_module.asyncio, "sleep", stop_sleep)
+        monkeypatch.setattr(main_module.asyncio, "sleep_ms", stop_sleep)
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with pytest.raises(asyncio.CancelledError):
+                await main_module.main()
+
+        mock_sm.set_warning.assert_any_call("rtc_invalid", True)
+
+    async def test_post_disabled_skips_run_post(self, monkeypatch):
+        """When post_enabled=False in config, run_post is not called."""
+        import main as main_module
+
+        # Override config to disable POST
+        custom_config = dict(DEVICE_CONFIG)
+        custom_config["status_leds"] = dict(DEVICE_CONFIG.get("status_leds", {}))
+        custom_config["status_leds"]["post_enabled"] = False
+        monkeypatch.setattr(main_module, "DEVICE_CONFIG", custom_config)
+
+        monkeypatch.setattr(main_module, "validate_config", lambda: True)
+
+        mock_hw = Mock()
+        mock_hw.setup.return_value = True
+        mock_hw.get_rtc.return_value = Mock()
+        mock_hw.is_sd_mounted.return_value = True
+        monkeypatch.setattr(main_module, "HardwareFactory", lambda *a, **kw: mock_hw)
+
+        mock_buffer = Mock()
+        mock_buffer.get_metrics.return_value = {"buffer_entries": 0, "writes_to_fallback": 0, "fallback_migrations": 0}
+        mock_buffer.is_primary_available.return_value = True
+        mock_buffer._buffers = {}
+        monkeypatch.setattr(main_module, "BufferManager", lambda *a, **kw: mock_buffer)
+
+        mock_logger = Mock()
+        monkeypatch.setattr(main_module, "EventLogger", lambda *a, **kw: mock_logger)
+        monkeypatch.setattr(main_module, "DHTLogger", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "FanController", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "GrowlightController", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "ServiceReminder", lambda *a, **kw: Mock())
+        mock_buzzer = Mock()
+        mock_buzzer.startup = AsyncMock()
+        monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
+
+        mock_sm = Mock(run_post=AsyncMock(return_value=True))
+        monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: mock_sm)
+        monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: Mock())
+
+        async def stop_sleep(duration):
+            raise asyncio.CancelledError()
+
+        monkeypatch.setattr(main_module.asyncio, "sleep", stop_sleep)
+        monkeypatch.setattr(main_module.asyncio, "sleep_ms", stop_sleep)
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with pytest.raises(asyncio.CancelledError):
+                await main_module.main()
+
+        # run_post should NOT have been called
+        mock_sm.run_post.assert_not_called()

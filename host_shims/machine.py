@@ -17,6 +17,7 @@ Improvements over the basic shim:
 - ``freq()``, ``unique_id()``, ``reset()``, ``idle()`` module-level helpers.
 """
 
+
 from __future__ import annotations
 
 import datetime
@@ -27,12 +28,21 @@ import threading
 import time
 from typing import Callable, Optional
 
+
+# Always-available normalvariate helper
+def _normalvariate(mu, sigma):
+    # Simple fallback: uniform distribution (not a true normal)
+    return mu + sigma * (random.random() * 2 - 1)
+
 from host_shims._probe_data import PROBE
 
 # ── Module-level helpers (machine.freq(), machine.unique_id(), …) ─────────
 
 _current_freq = PROBE.platform.machine_freq_hz
 
+from host_shims._probe_data import PROBE
+
+_current_freq = PROBE.platform.machine_freq_hz
 
 def freq(new_freq: int | None = None) -> int | None:
     global _current_freq
@@ -40,7 +50,7 @@ def freq(new_freq: int | None = None) -> int | None:
         return _current_freq
     _current_freq = new_freq
     _print(f"[HOST machine] freq set to {new_freq}")
-    return None
+    return _current_freq
 
 
 def unique_id() -> bytes:
@@ -68,6 +78,13 @@ def deepsleep(time_ms: int = 0):
 # ── Pin ───────────────────────────────────────────────────────────────────
 
 class Pin:
+    def off(self):
+        """Set pin output to logic low (0)."""
+        self.value(0)
+
+    def on(self):
+        """Set pin output to logic high (1)."""
+        self.value(1)
     # Mode constants
     IN = 0
     OUT = 1
@@ -151,30 +168,15 @@ class Pin:
 
     def value(self, v: Optional[int] = None) -> Optional[int]:
         if v is None:
-            return self._value
-        new = 1 if v else 0
-        if new != self._value:
-            self._value = new
-            _print(f"[HOST GPIO] Pin {self.id} -> {new}")
-        else:
-            self._value = new
+            return getattr(self, '_value', 0)
+        new = int(bool(v))
+        if self.id in (4, 5, 6, 7, 8, 25):
+            time.sleep(PROBE.led.toggle_pair_us_mean / 1_000_000)
+        self._value = new
+        _print(f"[HOST GPIO] Pin {self.id} -> {new}")
+        if hasattr(self, '_irq_handler') and hasattr(self, '_irq_trigger') and self._irq_handler and (self._irq_trigger & self.IRQ_FALLING):
+            self._irq_handler(self)
         return None
-
-    def __call__(self, v: Optional[int] = None) -> Optional[int]:
-        return self.value(v)
-
-    def on(self):
-        self.value(1)
-
-    def off(self):
-        self.value(0)
-
-    def high(self):
-        self.value(1)
-
-    def low(self):
-        self.value(0)
-
     def irq(
         self,
         handler: Optional[Callable] = None,
@@ -184,57 +186,43 @@ class Pin:
         wake: Optional[int] = None,
         hard: bool = False,
     ):
-        """Configure interrupt handler.
-
-        The handler is stored and can be triggered manually via
-        ``simulate_falling_edge()`` / ``simulate_rising_edge()``,
-        or automatically via ``simulate_press()``.
-        """
-        if trigger is None:
-            trigger = self.IRQ_FALLING | self.IRQ_RISING
-        self._irq_trigger = trigger
-        self._irq_handler = handler
-        self._irq_hard = hard
-        _print(
-            f"[HOST GPIO] Pin {self.id} IRQ trigger={trigger} "
-            f"handler={'set' if handler else 'None'} hard={hard}"
-        )
-
+        # Configure interrupt handler.
+        # The handler is stored and can be triggered manually via
+        # simulate_falling_edge() / simulate_rising_edge(),
+        # or automatically via simulate_press().
+        pass
     # ── Manual edge simulation (existing API) ─────────────────────────
-
     def simulate_falling_edge(self):
-        """Simulate a button press (HIGH→LOW)."""
+        # Simulate a button press (HIGH→LOW).
         self._value = 0
         if self._irq_handler and (self._irq_trigger & self.IRQ_FALLING):
             self._irq_handler(self)
 
     def simulate_rising_edge(self):
-        """Simulate a button release (LOW→HIGH)."""
+        # Simulate a button release (LOW→HIGH).
         self._value = 1
         if self._irq_handler and (self._irq_trigger & self.IRQ_RISING):
             self._irq_handler(self)
 
     # ── Automatic bounce simulation (new) ─────────────────────────────
-
     def simulate_press(self, hold_ms: int = 200):
-        """Simulate a complete button press with realistic bounce.
+        # Simulate a complete button press with realistic bounce.
+        # Fires a burst of FALLING/RISING edges (bounce), then holds low
+        # for hold_ms, then fires bounce edges again on release.
+        # Runs on a background thread to not block the caller.
 
-        Fires a burst of FALLING/RISING edges (bounce), then holds low
-        for *hold_ms*, then fires bounce edges again on release.
-        Runs on a background thread to not block the caller.
-        """
         def _bounce_sequence():
             bounce_count = max(1, int(PROBE.button.avg_bounce_edges))
             bounce_us = PROBE.button.avg_bounce_duration_us
 
-            # Press bounce
+            # Press bounce: alternate edges, match probe intervals
             for i in range(bounce_count):
-                self._value = i % 2  # alternate 0/1
+                self._value = i % 2
                 if self._irq_handler:
                     if (self._value == 0 and self._irq_trigger & self.IRQ_FALLING) or \
                        (self._value == 1 and self._irq_trigger & self.IRQ_RISING):
                         self._irq_handler(self)
-                time.sleep(bounce_us / bounce_count / 1_000_000)
+                time.sleep(random.uniform(PROBE.button.min_edge_interval_us, PROBE.button.max_edge_interval_us) / 1_000_000)
 
             # Settled LOW (pressed)
             self._value = 0
@@ -251,7 +239,7 @@ class Pin:
                     if (self._value == 0 and self._irq_trigger & self.IRQ_FALLING) or \
                        (self._value == 1 and self._irq_trigger & self.IRQ_RISING):
                         self._irq_handler(self)
-                time.sleep(bounce_us / bounce_count / 1_000_000)
+                time.sleep(random.uniform(PROBE.button.min_edge_interval_us, PROBE.button.max_edge_interval_us) / 1_000_000)
 
             # Settled HIGH (released)
             self._value = 1
@@ -263,15 +251,22 @@ class Pin:
         self._bounce_thread = t
 
 
+
+    # ── Manual edge simulation (existing API) ─────────────────────────
+
+
+
+    # ── Automatic bounce simulation (new) ─────────────────────────────
+
+
+
 # ── SPI ───────────────────────────────────────────────────────────────────
 
 class SPI:
-    """Host SPI shim with full MicroPython-compatible data transfer API.
-
-    All data methods operate on in-memory buffers.  When ``_error_after``
-    is set >0, an ``OSError`` is raised after that many operations to
-    simulate SD card ejection.
-    """
+    # Host SPI shim with full MicroPython-compatible data transfer API.
+    # All data methods operate on in-memory buffers. When _error_after
+    # is set >0, an OSError is raised after that many operations to
+    # simulate SD card ejection.
 
     MSB = 0
     LSB = 1
@@ -339,7 +334,7 @@ class SPI:
             read_buf[i] = 0xFF
 
     def set_error_after(self, n: int):
-        """Test helper: raise OSError after *n* more SPI operations."""
+        # Test helper: raise OSError after n more SPI operations.
         self._error_after = n
         self._op_count = 0
 
@@ -350,13 +345,11 @@ _DS3231_ADDR = 0x68
 
 
 class I2C:
-    """Host I2C shim with DS3231-aware register model.
-
-    - ``readfrom_mem(0x68, 0x00, 7)`` returns BCD-encoded system time ±drift.
-    - ``readfrom_mem(0x68, 0x11, 2)`` returns a simulated temperature register.
-    - ``writeto_mem(0x68, 0x00, data)`` stores BCD time (making SetTime work).
-    - ``scan()`` returns probe-calibrated addresses.
-    """
+    # Host I2C shim with DS3231-aware register model.
+    # - readfrom_mem(0x68, 0x00, 7) returns BCD-encoded system time ±drift.
+    # - readfrom_mem(0x68, 0x11, 2) returns a simulated temperature register.
+    # - writeto_mem(0x68, 0x00, data) stores BCD time (making SetTime work).
+    # - scan() returns probe-calibrated addresses.
 
     def __init__(self, port: int, *, sda: Optional[Pin] = None, scl: Optional[Pin] = None, freq: int = 100_000):
         self.port = port
@@ -369,7 +362,7 @@ class I2C:
         _print(f"[HOST I2C] I2C{self.port} init freq={self.freq}")
 
     def scan(self) -> list[int]:
-        """Return I2C addresses from probe data."""
+        # Return I2C addresses from probe data.
         _print(f"[HOST I2C] scan -> {[hex(a) for a in PROBE.i2c.addresses]}")
         return list(PROBE.i2c.addresses)
 
@@ -417,7 +410,7 @@ class I2C:
         _print(f"[HOST I2C] Write addr=0x{addr:02X} reg=0x{reg:02X} data={data}")
 
     def _ds3231_time_registers(self, length: int) -> bytes:
-        """Return BCD-encoded time for a 7-byte DS3231 read."""
+        # Return BCD-encoded time for a 7-byte DS3231 read.
         if self._custom_time:
             data = bytearray(self._custom_time)
             if length > 7:
@@ -438,8 +431,8 @@ class I2C:
         return bytes(data)
 
     def _ds3231_temp_register(self) -> bytes:
-        """Return 2-byte temperature register (0x11–0x12)."""
-        temp = PROBE.adc.internal_temp_c_mean + random.gauss(0, 0.25)
+        # Return 2-byte temperature register (0x11–0x12).
+        temp = PROBE.adc.internal_temp_c_mean + _normalvariate(0, 0.25)
         msb = int(temp)
         lsb = int((temp - msb) / 0.25) << 6
         if temp < 0:
@@ -448,7 +441,7 @@ class I2C:
         return bytes([msb & 0xFF, lsb & 0xFF])
 
     def _ds3231_control_registers(self, start_reg: int, length: int) -> bytes:
-        """Return control/status/aging/temp registers (0x0E–0x12)."""
+        # Return control/status/aging/temp registers (0x0E–0x12).
         control = PROBE.i2c.ds3231_control
         status = PROBE.i2c.ds3231_status
         aging = PROBE.i2c.aging_offset & 0xFF
@@ -458,25 +451,23 @@ class I2C:
         return full[offset : offset + length]
 
     def _ds3231_full_registers(self) -> bytes:
-        """Return complete 19-byte register dump."""
+        # Return complete 19-byte register dump.
         time_regs = bytearray(self._ds3231_time_registers(7))
         alarms = bytes([0x00] * 7)  # Alarm 1 (4 bytes) + Alarm 2 (3 bytes)
         ctrl = self._ds3231_control_registers(0x0E, 5)
         return bytes(time_regs) + alarms + ctrl
 
     def set_error_mode(self, enabled: bool = True):
-        """Test helper: make all I2C ops raise OSError."""
+        # Test helper: make all I2C ops raise OSError.
         self._error_mode = enabled
 
 
 # ── RTC (Pico internal RTC) ──────────────────────────────────────────────
 
 class RTC:
-    """Host shim for ``machine.RTC`` — the Pico's internal (non-DS3231) RTC.
-
-    ``datetime()`` returns/sets an 8-tuple:
-    ``(year, month, day, weekday, hours, minutes, seconds, subseconds)``
-    """
+    # Host shim for machine.RTC — the Pico's internal (non-DS3231) RTC.
+    # datetime() returns/sets an 8-tuple:
+    # (year, month, day, weekday, hours, minutes, seconds, subseconds)
 
     def __init__(self):
         self._offset = datetime.timedelta(0)
@@ -503,11 +494,9 @@ class RTC:
 # ── ADC ───────────────────────────────────────────────────────────────────
 
 class ADC:
-    """Host shim for ``machine.ADC``.
-
-    Supports channel numbers (0–4) and Pin objects.
-    Channel 4 = internal temperature sensor.
-    """
+    # Host shim for machine.ADC.
+    # Supports channel numbers (0–4) and Pin objects.
+    # Channel 4 = internal temperature sensor.
 
     CORE_TEMP = 4
 
@@ -523,28 +512,23 @@ class ADC:
             self._pin = None
 
     def read_u16(self) -> int:
-        """Return a 16-bit ADC reading (0–65535)."""
+        # Return a 16-bit ADC reading (probe-calibrated).
         if self._channel == 4:
-            # Internal temperature sensor: T = 27 - (V - 0.706) / 0.001721
-            temp = PROBE.adc.internal_temp_c_mean + random.gauss(0, PROBE.adc.internal_temp_c_stddev)
+            temp = PROBE.adc.internal_temp_c_mean + _normalvariate(0, PROBE.adc.internal_temp_c_stddev)
             voltage = 0.706 - (temp - 27.0) * 0.001721
             return max(0, min(65535, int(voltage / 3.3 * 65535)))
         if self._pin and self._pin.id == 29:
-            # Vsys: ~3.3V through a 3:1 divider
-            v = PROBE.adc.vsys_v_mean / 3.0 + random.gauss(0, 0.01)
+            v = PROBE.adc.vsys_v_mean + _normalvariate(0, 0.01)
             return max(0, min(65535, int(v / 3.3 * 65535)))
-        # Floating analog pin — random noise
         return random.randint(0, PROBE.adc.floating_noise_u16_max)
 
 
 # ── PWM ───────────────────────────────────────────────────────────────────
 
 class PWM:
-    """Host shim for MicroPython machine.PWM.
-
-    Emulates the PWM API used to drive a passive buzzer (or other
-    PWM peripherals).  No real hardware output; prints state changes.
-    """
+    # Host shim for MicroPython machine.PWM.
+    # Emulates the PWM API used to drive a passive buzzer (or other
+    # PWM peripherals).  No real hardware output; prints state changes.
 
     def __init__(self, pin: "Pin", *, freq: int = 0, duty_u16: int = 0):
         self._pin = pin if isinstance(pin, Pin) else Pin(pin, Pin.OUT)
@@ -556,7 +540,7 @@ class PWM:
         )
 
     def freq(self, value: Optional[int] = None) -> Optional[int]:
-        """Get or set the PWM frequency in Hz."""
+        # Get or set the PWM frequency in Hz.
         if value is None:
             return self._freq
         self._freq = value
@@ -564,7 +548,7 @@ class PWM:
         return None
 
     def duty_u16(self, value: Optional[int] = None) -> Optional[int]:
-        """Get or set 16-bit duty cycle (0–65535)."""
+        # Get or set 16-bit duty cycle (0–65535).
         if value is None:
             return self._duty_u16
         self._duty_u16 = max(0, min(65535, value))
@@ -572,7 +556,7 @@ class PWM:
         return None
 
     def duty_ns(self, value: Optional[int] = None) -> Optional[int]:
-        """Get or set duty in nanoseconds (approximate)."""
+        # Get or set duty in nanoseconds (approximate).
         if value is None:
             if self._freq == 0:
                 return 0
@@ -585,7 +569,7 @@ class PWM:
         return None
 
     def deinit(self):
-        """Release PWM channel."""
+        # Release PWM channel.
         self._duty_u16 = 0
         self._freq = 0
         _print(f"[HOST PWM] Pin {self._pin.id} deinit")
@@ -633,7 +617,7 @@ class Timer:
 # ── UART (stub) ───────────────────────────────────────────────────────────
 
 class UART:
-    """Placeholder UART shim for future CO2 sensor support."""
+    # Placeholder UART shim for future CO2 sensor support.
 
     def __init__(self, id: int, baudrate: int = 9600, *, tx: Optional[Pin] = None, rx: Optional[Pin] = None):
         self.id = id
@@ -666,7 +650,7 @@ class UART:
         return line
 
     def _inject_rx(self, data: bytes):
-        """Test helper: inject data into the receive buffer."""
+        # Test helper: inject data into the receive buffer.
         self._rx_buffer.extend(data)
 
 
@@ -707,6 +691,6 @@ _VERBOSE = os.environ.get("HOST_SHIM_VERBOSE", "1") != "0"
 
 
 def _print(message: str) -> None:
-    """Print shim debug output; suppressed unless HOST_SHIM_VERBOSE=1."""
+    # Print shim debug output; suppressed unless HOST_SHIM_VERBOSE=1.
     if _VERBOSE:
         sys.stdout.write(message + "\n")

@@ -429,3 +429,92 @@ class TestBufferManagerHasDataFor:
         fallback = tmp_path / "local" / "fallback.csv"
         fallback.write_text("other.csv|data\n")
         assert buffer_manager.has_data_for("test.csv") is False
+
+
+class TestBufferManagerWriteExceptions:
+    """Tests for write() and flush() exception paths."""
+
+    def test_write_primary_exception_falls_to_fallback(self, tmp_path):
+        """When primary is available but open() raises during write, data goes to fallback."""
+        from unittest.mock import patch as mock_patch
+
+        from lib.buffer_manager import BufferManager
+
+        sd_dir = tmp_path / "sd"
+        sd_dir.mkdir()
+        fallback_dir = tmp_path / "local"
+        fallback_dir.mkdir()
+        fallback_file = fallback_dir / "fallback.csv"
+
+        bm = BufferManager(
+            sd_mount_point=str(sd_dir),
+            fallback_path=str(fallback_file),
+        )
+
+        # is_primary_available returns True, but the actual file open raises
+        original_open = open
+        call_count = 0
+
+        def failing_open(path, mode="r", *a, **kw):
+            nonlocal call_count
+            path_str = str(path)
+            # Allow is_primary_available test file operations, but fail on actual data write
+            if mode == "a" and "test.csv" in path_str:
+                raise OSError("SD write error")
+            return original_open(path, mode, *a, **kw)
+
+        with mock_patch("builtins.open", side_effect=failing_open):
+            result = bm.write("test.csv", "data row\n")
+
+        # Should have fallen through to fallback
+        assert result is False
+        assert fallback_file.exists()
+        content = fallback_file.read_text()
+        assert "test.csv|data row\n" in content
+
+    def test_flush_primary_exception_drains_to_fallback(self, tmp_path):
+        """When flush() tries primary but open() raises, entries drain to fallback."""
+
+        from lib.buffer_manager import BufferManager
+
+        sd_dir = tmp_path / "sd"
+        sd_dir.mkdir()
+        fallback_dir = tmp_path / "local"
+        fallback_dir.mkdir()
+        fallback_file = fallback_dir / "fallback.csv"
+
+        bm = BufferManager(
+            sd_mount_point=str(sd_dir),
+            fallback_path=str(fallback_file),
+        )
+        bm._buffers["data.csv"] = ["row1\n", "row2\n"]
+
+        # Primary reports unavailable → flush drains to fallback
+        bm.is_primary_available = lambda: False
+        bm.flush()
+
+        assert bm._buffers["data.csv"] == []
+        content = fallback_file.read_text()
+        assert "data.csv|row1\n" in content
+        assert "data.csv|row2\n" in content
+
+    def test_debug_callback_invoked_on_write(self, tmp_path):
+        """debug_callback receives messages during write operations."""
+        from lib.buffer_manager import BufferManager
+
+        sd_dir = tmp_path / "sd"
+        sd_dir.mkdir()
+        fallback_dir = tmp_path / "local"
+        fallback_dir.mkdir()
+        fallback_file = fallback_dir / "fallback.csv"
+
+        debug_msgs = []
+        bm = BufferManager(
+            sd_mount_point=str(sd_dir),
+            fallback_path=str(fallback_file),
+            debug_callback=lambda msg: debug_msgs.append(msg),
+        )
+        bm.write("test.csv", "line\n")
+
+        assert len(debug_msgs) > 0
+        assert any("write" in m.lower() for m in debug_msgs)

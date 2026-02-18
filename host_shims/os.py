@@ -83,7 +83,14 @@ if not hasattr(_os, "statvfs"):
 
         Uses real SD card capacity data from hw_probe if available,
         otherwise returns realistic defaults for a 32 GB FAT32 SD card.
+        Simulates ENOENT and ENODEV errors for SD hotswap scenarios.
         """
+        # Simulate SD card removal scenarios
+        if path.startswith("/sd/") or path == "/sd":
+            # Simulate ENOENT if SD card is not present
+            if not _os.path.exists(path):
+                err = PROBE.sd.hotswap_errors.get("open_file", {"errno": 2, "message": "[Errno 2] ENOENT"})
+                raise OSError(err["errno"], err["message"])
         return PROBE.sd.statvfs_tuple
 
 

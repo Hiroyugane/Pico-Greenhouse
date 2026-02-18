@@ -779,3 +779,71 @@ class TestServiceReminder:
             handler = LEDButtonHandler(5, 9)
             reminder = ServiceReminder(time_provider, handler)
         assert reminder.blink_after_days == 3
+
+
+class TestServiceReminderPersistenceErrors:
+    """Tests for persistence error handling in ServiceReminder."""
+
+    def test_days_since_service_exception_returns_zero(self, time_provider):
+        """_days_since_Service() returns 0 when time calculation raises."""
+        from lib.led_button import LEDButtonHandler, ServiceReminder
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            handler = LEDButtonHandler(5, 9)
+            reminder = ServiceReminder(time_provider, handler)
+
+        # Force an exception in the date calculation
+        reminder.last_serviced_date = ("invalid", "date", "tuple")
+        days = reminder._days_since_Service()
+        assert days == 0
+
+    def test_save_timestamp_write_failure_logs_error(self, time_provider, tmp_path):
+        """_save_last_serviced_timestamp() handles write failure gracefully."""
+        from lib.led_button import LEDButtonHandler, ServiceReminder
+
+        mock_logger = Mock()
+        storage = tmp_path / "readonly_dir" / "reminder.txt"
+        # Don't create parent dir → write will fail
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            handler = LEDButtonHandler(5, 9)
+            reminder = ServiceReminder(
+                time_provider,
+                handler,
+                storage_path=str(storage),
+                logger=mock_logger,
+            )
+
+        # The init would have tried to save; now try again with impossible path
+        reminder.storage_path = str(tmp_path / "nonexistent_deep" / "nested" / "file.txt")
+        reminder._save_last_serviced_timestamp("2026-01-29 14:00:00")
+
+        # Should have logged an error (not crashed)
+        mock_logger.error.assert_called()
+
+    def test_load_timestamp_missing_file_returns_none(self, time_provider, tmp_path):
+        """_load_last_serviced_timestamp() returns None when file doesn't exist."""
+        from lib.led_button import LEDButtonHandler, ServiceReminder
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            handler = LEDButtonHandler(5, 9)
+            reminder = ServiceReminder(time_provider, handler)
+
+        reminder.storage_path = str(tmp_path / "nonexistent.txt")
+        result = reminder._load_last_serviced_timestamp()
+        assert result is None
+
+    def test_load_timestamp_empty_file_returns_none(self, time_provider, tmp_path):
+        """_load_last_serviced_timestamp() returns None for empty file."""
+        from lib.led_button import LEDButtonHandler, ServiceReminder
+
+        storage = tmp_path / "empty.txt"
+        storage.write_text("")
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            handler = LEDButtonHandler(5, 9)
+            reminder = ServiceReminder(time_provider, handler)
+
+        reminder.storage_path = str(storage)
+        result = reminder._load_last_serviced_timestamp()
+        assert result is None

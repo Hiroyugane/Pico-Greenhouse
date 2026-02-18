@@ -333,3 +333,48 @@ class TestHardwareFactoryRefresh:
             result = factory.refresh_sd()
         assert result is False
         assert factory.sd_mounted is False
+
+
+class TestHardwareFactoryI2C:
+    """Tests for I2C bus initialization."""
+
+    def test_init_i2c_failure_logs_error(self):
+        """_init_i2c() returns False and records error when I2C raises."""
+        from lib.hardware_factory import HardwareFactory
+
+        factory = HardwareFactory()
+
+        with patch("lib.hardware_factory.I2C", side_effect=OSError("I2C bus fail")):
+            result = factory._init_i2c()
+        assert result is False
+        assert factory.i2c1 is None
+        assert any("I2C1 init failed" in e for e in factory.errors)
+
+    def test_init_i2c_success(self):
+        """_init_i2c() returns True and stores i2c1 instance."""
+        from lib.hardware_factory import HardwareFactory
+
+        factory = HardwareFactory()
+        mock_i2c = Mock()
+
+        with patch("lib.hardware_factory.I2C", return_value=mock_i2c):
+            result = factory._init_i2c()
+        assert result is True
+        assert factory.i2c1 is mock_i2c
+
+    def test_init_rtc_without_i2c_uses_fallback(self):
+        """When i2c1 is None, _init_rtc() creates RTC with sda/scl/port fallback."""
+        from lib.hardware_factory import HardwareFactory
+
+        factory = HardwareFactory()
+        factory.i2c1 = None  # I2C init failed
+
+        mock_rtc_instance = Mock()
+        mock_rtc_instance.ReadTime = Mock(return_value=(0, 0, 12, 3, 15, 2, 2026))
+
+        with patch("lib.hardware_factory.ds3231.RTC", return_value=mock_rtc_instance) as mock_rtc_cls:
+            result = factory._init_rtc()
+        assert result is True
+        # Should have been called with sda_pin, scl_pin, port (fallback path)
+        call_kwargs = mock_rtc_cls.call_args
+        assert "sda_pin" in str(call_kwargs) or "scl_pin" in str(call_kwargs)

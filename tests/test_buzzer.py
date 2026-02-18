@@ -304,3 +304,44 @@ class TestBuzzerDeinit:
         buzzer_controller.deinit()
         deinit_calls = [c for c in mock_event_logger.debug.call_args_list if "Deinitialized" in str(c)]
         assert len(deinit_calls) >= 1
+
+
+# ============================================================================
+# BuzzerController — Convenience Fallbacks
+# ============================================================================
+
+
+class TestBuzzerConvenienceFallbacks:
+    """Tests for alert() and reminder() fallback paths."""
+
+    @pytest.mark.asyncio
+    async def test_alert_fallback_no_pattern(self):
+        """alert() falls back to single beep when no pattern configured."""
+        from lib.buzzer import BuzzerController
+
+        b = BuzzerController(pin=20, patterns={})
+        await b.alert()
+        b.pwm.freq.assert_called_with(2000)
+
+    @pytest.mark.asyncio
+    async def test_reminder_fallback_no_pattern(self):
+        """reminder() falls back to single beep when no pattern configured."""
+        from lib.buzzer import BuzzerController
+
+        b = BuzzerController(pin=20, patterns={})
+        await b.reminder()
+        b.pwm.freq.assert_called_with(880)
+
+    @pytest.mark.asyncio
+    async def test_get_state_after_mute(self, buzzer_controller):
+        """get_state() reflects muted state after mute()."""
+        buzzer_controller.mute()
+        state = buzzer_controller.get_state()
+        assert state["muted"] is True
+
+    @pytest.mark.asyncio
+    async def test_get_state_after_disable(self, buzzer_controller):
+        """get_state() reflects disabled state after set_enabled(False)."""
+        buzzer_controller.set_enabled(False)
+        state = buzzer_controller.get_state()
+        assert state["enabled"] is False

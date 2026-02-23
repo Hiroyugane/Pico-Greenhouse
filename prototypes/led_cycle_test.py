@@ -14,6 +14,11 @@
 
 import sys
 
+import uasyncio as asyncio
+
+from config import DEVICE_CONFIG
+from lib.led_button import LED, LEDButtonHandler
+
 # On CPython, ensure the project root and host_shims are on sys.path.
 # MicroPython's `os` lacks `os.path`, and paths are already correct on-device.
 if sys.implementation.name != "micropython":
@@ -24,13 +29,23 @@ if sys.implementation.name != "micropython":
         sys.path.insert(0, _PROJECT_ROOT)
     sys.path.insert(0, os.path.join(_PROJECT_ROOT, "host_shims"))
 
-import uasyncio as asyncio  # noqa: E402
-
-from lib.led_button import LED, LEDButtonHandler  # noqa: E402
-
 # Pin definitions from config
-LED_PINS = [4, 5, 6, 7, 8, 25]
-LED_NAMES = ["DHT (GP4)", "Reminder (GP5)", "SD (GP6)", "Fan (GP7)", "Error (GP8)", "Onboard (GP25)"]
+LED_PINS = [
+    DEVICE_CONFIG["pins"]["activity_led"],  # GP4
+    DEVICE_CONFIG["pins"]["reminder_led"],  # GP5
+    DEVICE_CONFIG["pins"]["sd_led"],  # GP6
+    DEVICE_CONFIG["pins"]["warning_led"],  # GP7
+    DEVICE_CONFIG["pins"]["error_led"],  # GP8
+    DEVICE_CONFIG["pins"]["onboard_led"],  # GP25
+]
+LED_NAMES = [
+    "Activity (GP4)",
+    "Reminder (GP5)",
+    "SD (GP6)",
+    "Warning (GP7)",
+    "Error (GP8)",
+    "Onboard (GP25)",
+]
 BUTTON_PIN = 9
 
 

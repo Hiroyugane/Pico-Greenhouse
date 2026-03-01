@@ -643,18 +643,31 @@ class BufferManager:
         old_path = self._path_join(self.sd_mount_point, old_relpath)
         new_path = self._path_join(self.sd_mount_point, new_relpath)
 
+        _CHUNK = 512
+        copy_ok = False
         try:
-            # Always use copy-then-delete for safety:
-            # This ensures the new file is completely written before the
-            # old file is deleted, preventing data loss if rename fails.
+            # Chunked copy-then-delete: avoids allocating the entire file as a
+            # single contiguous string on MicroPython's heap (heap fragmentation
+            # would cause a memory allocation failure for files > ~13 KB).
             with open(old_path, "r") as src:
-                content = src.read()
-            with open(new_path, "w") as dst:
-                dst.write(content)
+                with open(new_path, "w") as dst:
+                    while True:
+                        chunk = src.read(_CHUNK)
+                        if not chunk:
+                            break
+                        dst.write(chunk)
+            copy_ok = True
             os.remove(old_path)
-            self._log_debug("rename succeeded", old=old_relpath, new=new_relpath, size=len(content))
+            self._log_debug("rename succeeded", old=old_relpath, new=new_relpath)
             return True
         except Exception as e:
+            # If the copy was incomplete, remove the partial destination file so
+            # the next rotation attempt starts fresh.
+            if not copy_ok:
+                try:
+                    os.remove(new_path)
+                except Exception:
+                    pass
             if self._logger:
                 self._logger.warning("BufferMgr", f"rename failed {old_path} -> {new_path}: {e}")
             else:

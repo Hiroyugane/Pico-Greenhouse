@@ -262,11 +262,11 @@ class FanController(RelayController):
                         )
 
                     elif self.thermostat_active:
-                        # In hysteresis band — no action
+                        # In hysteresis band — fan is on, waiting for temp to drop
                         self.logger.debug(
                             "FanController",
-                            f"{self.name} thermostat: hysteresis band "
-                            f"({self.max_temp - self.temp_hysteresis}°C <= {current_temp:.1f}°C < {self.max_temp}°C)",
+                            f"{self.name} thermostat: holding ON "
+                            f"({current_temp:.1f}°C >= {self.max_temp - self.temp_hysteresis}°C, off-threshold)",
                         )
 
                 # Apply time-of-day schedule (only when thermostat inactive)

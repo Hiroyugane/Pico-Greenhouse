@@ -58,6 +58,7 @@ class EventLogger:
         buffer_manager,
         logfile="/sd/system.log",
         max_size=50000,
+        debug_max_size=25000,
         status_manager=None,
         info_flush_threshold: int = 5,
         warn_flush_threshold: int = 3,
@@ -75,6 +76,8 @@ class EventLogger:
             buffer_manager: BufferManager instance for writes
             logfile (str): Path to log file (default: '/sd/system.log')
             max_size (int): Max log size before rotation in bytes (default: 50000)
+            debug_max_size (int): Rotation threshold used instead of max_size when debug_to_file=True
+                (default: 25000 — debug spam fills the log faster so rotate sooner)
             status_manager: StatusManager instance for LED feedback (optional)
             info_flush_threshold (int): Flush after N info entries buffered (default: 5)
             warn_flush_threshold (int): Flush after N warning entries buffered (default: 3)
@@ -86,6 +89,7 @@ class EventLogger:
         self.buffer_manager = buffer_manager
         self.logfile = logfile
         self.max_size = max_size
+        self.debug_max_size = debug_max_size
         self.buffer = []
         self.flush_count = 0
         self._log_size = 0
@@ -101,7 +105,7 @@ class EventLogger:
         if self.debug_enabled:
             print(
                 f"[EventLogger][DEBUG] init config | logfile={self.logfile} max_size={self.max_size} "
-                f"info_flush={info_flush_threshold} warn_flush={warn_flush_threshold} "
+                f"debug_max_size={debug_max_size} info_flush={info_flush_threshold} warn_flush={warn_flush_threshold} "
                 f"debug_enabled={debug_enabled} debug_to_file={debug_to_file}"
             )
 
@@ -288,10 +292,12 @@ class EventLogger:
         """
         self._refresh_log_size()
 
-        if self._log_size > self.max_size:
+        rotation_threshold = self.debug_max_size if self.debug_to_file else self.max_size
+        if self._log_size > rotation_threshold:
             if self.debug_enabled:
                 print(
-                    f"[EventLogger][DEBUG] log rotation triggered | log_size={self._log_size} max_size={self.max_size}"
+                    f"[EventLogger][DEBUG] log rotation triggered"
+                    f" | log_size={self._log_size} threshold={rotation_threshold}"
                 )
             try:
                 # Flush any pending entries so the rotated file is complete
@@ -307,12 +313,11 @@ class EventLogger:
 
                 renamed = self.buffer_manager.rename(relpath, rotated_relpath)
 
-                self._log_size = 0
-
                 if renamed:
+                    self._log_size = 0
                     self.info("EventLogger", f"Log rotated -> {rotated_name}")
                 else:
-                    self.info("EventLogger", "Log rotation rename failed; size counter reset")
+                    self.info("EventLogger", "Log rotation rename failed; will retry next cycle")
             except Exception as e:
                 print(f"[EventLogger] WARNING: Log rotation failed: {e}")
 

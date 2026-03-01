@@ -131,6 +131,7 @@ DEVICE_CONFIG = {
         "debug_enabled": True,  # Enable DEBUG messages to console (zero-cost when disabled)
         "debug_to_file": True,  # Also write DEBUG entries to SD log (caution: fills card)
         "debug_flush_threshold": 10,  # Flush after N debug entries buffered (when debug_to_file=True)
+        "debug_max_size": 25000,  # Rotation threshold when debug_to_file=True (lower: debug spam fills log faster)
     },
     # Buzzer Configuration (passive buzzer via PWM)
     "buzzer": {
@@ -247,6 +248,7 @@ def validate_config():
         "event_logger": [
             "logfile",
             "max_size",
+            "debug_max_size",
             "info_flush_threshold",
             "warn_flush_threshold",
             "log_level",
@@ -321,6 +323,9 @@ def validate_config():
 
     if DEVICE_CONFIG["event_logger"]["max_size"] <= 0:
         raise ValueError("event_logger.max_size must be > 0")
+
+    if DEVICE_CONFIG["event_logger"]["debug_max_size"] <= 0:
+        raise ValueError("event_logger.debug_max_size must be > 0")
 
     if DEVICE_CONFIG["event_logger"]["info_flush_threshold"] < 1:
         raise ValueError("event_logger.info_flush_threshold must be >= 1")

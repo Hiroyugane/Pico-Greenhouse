@@ -251,6 +251,49 @@ class TestBufferManagerRename:
         result = buffer_manager.rename("nonexistent.log", "new.log")
         assert result is False
 
+    def test_rename_chunked_large_file(self, buffer_manager, tmp_path):
+        """rename() preserves full content for files larger than the 512-byte chunk."""
+        content = "A" * 1500  # three full chunks
+        (tmp_path / "sd" / "big.log").write_text(content)
+        assert buffer_manager.rename("big.log", "big_old.log") is True
+        assert not (tmp_path / "sd" / "big.log").exists()
+        assert (tmp_path / "sd" / "big_old.log").read_text() == content
+
+    def test_rename_partial_cleanup_on_error(self, buffer_manager, tmp_path):
+        """rename() removes partial destination file if write fails mid-copy."""
+        content = "B" * 1500
+        old_file = tmp_path / "sd" / "error.log"
+        new_file = tmp_path / "sd" / "error_new.log"
+        old_file.write_text(content)
+
+        real_open = open
+        call_count = [0]
+
+        def patched_open(path, mode="r", *args, **kwargs):
+            fh = real_open(path, mode, *args, **kwargs)
+            # Raise on the second dst.write call to simulate mid-copy failure
+            if "w" in mode and "error_new.log" in str(path):
+                real_write = fh.write
+                call_count[0] = 0
+
+                def failing_write(data):
+                    call_count[0] += 1
+                    if call_count[0] > 1:
+                        raise OSError("simulated write failure")
+                    return real_write(data)
+
+                fh.write = failing_write
+            return fh
+
+        import builtins
+
+        with patch.object(builtins, "open", side_effect=patched_open):
+            result = buffer_manager.rename("error.log", "error_new.log")
+
+        assert result is False
+        assert old_file.exists(), "source file must survive a failed rename"
+        assert not new_file.exists(), "partial destination must be cleaned up"
+
 
 class TestBufferManagerUtilities:
     """Tests for path utilities and metrics."""

@@ -270,7 +270,8 @@ class RTCTimeProvider(TimeProvider):
             try:
                 elapsed = now - self._last_sync_epoch
                 if elapsed < self._sync_interval_s:
-                    self._debug("RTC sync skipped: interval not elapsed", elapsed=elapsed)
+                    # No debug log here: this branch fires on every timestamp call
+                    # (100% of calls between hourly syncs) and would flood the log.
                     return
             except Exception:
                 pass

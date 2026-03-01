@@ -121,6 +121,7 @@ async def main():
         buffer_manager,
         logfile=logger_config.get("logfile", "/sd/system.log"),
         max_size=logger_config.get("max_size", 50000),
+        debug_max_size=logger_config.get("debug_max_size", 25000),
         status_manager=status_manager,
         info_flush_threshold=logger_config.get("info_flush_threshold", 5),
         warn_flush_threshold=logger_config.get("warn_flush_threshold", 3),

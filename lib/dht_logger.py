@@ -5,7 +5,6 @@
 # Uses dependency injection for TimeProvider, BufferManager, EventLogger.
 # Decoupled from global state; supports hot-swap SD and date-based file rollover.
 
-import os
 import sys
 
 import dht
@@ -154,10 +153,10 @@ class DHTLogger:
         return exists
 
     def _resolve_path(self, file_path: str) -> str:
-        if sys.implementation.name == "micropython":
+        if getattr(sys.implementation, "name", "") == "micropython":
             return file_path
         if file_path.startswith("/sd/"):
-            return os.path.join(self.buffer_manager.sd_mount_point, file_path[4:])
+            return f"{self.buffer_manager.sd_mount_point}/{file_path[4:]}"
         return file_path
 
     def _create_file(self) -> None:

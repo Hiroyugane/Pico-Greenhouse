@@ -25,8 +25,8 @@
 import os
 import sys
 
-if sys.implementation.name != "micropython":
-    host_shims_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "host_shims")
+if sys.implementation.name != "micropython":  # type: ignore[union-attr]
+    host_shims_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "host_shims")  # type: ignore[attr-defined]
     sys.path.insert(0, host_shims_path)
 
 import uasyncio as asyncio

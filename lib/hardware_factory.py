@@ -20,7 +20,7 @@ from lib import ds3231
 from lib.sd_integration import is_mounted, mount_sd
 
 # Patchable flag: False when running on the Pico, True on host/CPython.
-_IS_HOST = sys.implementation.name != "micropython"
+_IS_HOST = getattr(sys.implementation, "name", "") != "micropython"
 
 
 class HardwareFactory:

@@ -495,10 +495,12 @@ class ServiceReminder:
             current_date = self.time_provider.now_date_tuple()
 
             # Use epoch-based day calculation to handle year boundaries safely
-            current_secs = time.mktime((current_date[0], current_date[1], current_date[2], 0, 0, 0, 0, 0))
-            last_secs = time.mktime(
-                (self.last_serviced_date[0], self.last_serviced_date[1], self.last_serviced_date[2], 0, 0, 0, 0, 0)
+            current_secs = time.mktime((current_date[0], current_date[1], current_date[2], 0, 0, 0, 0, 0))  # type: ignore[call-arg]
+            _last = (
+                self.last_serviced_date[0], self.last_serviced_date[1],
+                self.last_serviced_date[2], 0, 0, 0, 0, 0,
             )
+            last_secs = time.mktime(_last)  # type: ignore[call-arg]
 
             days = int((current_secs - last_secs) / 86400)
             if self._logger:

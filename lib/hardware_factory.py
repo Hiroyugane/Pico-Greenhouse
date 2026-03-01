@@ -64,7 +64,21 @@ class HardwareFactory:
         self.sd_mounted = False
         self.pins = {}
         self.errors = []
-        self._debug = debug_callback
+        self._debug_callback = debug_callback
+        self._logger = None
+
+    def set_logger(self, logger) -> None:
+        """Attach an EventLogger for debug diagnostics (wired after EventLogger creation)."""
+        self._logger = logger
+
+    def _debug(self, message: str, **fields) -> None:
+        """Emit debug message via logger, debug_callback, or print."""
+        if self._logger:
+            self._logger.debug("HWFactory", message, **fields)
+        elif self._debug_callback:
+            self._debug_callback(message)
+        else:
+            print(f"[HardwareFactory][DEBUG] {message}")
 
     def setup(self) -> bool:
         """
@@ -324,15 +338,21 @@ class HardwareFactory:
                 self.sd = sd
                 self.spi = spi
                 self.sd_mounted = ok
-                if self._debug:
-                    self._debug(f"refresh_sd: ok={ok}")
+                self._debug(
+                    "SD refresh (tuple)",
+                    ok=ok,
+                    sd_id=id(sd),
+                    spi_id=id(spi),
+                )
                 return ok
 
             self.sd_mounted = bool(result)
+            self._debug("SD refresh (bool)", mounted=self.sd_mounted)
             return self.sd_mounted
         except Exception as e:
             self.errors.append(f"SD refresh failed: {e}")
             self.sd_mounted = False
+            self._debug("SD refresh failed", error=str(e))
             return False
 
     def get_errors(self) -> list:

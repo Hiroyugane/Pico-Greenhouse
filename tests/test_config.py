@@ -301,17 +301,29 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["event_logger"]["log_level"] = original
 
-    def test_debug_to_sd_non_bool_raises(self):
-        """event_logger.debug_to_sd with non-bool raises ValueError."""
+    def test_debug_enabled_non_bool_raises(self):
+        """event_logger.debug_enabled with non-bool raises ValueError."""
         import config
 
-        original = config.DEVICE_CONFIG["event_logger"]["debug_to_sd"]
-        config.DEVICE_CONFIG["event_logger"]["debug_to_sd"] = "yes"
+        original = config.DEVICE_CONFIG["event_logger"]["debug_enabled"]
+        config.DEVICE_CONFIG["event_logger"]["debug_enabled"] = "yes"
         try:
-            with pytest.raises(ValueError, match="debug_to_sd"):
+            with pytest.raises(ValueError, match="debug_enabled"):
                 config.validate_config()
         finally:
-            config.DEVICE_CONFIG["event_logger"]["debug_to_sd"] = original
+            config.DEVICE_CONFIG["event_logger"]["debug_enabled"] = original
+
+    def test_debug_to_file_non_bool_raises(self):
+        """event_logger.debug_to_file with non-bool raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["event_logger"]["debug_to_file"]
+        config.DEVICE_CONFIG["event_logger"]["debug_to_file"] = "yes"
+        try:
+            with pytest.raises(ValueError, match="debug_to_file"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["event_logger"]["debug_to_file"] = original
 
     def test_zero_debug_flush_threshold_raises(self):
         """event_logger.debug_flush_threshold = 0 raises ValueError."""
@@ -335,3 +347,39 @@ class TestValidateConfig:
             assert config.validate_config() is True
         finally:
             config.DEVICE_CONFIG["event_logger"]["log_level"] = original
+
+    def test_debug_enabled_default_true(self):
+        """event_logger.debug_enabled defaults to True."""
+        from config import DEVICE_CONFIG
+
+        assert DEVICE_CONFIG["event_logger"]["debug_enabled"] is True
+
+    def test_debug_to_file_default_true(self):
+        """event_logger.debug_to_file defaults to True."""
+        from config import DEVICE_CONFIG
+
+        assert DEVICE_CONFIG["event_logger"]["debug_to_file"] is True
+
+    def test_missing_debug_enabled_raises(self):
+        """Missing event_logger.debug_enabled raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["event_logger"]["debug_enabled"]
+        del config.DEVICE_CONFIG["event_logger"]["debug_enabled"]
+        try:
+            with pytest.raises(ValueError, match="Missing config key"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["event_logger"]["debug_enabled"] = original
+
+    def test_missing_debug_to_file_raises(self):
+        """Missing event_logger.debug_to_file raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["event_logger"]["debug_to_file"]
+        del config.DEVICE_CONFIG["event_logger"]["debug_to_file"]
+        try:
+            with pytest.raises(ValueError, match="Missing config key"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["event_logger"]["debug_to_file"] = original

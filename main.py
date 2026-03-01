@@ -85,6 +85,7 @@ async def main():
         rtc_max_year=system_config.get("rtc_max_year", 2035),
         debug_callback=_dbg_cb,
     )
+    print(f"[STARTUP] TimeProvider created (valid={time_provider.time_valid})")
 
     # Step 3b: Create StatusManager (owns activity/SD/warning/error/heartbeat LEDs)
     status_led_config = DEVICE_CONFIG.get("status_leds", {})
@@ -105,12 +106,6 @@ async def main():
     # Reflect initial SD state
     status_manager.set_sd_status(hardware.is_sd_mounted())
 
-    # Run POST (visual LED walk) if enabled
-    if status_led_config.get("post_enabled", True):
-        post_step = status_led_config.get("post_step_ms", 150)
-        await status_manager.run_post(step_ms=post_step)
-        print("[STARTUP] POST complete — all status LEDs verified")
-
     # Step 4: Create BufferManager
     buffer_config = DEVICE_CONFIG.get("buffer_manager", {})
     buffer_manager = BufferManager(
@@ -130,18 +125,29 @@ async def main():
         info_flush_threshold=logger_config.get("info_flush_threshold", 5),
         warn_flush_threshold=logger_config.get("warn_flush_threshold", 3),
         log_level=logger_config.get("log_level", "INFO"),
-        debug_to_sd=logger_config.get("debug_to_sd", False),
-        debug_flush_threshold=logger_config.get("debug_flush_threshold", 10),
+        debug_enabled=logger_config.get("debug_enabled", False),
+        debug_to_file=logger_config.get("debug_to_file", False),
     )
 
     logger.info("MAIN", "System startup")
+    log_lvl = logger_config.get('log_level', 'INFO')
+    dbg_on = logger_config.get('debug_enabled', False)
+    logger.debug("MAIN", f"log_level={log_lvl}, debug_enabled={dbg_on}")
+
+    # Wire logger into StatusManager, BufferManager, TimeProvider, and HardwareFactory
+    status_manager.set_logger(logger)
+    buffer_manager.set_logger(logger)
+    time_provider.set_logger(logger)
+    hardware.set_logger(logger)
+
     logger.debug(
         "MAIN",
-        f"log_level={logger_config.get('log_level', 'INFO')}, debug_to_sd={logger_config.get('debug_to_sd', False)}",
+        "Step 3-5 complete",
+        rtc_valid=time_provider.time_valid,
+        sd_mounted=hardware.is_sd_mounted(),
+        debug_enabled=logger_config.get("debug_enabled", False),
+        debug_to_file=logger_config.get("debug_to_file", False),
     )
-
-    # Wire logger into StatusManager for condition-change logging
-    status_manager.set_logger(logger)
 
     # Step 6: Create DHTLogger
     dht_config = DEVICE_CONFIG.get("dht_logger", {})
@@ -196,7 +202,12 @@ async def main():
         )
         fans.append(fan)
     logger.info("MAIN", "Fan controllers initialized")
-    logger.debug("MAIN", f"Fans: {[f.name for f in fans]}")
+    logger.debug(
+        "MAIN",
+        "Step 7a fans",
+        fan_count=len(fans),
+        fan_names=str([f.name for f in fans]),
+    )
 
     # Step 7b: Create grow light controller
     light_config = DEVICE_CONFIG.get("growlight", {})
@@ -210,6 +221,13 @@ async def main():
         sunset_minute=light_config.get("sunset_minute", 0),
         poll_interval_s=light_config.get("poll_interval_s", 60),
         name="Growlight",
+    )
+    logger.debug(
+        "MAIN",
+        "Step 7b growlight",
+        dawn=f"{light_config.get('dawn_hour', 7):02d}:{light_config.get('dawn_minute', 0):02d}",
+        sunset=f"{light_config.get('sunset_hour', 19):02d}:{light_config.get('sunset_minute', 0):02d}",
+        poll_s=light_config.get("poll_interval_s", 60),
     )
 
     # Step 7c: Create buzzer controller
@@ -249,6 +267,12 @@ async def main():
         logger=logger,
     )
 
+    # Run POST (visual LED walk) if enabled
+    if status_led_config.get("post_enabled", True):
+        post_step = status_led_config.get("post_step_ms", 150)
+        await status_manager.run_post(step_ms=post_step, reminder_led=led_handler.led)
+        print("[STARTUP] POST complete — all status LEDs verified")
+
     Service_config = DEVICE_CONFIG.get("Service_reminder", {})
     reminder = ServiceReminder(
         time_provider=time_provider,
@@ -280,16 +304,21 @@ async def main():
     # Spawn fan cycle tasks
     for fan in fans:
         asyncio.create_task(fan.start_cycle())
+        logger.debug("MAIN", "task spawned", task=f"{fan.name}.start_cycle")
 
     # Spawn other async tasks
     asyncio.create_task(growlight.start_scheduler())
+    logger.debug("MAIN", "task spawned", task="growlight.start_scheduler")
     asyncio.create_task(dht_logger.log_loop())
+    logger.debug("MAIN", "task spawned", task="dht_logger.log_loop")
     asyncio.create_task(reminder.monitor())
+    logger.debug("MAIN", "task spawned", task="reminder.monitor")
     asyncio.create_task(
         led_handler.poll_button(
             interval_ms=system_config.get("button_poll_ms", 50),
         )
     )
+    logger.debug("MAIN", "task spawned", task="led_handler.poll_button")
 
     logger.info("MAIN", "All tasks spawned. System running.")
 
@@ -314,9 +343,13 @@ async def main():
 
         logger.debug(
             "MAIN",
-            f"health tick: buffered={buffered}, "
-            f"primary={'up' if buffer_manager.is_primary_available() else 'down'}, "
-            f"interval={health_interval}s",
+            "health check",
+            health_interval=health_interval,
+            sd_primary_writes=metrics["writes_to_primary"],
+            sd_fallback_writes=metrics["writes_to_fallback"],
+            migrations=metrics["fallback_migrations"],
+            failures=metrics["write_failures"],
+            buffered=buffered,
         )
 
         # Hot-swap recovery: attempt SD refresh when primary is
@@ -326,6 +359,13 @@ async def main():
         # refresh_sd() performs a block-level readblocks check and is
         # cheap when the card is actually present.
         sd_needs_check = not buffer_manager.is_primary_available() or buffered > 0
+        logger.debug(
+            "MAIN",
+            "SD check decision",
+            sd_needs_check=sd_needs_check,
+            primary_available=buffer_manager.is_primary_available() if not sd_needs_check else "skipped",
+            buffered=buffered,
+        )
         if sd_needs_check:
             logger.debug(
                 "MAIN",
@@ -333,6 +373,7 @@ async def main():
             )
             if hardware.refresh_sd():
                 logger.info("MAIN", "SD card re-mounted after hot-swap")
+                logger.debug("MAIN", "SD recovery success", prev_interval=health_interval)
                 status_manager.set_sd_status(True)
                 # Clear any stale logged_error that was SD-related
                 status_manager.clear_error("logged_error")
@@ -362,6 +403,12 @@ async def main():
 
         # Attempt to migrate fallback entries if primary became available
         if metrics["writes_to_fallback"] > metrics["fallback_migrations"]:
+            logger.debug(
+                "MAIN",
+                "migration check",
+                writes_fallback=metrics["writes_to_fallback"],
+                migrations=metrics["fallback_migrations"],
+            )
             migrated = buffer_manager.migrate_fallback()
             if migrated > 0:
                 logger.info("MAIN", f"Migrated {migrated} fallback entries to primary SD")

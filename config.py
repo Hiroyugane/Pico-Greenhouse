@@ -31,9 +31,9 @@ DEVICE_CONFIG = {
         "onboard_led": 25,  # Pico on-board LED (heartbeat)
         "activity_led": 4,  # Activity LED (brief blink on I/O actions)
         "reminder_led": 5,  # Service-reminder LED (blinks when due)
-        "sd_led": 6,  # SD-problem LED (solid = SD missing/failed)
-        "warning_led": 7,  # Warning LED (solid = degraded condition)
-        "error_led": 8,  # Error LED (solid = fault needs attention)
+        "warning_led": 6,  # Warning LED (solid = degraded condition)
+        "error_led": 7,  # Error LED (solid = fault needs attention)
+        "sd_led": 8,  # SD-problem LED (solid = SD missing/failed)
         "button_menu": 9,  # Menu button (short=cycle menu, long≥3s=action)
         "button_reserved": 14,  # Reserved button (future use)
         "rtc_i2c_port": 0,  # I2C1 peripheral (shared: RTC + OLED)
@@ -128,8 +128,9 @@ DEVICE_CONFIG = {
         "info_flush_threshold": 5,  # Flush after N info-level entries buffered
         "warn_flush_threshold": 3,  # Flush after N warning-level entries buffered
         "log_level": "INFO",  # Minimum severity: DEBUG, INFO, WARN, ERR
-        "debug_to_sd": False,  # Whether DEBUG messages are written to SD card
-        "debug_flush_threshold": 10,  # Flush after N debug entries buffered (when debug_to_sd=True)
+        "debug_enabled": True,  # Enable DEBUG messages to console (zero-cost when disabled)
+        "debug_to_file": True,  # Also write DEBUG entries to SD log (caution: fills card)
+        "debug_flush_threshold": 10,  # Flush after N debug entries buffered (when debug_to_file=True)
     },
     # Buzzer Configuration (passive buzzer via PWM)
     "buzzer": {
@@ -249,7 +250,8 @@ def validate_config():
             "info_flush_threshold",
             "warn_flush_threshold",
             "log_level",
-            "debug_to_sd",
+            "debug_enabled",
+            "debug_to_file",
             "debug_flush_threshold",
         ],
         "output_pins": [
@@ -329,8 +331,11 @@ def validate_config():
     if DEVICE_CONFIG["event_logger"]["log_level"] not in ("DEBUG", "INFO", "WARN", "ERR"):
         raise ValueError("event_logger.log_level must be one of: DEBUG, INFO, WARN, ERR")
 
-    if not isinstance(DEVICE_CONFIG["event_logger"]["debug_to_sd"], bool):
-        raise ValueError("event_logger.debug_to_sd must be a bool")
+    if not isinstance(DEVICE_CONFIG["event_logger"]["debug_enabled"], bool):
+        raise ValueError("event_logger.debug_enabled must be a bool")
+
+    if not isinstance(DEVICE_CONFIG["event_logger"]["debug_to_file"], bool):
+        raise ValueError("event_logger.debug_to_file must be a bool")
 
     if DEVICE_CONFIG["event_logger"]["debug_flush_threshold"] < 1:
         raise ValueError("event_logger.debug_flush_threshold must be >= 1")

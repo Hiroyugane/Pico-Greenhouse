@@ -53,7 +53,13 @@ class TestMainStartup:
         monkeypatch.setattr(main_module, "HardwareFactory", lambda *a, **kw: mock_hw)
 
         mock_buffer = Mock()
-        mock_buffer.get_metrics.return_value = {"buffer_entries": 0, "writes_to_fallback": 0, "fallback_migrations": 0}
+        mock_buffer.get_metrics.return_value = {
+            "buffer_entries": 0,
+            "writes_to_fallback": 0,
+            "fallback_migrations": 0,
+            "writes_to_primary": 0,
+            "write_failures": 0,
+        }
         mock_buffer.is_primary_available.return_value = True
         monkeypatch.setattr(main_module, "BufferManager", lambda *a, **kw: mock_buffer)
 
@@ -106,7 +112,13 @@ class TestMainHealthCheck:
         monkeypatch.setattr(main_module, "HardwareFactory", lambda *a, **kw: mock_hw)
 
         mock_buffer = Mock()
-        mock_buffer.get_metrics.return_value = {"buffer_entries": 5, "writes_to_fallback": 0, "fallback_migrations": 0}
+        mock_buffer.get_metrics.return_value = {
+            "buffer_entries": 5,
+            "writes_to_fallback": 0,
+            "fallback_migrations": 0,
+            "writes_to_primary": 0,
+            "write_failures": 0,
+        }
         mock_buffer.is_primary_available.return_value = True
         mock_buffer._buffers = {"test.csv": ["a\n", "b\n", "c\n", "d\n", "e\n"]}
         monkeypatch.setattr(main_module, "BufferManager", lambda *a, **kw: mock_buffer)
@@ -156,7 +168,13 @@ class TestMainHealthCheck:
         monkeypatch.setattr(main_module, "HardwareFactory", lambda *a, **kw: mock_hw)
 
         mock_buffer = Mock()
-        mock_buffer.get_metrics.return_value = {"buffer_entries": 0, "writes_to_fallback": 0, "fallback_migrations": 0}
+        mock_buffer.get_metrics.return_value = {
+            "buffer_entries": 0,
+            "writes_to_fallback": 0,
+            "fallback_migrations": 0,
+            "writes_to_primary": 0,
+            "write_failures": 0,
+        }
         mock_buffer.is_primary_available.return_value = False
         mock_buffer._buffers = {}
         monkeypatch.setattr(main_module, "BufferManager", lambda *a, **kw: mock_buffer)
@@ -204,7 +222,13 @@ class TestMainHealthCheck:
         monkeypatch.setattr(main_module, "HardwareFactory", lambda *a, **kw: mock_hw)
 
         mock_buffer = Mock()
-        mock_buffer.get_metrics.return_value = {"buffer_entries": 10, "writes_to_fallback": 0, "fallback_migrations": 0}
+        mock_buffer.get_metrics.return_value = {
+            "buffer_entries": 10,
+            "writes_to_fallback": 0,
+            "fallback_migrations": 0,
+            "writes_to_primary": 0,
+            "write_failures": 0,
+        }
         # Primary claims available but buffer is growing (ghost writes)
         mock_buffer.is_primary_available.return_value = True
         mock_buffer._buffers = {"test.csv": list(range(10))}
@@ -258,7 +282,13 @@ class TestMainHealthCheck:
         monkeypatch.setattr(main_module, "HardwareFactory", lambda *a, **kw: mock_hw)
 
         mock_buffer = Mock()
-        mock_buffer.get_metrics.return_value = {"buffer_entries": 0, "writes_to_fallback": 3, "fallback_migrations": 0}
+        mock_buffer.get_metrics.return_value = {
+            "buffer_entries": 0,
+            "writes_to_fallback": 3,
+            "fallback_migrations": 0,
+            "writes_to_primary": 0,
+            "write_failures": 0,
+        }
         mock_buffer.is_primary_available.return_value = True
         mock_buffer.migrate_fallback.return_value = 3
         mock_buffer._buffers = {}
@@ -307,7 +337,13 @@ class TestMainHealthCheck:
         monkeypatch.setattr(main_module, "HardwareFactory", lambda *a, **kw: mock_hw)
 
         mock_buffer = Mock()
-        mock_buffer.get_metrics.return_value = {"buffer_entries": 0, "writes_to_fallback": 0, "fallback_migrations": 0}
+        mock_buffer.get_metrics.return_value = {
+            "buffer_entries": 0,
+            "writes_to_fallback": 0,
+            "fallback_migrations": 0,
+            "writes_to_primary": 0,
+            "write_failures": 0,
+        }
         mock_buffer.is_primary_available.return_value = False
         mock_buffer._buffers = {}
         monkeypatch.setattr(main_module, "BufferManager", lambda *a, **kw: mock_buffer)
@@ -367,9 +403,21 @@ class TestMainHealthCheck:
             call_count += 1
             # First iteration: primary down, buffer has entries
             if call_count == 1:
-                return {"buffer_entries": 5, "writes_to_fallback": 0, "fallback_migrations": 0}
+                return {
+                    "buffer_entries": 5,
+                    "writes_to_fallback": 0,
+                    "fallback_migrations": 0,
+                    "writes_to_primary": 0,
+                    "write_failures": 0,
+                }
             # After recovery: everything good
-            return {"buffer_entries": 0, "writes_to_fallback": 0, "fallback_migrations": 0}
+            return {
+                "buffer_entries": 0,
+                "writes_to_fallback": 0,
+                "fallback_migrations": 0,
+                "writes_to_primary": 0,
+                "write_failures": 0,
+            }
 
         mock_buffer = Mock()
         mock_buffer.get_metrics = get_metrics

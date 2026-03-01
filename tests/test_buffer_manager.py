@@ -518,3 +518,55 @@ class TestBufferManagerWriteExceptions:
 
         assert len(debug_msgs) > 0
         assert any("write" in m.lower() for m in debug_msgs)
+
+
+class TestBufferManagerLogger:
+    """Tests for optional logger injection via set_logger()."""
+
+    def test_set_logger_stores_logger(self, buffer_manager):
+        """set_logger() stores the logger instance."""
+        from unittest.mock import Mock
+
+        logger = Mock()
+        buffer_manager.set_logger(logger)
+        assert buffer_manager._logger is logger
+
+    def test_init_without_logger(self, tmp_path):
+        """BufferManager initializes with _logger=None by default."""
+        from lib.buffer_manager import BufferManager
+
+        bm = BufferManager(
+            sd_mount_point=str(tmp_path / "sd"),
+            fallback_path=str(tmp_path / "local" / "fallback.csv"),
+        )
+        assert bm._logger is None
+
+    def test_init_with_logger(self, tmp_path):
+        """BufferManager accepts logger in constructor."""
+        from unittest.mock import Mock
+
+        from lib.buffer_manager import BufferManager
+
+        logger = Mock()
+        sd_dir = tmp_path / "sd"
+        sd_dir.mkdir()
+        bm = BufferManager(
+            sd_mount_point=str(sd_dir),
+            fallback_path=str(tmp_path / "local" / "fallback.csv"),
+            logger=logger,
+        )
+        assert bm._logger is logger
+
+    def test_log_debug_with_logger(self, buffer_manager):
+        """_log_debug() calls logger.debug when logger is set."""
+        from unittest.mock import Mock
+
+        logger = Mock()
+        buffer_manager.set_logger(logger)
+        buffer_manager._log_debug("test message", key="value")
+        logger.debug.assert_called_once_with("BufferMgr", "test message", key="value")
+
+    def test_log_debug_without_logger_no_crash(self, buffer_manager):
+        """_log_debug() does nothing when logger is None."""
+        buffer_manager._logger = None
+        buffer_manager._log_debug("test message")  # should not raise

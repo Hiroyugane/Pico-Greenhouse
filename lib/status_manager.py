@@ -111,17 +111,20 @@ class StatusManager:
 
     # ── Power-on Self-Test (POST) ─────────────────────────────────────
 
-    async def run_post(self, step_ms: int = 150) -> bool:
+    async def run_post(self, step_ms: int = 150, reminder_led=None) -> bool:
         """
         Power-on self-test: walk all owned LEDs to verify visual output.
 
         Sequence:
-        1. Walk each LED on→wait→off (activity, SD, warning, error, heartbeat)
+        1. Walk each LED on→wait→off (activity, reminder, SD, warning, error, heartbeat)
         2. Flash all LEDs on simultaneously, then off
         3. All LEDs left OFF on success
 
         Args:
             step_ms (int): Duration each LED stays on during the walk (ms).
+            reminder_led: Optional LED instance (GP5) owned by LEDButtonHandler.
+                          Included in the walk when provided so the operator can
+                          verify all six LEDs during POST.
 
         Returns:
             bool: True (POST passed). Always returns True since GPIO
@@ -131,11 +134,17 @@ class StatusManager:
         step_s = step_ms / 1000.0
         leds = [
             self._activity_led,
-            self._sd_led,
-            self._warning_led,
-            self._error_led,
-            self._heartbeat_led,
         ]
+        if reminder_led is not None:
+            leds.append(reminder_led)
+        leds.extend(
+            [
+                self._sd_led,
+                self._warning_led,
+                self._error_led,
+                self._heartbeat_led,
+            ]
+        )
 
         # Phase 1: sequential walk
         for led in leds:
@@ -153,7 +162,7 @@ class StatusManager:
 
         self._post_passed = True
         if self._logger:
-            self._logger.debug("StatusMgr", f"POST complete: {len(leds)} LEDs walked")
+            self._logger.debug("StatusMgr", "POST complete", led_count=len(leds))
         return True
 
     # ── Activity LED (GP4) ─────────────────────────────────────────────
@@ -165,6 +174,8 @@ class StatusManager:
         Non-blocking async pulse: ON for activity_blink_ms, then OFF.
         Call on DHT reads, SD writes, log flushes, etc.
         """
+        if self._logger:
+            self._logger.debug("StatusMgr", "activity blink")
         self._activity_led.on()
         await asyncio.sleep(self._activity_blink_ms / 1000.0)
         self._activity_led.off()
@@ -188,11 +199,12 @@ class StatusManager:
         else:
             self._sd_led.on()
 
-        if changed and self._logger:
-            state = "healthy" if healthy else "FAILED"
-            self._logger.debug("StatusMgr", f"SD status changed: {state}")
-        elif not changed and self._logger:
-            self._logger.debug("StatusMgr", f"SD status unchanged: {'healthy' if healthy else 'FAILED'}")
+        if self._logger:
+            if changed:
+                state = "healthy" if healthy else "FAILED"
+                self._logger.info("StatusMgr", f"SD status changed: {state}")
+            else:
+                self._logger.debug("StatusMgr", "SD status unchanged", healthy=healthy)
 
     # ── Warning LED (GP7) ──────────────────────────────────────────────
 
@@ -224,8 +236,22 @@ class StatusManager:
         if changed and self._logger:
             action = "SET" if active else "CLEARED"
             self._logger.info("StatusMgr", f"Warning {action}: {key}")
+            self._logger.debug(
+                "StatusMgr",
+                "warning state",
+                key=key,
+                active=active,
+                total_warnings=len(self._active_warnings),
+                all_keys=str(sorted(self._active_warnings)),
+            )
         elif not changed and self._logger:
-            self._logger.debug("StatusMgr", f"Warning no-op: {key} active={active}")
+            self._logger.debug(
+                "StatusMgr",
+                "warning no-op",
+                key=key,
+                active=active,
+                already_in_set=key in self._active_warnings,
+            )
 
         if changed and active and was_empty and self._buzzer:
             asyncio.create_task(self._buzzer.alert())
@@ -271,8 +297,22 @@ class StatusManager:
         if changed and self._logger:
             action = "SET" if active else "CLEARED"
             self._logger.error("StatusMgr", f"Error {action}: {key}")
+            self._logger.debug(
+                "StatusMgr",
+                "error state",
+                key=key,
+                active=active,
+                total_errors=len(self._active_errors),
+                all_keys=str(sorted(self._active_errors)),
+            )
         elif not changed and self._logger:
-            self._logger.debug("StatusMgr", f"Error no-op: {key} active={active}")
+            self._logger.debug(
+                "StatusMgr",
+                "error no-op",
+                key=key,
+                active=active,
+                already_in_set=key in self._active_errors,
+            )
 
         if changed and active and was_empty and self._buzzer:
             asyncio.create_task(self._buzzer.error())
@@ -298,8 +338,9 @@ class StatusManager:
         """
         self._heartbeat_led.toggle()
         self._heartbeat_count += 1
+        # Debug every 10th tick to avoid flooding
         if self._logger and self._heartbeat_count % 10 == 0:
-            self._logger.debug("StatusMgr", f"heartbeat count={self._heartbeat_count}")
+            self._logger.debug("StatusMgr", "heartbeat", count=self._heartbeat_count)
 
     # ── Status Reporting (for OLED integration) ─────────────────────────
 

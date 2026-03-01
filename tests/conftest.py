@@ -195,7 +195,7 @@ def buffer_manager(tmp_path):
 
 @pytest.fixture
 def event_logger(time_provider, buffer_manager):
-    """EventLogger wired to real TimeProvider and BufferManager."""
+    """EventLogger wired to real TimeProvider and BufferManager (debug ON)."""
     with patch("time.localtime", return_value=FAKE_LOCALTIME):
         from lib.event_logger import EventLogger
 
@@ -204,6 +204,8 @@ def event_logger(time_provider, buffer_manager):
             buffer_manager,
             logfile="/sd/test.log",
             max_size=10000,
+            debug_enabled=True,
+            debug_to_file=True,
         )
 
 

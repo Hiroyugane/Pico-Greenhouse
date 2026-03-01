@@ -196,86 +196,102 @@ class TestEventLoggerStripPrefix:
 
 
 class TestEventLoggerDebug:
-    """Tests for debug() method and debug_to_sd behavior."""
+    """Tests for debug() method and debug_enabled/debug_to_file config."""
 
-    def test_debug_prints_to_console(self, time_provider, buffer_manager):
-        """debug() prints to console with [DEBUG] tag when log_level=DEBUG."""
+    def test_debug_disabled_no_output(self, time_provider, buffer_manager, capsys):
+        """When debug_enabled=False, debug() produces no output."""
         from lib.event_logger import EventLogger
 
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            logger = EventLogger(time_provider, buffer_manager, logfile="/sd/test.log", log_level="DEBUG")
-            import io
-            import sys
-
-            captured = io.StringIO()
-            sys.stdout = captured
-            try:
-                logger.debug("TEST", "debug message")
-            finally:
-                sys.stdout = sys.__stdout__
-            output = captured.getvalue()
-            assert "[DEBUG]" in output
-            assert "debug message" in output
-
-    def test_debug_suppressed_at_info_level(self, time_provider, buffer_manager, capsys):
-        """debug() is suppressed when log_level=INFO (default)."""
-        from lib.event_logger import EventLogger
-
-        with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            logger = EventLogger(time_provider, buffer_manager, logfile="/sd/test.log", log_level="INFO")
+            logger = EventLogger(time_provider, buffer_manager, logfile="/sd/test.log", debug_enabled=False)
+            capsys.readouterr()  # clear init output
             logger.debug("TEST", "should not appear")
         captured = capsys.readouterr()
-        assert "should not appear" not in captured.out
+        assert captured.out == ""
 
-    def test_debug_to_sd_buffers_when_true(self, time_provider, buffer_manager):
-        """debug() buffers to SD when debug_to_sd=True and log_level=DEBUG."""
+    def test_debug_disabled_no_buffer(self, time_provider, buffer_manager):
+        """When debug_enabled=False, debug() doesn't add to buffer."""
+        from lib.event_logger import EventLogger
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            logger = EventLogger(time_provider, buffer_manager, logfile="/sd/test.log", debug_enabled=False)
+            logger.buffer.clear()
+            logger.debug("TEST", "should not buffer")
+        assert len(logger.buffer) == 0
+
+    def test_debug_enabled_prints_to_console(self, time_provider, buffer_manager, capsys):
+        """When debug_enabled=True, debug() prints [DEBUG] to console."""
+        from lib.event_logger import EventLogger
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            logger = EventLogger(time_provider, buffer_manager, logfile="/sd/test.log", debug_enabled=True)
+            capsys.readouterr()  # clear init output
+            logger.debug("TEST", "debug message")
+        captured = capsys.readouterr()
+        assert "[DEBUG]" in captured.out
+        assert "[TEST]" in captured.out
+        assert "debug message" in captured.out
+
+    def test_debug_enabled_no_file_by_default(self, time_provider, buffer_manager):
+        """When debug_enabled=True but debug_to_file=False, debug() doesn't buffer."""
         from lib.event_logger import EventLogger
 
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
             logger = EventLogger(
-                time_provider,
-                buffer_manager,
-                logfile="/sd/test.log",
-                log_level="DEBUG",
-                debug_to_sd=True,
-                debug_flush_threshold=5,
+                time_provider, buffer_manager, logfile="/sd/test.log", debug_enabled=True, debug_to_file=False
             )
-            logger.debug("TEST", "buffered debug")
-        assert len(logger.buffer) == 1
-
-    def test_debug_not_buffered_when_debug_to_sd_false(self, time_provider, buffer_manager):
-        """debug() does NOT buffer when debug_to_sd=False (console only)."""
-        from lib.event_logger import EventLogger
-
-        with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            logger = EventLogger(
-                time_provider,
-                buffer_manager,
-                logfile="/sd/test.log",
-                log_level="DEBUG",
-                debug_to_sd=False,
-            )
+            logger.buffer.clear()
             logger.debug("TEST", "console only")
         assert len(logger.buffer) == 0
 
-    def test_debug_flushes_at_threshold(self, time_provider, buffer_manager):
-        """debug() triggers flush when debug_flush_threshold reached."""
+    def test_debug_to_file_buffers_entry(self, time_provider, buffer_manager):
+        """When debug_to_file=True, debug entries are added to buffer."""
         from lib.event_logger import EventLogger
 
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
             logger = EventLogger(
-                time_provider,
-                buffer_manager,
-                logfile="/sd/test.log",
-                log_level="DEBUG",
-                debug_to_sd=True,
-                debug_flush_threshold=3,
+                time_provider, buffer_manager, logfile="/sd/test.log", debug_enabled=True, debug_to_file=True
             )
-            logger.debug("T", "1")
-            logger.debug("T", "2")
-            assert logger.flush_count == 0
-            logger.debug("T", "3")
-            assert logger.flush_count == 1
+            logger.buffer.clear()
+            logger.debug("TEST", "file debug")
+        assert len(logger.buffer) == 1
+        assert "[DEBUG]" in logger.buffer[0]
+
+    def test_debug_with_structured_fields(self, time_provider, buffer_manager, capsys):
+        """debug() with **fields appends key=value pairs after ' | '."""
+        from lib.event_logger import EventLogger
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            logger = EventLogger(time_provider, buffer_manager, logfile="/sd/test.log", debug_enabled=True)
+            capsys.readouterr()
+            logger.debug("FAN", "cycle tick", temp=23.5, state="ON")
+        captured = capsys.readouterr()
+        assert "| temp=23.5" in captured.out
+        assert "state=ON" in captured.out
+
+    def test_debug_without_fields_no_pipe(self, time_provider, buffer_manager, capsys):
+        """debug() without fields does not include ' | ' separator."""
+        from lib.event_logger import EventLogger
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            logger = EventLogger(time_provider, buffer_manager, logfile="/sd/test.log", debug_enabled=True)
+            capsys.readouterr()
+            logger.debug("TEST", "no fields")
+        captured = capsys.readouterr()
+        assert " | " not in captured.out
+
+    def test_debug_to_file_with_fields_in_buffer(self, time_provider, buffer_manager):
+        """debug_to_file buffers structured field entries correctly."""
+        from lib.event_logger import EventLogger
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            logger = EventLogger(
+                time_provider, buffer_manager, logfile="/sd/test.log", debug_enabled=True, debug_to_file=True
+            )
+            logger.buffer.clear()
+            logger.debug("SENSOR", "read ok", temp=22.0, hum=65)
+        assert len(logger.buffer) == 1
+        assert "| temp=22.0 hum=65" in logger.buffer[0]
 
 
 class TestEventLoggerLevelGating:

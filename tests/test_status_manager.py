@@ -359,6 +359,41 @@ class TestStatusManagerPOST:
         result = await sm.run_post(step_ms=10)
         assert result is True
 
+    @pytest.mark.asyncio
+    async def test_post_with_reminder_led(self):
+        """When reminder_led is provided it is walked during POST."""
+        from lib.led_button import LED
+        from lib.status_manager import StatusManager
+
+        sm = StatusManager(4, 6, 7, 8, 25)
+        reminder = LED(5)
+        await sm.run_post(step_ms=1, reminder_led=reminder)
+
+        reminder.pin.on.assert_called()  # type: ignore[attr-defined]
+        reminder.pin.off.assert_called()  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_post_without_reminder_led(self):
+        """POST works without reminder_led (default None)."""
+        from lib.status_manager import StatusManager
+
+        sm = StatusManager(4, 6, 7, 8, 25)
+        result = await sm.run_post(step_ms=1)
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_post_all_leds_off_after_with_reminder(self):
+        """All LEDs including reminder are OFF after POST."""
+        from lib.led_button import LED
+        from lib.status_manager import StatusManager
+
+        sm = StatusManager(4, 6, 7, 8, 25)
+        reminder = LED(5)
+        await sm.run_post(step_ms=1, reminder_led=reminder)
+
+        for led in [sm._activity_led, sm._sd_led, sm._warning_led, sm._error_led, sm._heartbeat_led, reminder]:
+            led.pin.off.assert_called()  # type: ignore[attr-defined]
+
 
 class TestStatusManagerBuzzerIntegration:
     """Tests for optional buzzer integration."""
@@ -564,11 +599,11 @@ class TestStatusManagerLoggerIntegration:
         sm.set_logger(logger)
 
         sm.set_sd_status(False)
-        logger.debug.assert_called_with("StatusMgr", "SD status changed: FAILED")
-        logger.debug.reset_mock()
+        logger.info.assert_called_with("StatusMgr", "SD status changed: FAILED")
+        logger.info.reset_mock()
 
         sm.set_sd_status(True)
-        logger.debug.assert_called_with("StatusMgr", "SD status changed: healthy")
+        logger.info.assert_called_with("StatusMgr", "SD status changed: healthy")
 
     def test_sd_same_status_not_logged(self):
         """SD status set to same value doesn't produce log."""

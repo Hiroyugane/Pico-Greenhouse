@@ -103,7 +103,19 @@ class DHTLogger:
         try:
             if not self._file_exists():
                 self._create_file()
-            logger.debug("DHTLogger", f"Initialized: {self.filename}")
+            logger.info("DHTLogger", f"Initialized: {self.filename}")
+            logger.debug(
+                "DHTLogger",
+                "init config",
+                pin=pin,
+                interval=interval,
+                max_retries=max_retries,
+                dht_warn_threshold=dht_warn_threshold,
+                dht_error_threshold=dht_error_threshold,
+                retry_delay_s=retry_delay_s,
+                filename=self.filename,
+                has_status_mgr=status_manager is not None,
+            )
         except Exception as e:
             logger.error("DHTLogger", f"Init error: {e}")
 
@@ -120,7 +132,12 @@ class DHTLogger:
 
             base = self.filename_base.replace(".csv", "")
             self.filename = f"{base}_{year:04d}-{month:02d}-{day:02d}.csv"
-            self.logger.debug("DHTLogger", f"Filename updated: {self.filename}")
+            self.logger.debug(
+                "DHTLogger",
+                "filename updated",
+                date=f"{year:04d}-{month:02d}-{day:02d}",
+                filename=self.filename,
+            )
         except Exception as e:
             self.logger.error("DHTLogger", f"Error updating filename: {e}")
             self.filename = self.filename_base
@@ -130,10 +147,10 @@ class DHTLogger:
         relpath = self._strip_sd_prefix(self.filename)
         # Fast path: already created this session (avoids unreliable FAT VFS check)
         if relpath in self._created_files:
-            self.logger.debug("DHTLogger", f"_file_exists({relpath}): fast-path hit")
+            self.logger.debug("DHTLogger", "file exists (created cache)", relpath=relpath)
             return True
         exists = self.buffer_manager.has_data_for(relpath)
-        self.logger.debug("DHTLogger", f"_file_exists({relpath}): has_data_for={exists}")
+        self.logger.debug("DHTLogger", "file exists check", relpath=relpath, found=exists)
         return exists
 
     def _resolve_path(self, file_path: str) -> str:
@@ -153,6 +170,7 @@ class DHTLogger:
         skip the slow (and sometimes unreliable) FAT VFS existence probe.
         """
         relpath = self._strip_sd_prefix(self.filename)
+        self.logger.debug("DHTLogger", "creating CSV file", relpath=relpath)
         try:
             wrote_to_primary = self.buffer_manager.write(relpath, "Timestamp,Temperature,Humidity\n")
             self._created_files.add(relpath)
@@ -183,9 +201,22 @@ class DHTLogger:
                 if -40 <= temp <= 80 and 0 <= hum <= 100:
                     self._consecutive_failures = 0
                     self._update_dht_status()
-                    self.logger.debug("DHTLogger", f"Sensor read OK: {temp:.1f}°C, {hum:.1f}%")
+                    self.logger.debug(
+                        "DHTLogger",
+                        "sensor read ok",
+                        temp=temp,
+                        hum=hum,
+                        attempt=attempt + 1,
+                    )
                     return temp, hum
                 else:
+                    self.logger.debug(
+                        "DHTLogger",
+                        "sensor read out of range",
+                        temp=temp,
+                        hum=hum,
+                        attempt=attempt + 1,
+                    )
                     self.logger.warning("DHTLogger", f"Reading out of range: {temp}°C, {hum}%")
             except Exception as e:
                 self.logger.debug("DHTLogger", f"Read attempt {attempt + 1}/{self.max_retries} failed: {e}")
@@ -197,12 +228,26 @@ class DHTLogger:
         self.read_failures += 1
         self._consecutive_failures += 1
         self._update_dht_status()
+        self.logger.debug(
+            "DHTLogger",
+            "sensor read exhausted",
+            read_failures=self.read_failures,
+            consecutive=self._consecutive_failures,
+            max_retries=self.max_retries,
+        )
         return None, None
 
     def _update_dht_status(self) -> None:
         """Update StatusManager warning/error based on consecutive DHT failures."""
         if self.status_manager is None:
             return
+        self.logger.debug(
+            "DHTLogger",
+            "status update check",
+            consecutive=self._consecutive_failures,
+            warn_thresh=self._dht_warn_threshold,
+            err_thresh=self._dht_error_threshold,
+        )
         if self._consecutive_failures >= self._dht_error_threshold:
             self.logger.debug("DHTLogger", f"Status: error (failures={self._consecutive_failures})")
             self.status_manager.set_error("dht_dead", True)
@@ -226,6 +271,12 @@ class DHTLogger:
             current_date = (date_tuple[0], date_tuple[1], date_tuple[2])
 
             if current_date != self.current_date:
+                self.logger.debug(
+                    "DHTLogger",
+                    "date changed",
+                    old_date=str(self.current_date),
+                    new_date=str(current_date),
+                )
                 old_filename = self.filename
                 self._update_filename_for_date()
 
@@ -298,9 +349,17 @@ class DHTLogger:
                     # BufferManager handles: primary → fallback → in-memory buffer
                     try:
                         wrote_primary = self.buffer_manager.write(relpath, row)
-                        if wrote_primary:
-                            self.logger.debug("DHTLogger", f"Primary write OK for {relpath}")
-                        else:
+                        self.logger.debug(
+                            "DHTLogger",
+                            "log iteration",
+                            temp=temp,
+                            hum=hum,
+                            relpath=relpath,
+                            wrote_primary=wrote_primary,
+                            read_failures=self.read_failures,
+                            write_failures=self.write_failures,
+                        )
+                        if not wrote_primary:
                             self.logger.warning("DHTLogger", f"Write went to fallback (SD unavailable?) for {relpath}")
                     except Exception as e:
                         self.logger.error("DHTLogger", f"Failed to write: {e}")
@@ -312,9 +371,11 @@ class DHTLogger:
                 await asyncio.sleep(self.interval)
 
             except asyncio.CancelledError:
+                self.logger.debug("DHTLogger", "log loop cancelled")
                 self.logger.warning("DHTLogger", "Log loop cancelled")
                 raise
             except Exception as e:
+                self.logger.debug("DHTLogger", "unexpected error in log loop", error=str(e))
                 self.logger.error("DHTLogger", f"Unexpected error: {e}")
                 await asyncio.sleep(1)
 

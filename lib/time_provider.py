@@ -22,6 +22,20 @@ class TimeProvider:
     independent of underlying RTC hardware or testing mocks.
     """
 
+    def __init__(self):
+        self._logger = None
+
+    def set_logger(self, logger) -> None:
+        """Attach an EventLogger for debug diagnostics (wired after EventLogger creation)."""
+        self._logger = logger
+
+    def _debug(self, message: str, **fields) -> None:
+        """Emit debug message if logger is attached, else use debug_callback."""
+        if self._logger:
+            self._logger.debug("TimeProv", message, **fields)
+        elif hasattr(self, '_debug_callback') and self._debug_callback:
+            self._debug_callback(message)
+
     def now_timestamp(self) -> str:
         """
         Return current time as ISO-8601 timestamp string.
@@ -144,13 +158,23 @@ class TimeProvider:
                     s = int(s0 + interpolation_factor * (s1 - s0))
                     sunrise = (r // 60, r % 60)
                     sunset = (s // 60, s % 60)
+                    self._debug(
+                        "sunrise_sunset computed",
+                        date=f"{year:04d}-{month:02d}-{day:02d}",
+                        doy=doy,
+                        segment=i,
+                        sunrise=f"{sunrise[0]:02d}:{sunrise[1]:02d}",
+                        sunset=f"{sunset[0]:02d}:{sunset[1]:02d}",
+                    )
                     return (sunrise, sunset)
         except Exception as exc:
             # Log error while still returning a safe fallback value.
             # This keeps the provider from raising, but surfaces issues for debugging.
+            self._debug("sunrise_sunset error", error=str(exc))
             print("TimeProvider.sunrise_sunset error:", exc)
             pass
 
+        self._debug("sunrise_sunset fallback", date=f"{year}-{month}-{day}")
         return ((0, 0), (0, 0))  # error fallback
 
     def export_sunrise_sunset_2026_csv(self, csv_path: str = "sunrise_sunset_2026.csv") -> None:
@@ -206,13 +230,14 @@ class RTCTimeProvider(TimeProvider):
             rtc_hw = ds3231.RTC(sda_pin=0, scl_pin=1)
             time_provider = RTCTimeProvider(rtc_hw)
         """
+        super().__init__()
         self.rtc = rtc
         self._sync_interval_s = sync_interval_s
         self._last_sync_epoch = None
         self._time_valid = True
         self._rtc_min_year = rtc_min_year
         self._rtc_max_year = rtc_max_year
-        self._debug = debug_callback
+        self._debug_callback = debug_callback
         self._sync_from_rtc(force=True)
 
     def _sync_from_rtc(self, force: bool = False) -> None:
@@ -225,12 +250,19 @@ class RTCTimeProvider(TimeProvider):
 
         if not force and self._last_sync_epoch is not None and now is not None:
             try:
-                if (now - self._last_sync_epoch) < self._sync_interval_s:
-                    if self._debug:
-                        self._debug("RTC sync skipped: interval not elapsed")
+                elapsed = now - self._last_sync_epoch
+                if elapsed < self._sync_interval_s:
+                    self._debug("RTC sync skipped: interval not elapsed", elapsed=elapsed)
                     return
             except Exception:
                 pass
+
+        self._debug(
+            "RTC sync triggered",
+            force=force,
+            last_sync_epoch=self._last_sync_epoch,
+            now_epoch=now,
+        )
 
         try:
             time_tuple = self.rtc.ReadTime(1)  # (sec, min, hour, wday, day, mon, year)
@@ -246,11 +278,14 @@ class RTCTimeProvider(TimeProvider):
                 )
                 # Validate year range to detect RTC battery loss / reset
                 self._time_valid = self._rtc_min_year <= year <= self._rtc_max_year
-                if self._debug:
-                    self._debug(
-                        f"RTC ReadTime: {year:04d}-{month:02d}-{day:02d} "
-                        f"{hour:02d}:{minute:02d}:{sec:02d}, valid={self._time_valid}"
-                    )
+                self._debug(
+                    "RTC sync complete",
+                    rtc_raw=str(time_tuple),
+                    year=year,
+                    valid=self._time_valid,
+                    min_year=self._rtc_min_year,
+                    max_year=self._rtc_max_year,
+                )
                 try:
                     import machine
 
@@ -262,9 +297,8 @@ class RTCTimeProvider(TimeProvider):
                 except Exception:
                     self._last_sync_epoch = now
                 return
-        except Exception:
-            if self._debug:
-                self._debug("RTC ReadTime failed")
+        except Exception as e:
+            self._debug("RTC sync failed", error=str(e))
             pass
 
         if now is not None:

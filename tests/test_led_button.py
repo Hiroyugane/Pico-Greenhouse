@@ -781,6 +781,42 @@ class TestServiceReminder:
         assert reminder.blink_after_days == 3
 
 
+class TestLEDButtonLogger:
+    """Tests for optional logger injection in LEDButtonHandler and ServiceReminder."""
+
+    def test_handler_with_logger(self, mock_event_logger):
+        """LEDButtonHandler accepts and stores a logger."""
+        from lib.led_button import LEDButtonHandler
+
+        handler = LEDButtonHandler(5, 9, logger=mock_event_logger)
+        assert handler._logger is mock_event_logger
+
+    def test_handler_without_logger(self):
+        """LEDButtonHandler works without a logger (None by default)."""
+        from lib.led_button import LEDButtonHandler
+
+        handler = LEDButtonHandler(5, 9)
+        assert handler._logger is None
+
+    def test_reminder_with_logger(self, time_provider, mock_event_logger):
+        """ServiceReminder accepts and stores a logger."""
+        from lib.led_button import LEDButtonHandler, ServiceReminder
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            handler = LEDButtonHandler(5, 9)
+            reminder = ServiceReminder(time_provider, handler, logger=mock_event_logger)
+        assert reminder._logger is mock_event_logger
+
+    def test_reminder_without_logger(self, time_provider):
+        """ServiceReminder works without a logger (None by default)."""
+        from lib.led_button import LEDButtonHandler, ServiceReminder
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            handler = LEDButtonHandler(5, 9)
+            reminder = ServiceReminder(time_provider, handler)
+        assert reminder._logger is None
+
+
 class TestServiceReminderPersistenceErrors:
     """Tests for persistence error handling in ServiceReminder."""
 

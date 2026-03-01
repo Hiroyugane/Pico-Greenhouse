@@ -155,6 +155,17 @@ class FanController(RelayController):
             f"Initialized {self.name}: interval={interval_s}s, on_time={on_time_s}s, "
             f"thermostat=[max={max_temp}°C, hyst={temp_hysteresis}°C]",
         )
+        logger.debug(
+            "FanController",
+            "init config",
+            name=self.name,
+            pin=pin,
+            interval_s=interval_s,
+            on_time_s=on_time_s,
+            max_temp=max_temp,
+            temp_hysteresis=temp_hysteresis,
+            poll_interval_s=poll_interval_s,
+        )
 
     async def start_cycle(self) -> None:
         """
@@ -173,11 +184,32 @@ class FanController(RelayController):
                 # Get current temperature
                 current_temp = self.dht_logger.last_temperature
 
+                self.logger.debug(
+                    "FanController",
+                    "cycle tick",
+                    name=self.name,
+                    sec_midnight=seconds_since_midnight,
+                    pos_in_cycle=position_in_cycle,
+                    schedule_on=schedule_should_be_on,
+                    temp=current_temp,
+                    thermo_active=self.thermostat_active,
+                    is_on=self._state,
+                    last_sched=self.last_schedule_state,
+                )
+
                 # Thermostat logic (priority over schedule)
                 if current_temp is not None:
                     if not self.thermostat_active and current_temp >= self.max_temp:
                         self.thermostat_active = True
                         self.thermostat_on_count += 1
+                        self.logger.debug(
+                            "FanController",
+                            "thermostat activating",
+                            name=self.name,
+                            temp=current_temp,
+                            threshold=self.max_temp,
+                            activation_num=self.thermostat_on_count,
+                        )
                         try:
                             self.turn_on()
                             self.logger.info(
@@ -189,6 +221,14 @@ class FanController(RelayController):
                             self.logger.error("FanController", f"{self.name} failed to turn ON: {e}")
 
                     elif self.thermostat_active and current_temp < (self.max_temp - self.temp_hysteresis):
+                        hysteresis_off = self.max_temp - self.temp_hysteresis
+                        self.logger.debug(
+                            "FanController",
+                            "thermostat deactivating",
+                            name=self.name,
+                            temp=current_temp,
+                            hysteresis_off_at=hysteresis_off,
+                        )
                         # Thermostat no longer required: resume schedule control
                         self.thermostat_active = False
                         # Explicitly synchronize fan state with current schedule
@@ -211,6 +251,13 @@ class FanController(RelayController):
                 # Apply time-of-day schedule (only when thermostat inactive)
                 if not self.thermostat_active:
                     if schedule_should_be_on != self.last_schedule_state:
+                        self.logger.debug(
+                            "FanController",
+                            "schedule state change",
+                            name=self.name,
+                            prev=self.last_schedule_state,
+                            new=schedule_should_be_on,
+                        )
                         try:
                             if schedule_should_be_on:
                                 self.turn_on()
@@ -226,9 +273,11 @@ class FanController(RelayController):
 
             except asyncio.CancelledError:
                 self.turn_off()
+                self.logger.debug("FanController", "cycle cancelled cleanup", name=self.name, is_on=self._state)
                 self.logger.warning("FanController", f"{self.name} cycle cancelled")
                 raise
             except Exception as e:
+                self.logger.debug("FanController", "unexpected error in cycle", name=self.name, error=str(e))
                 self.logger.error("FanController", f"{self.name} unexpected error: {e}")
                 await asyncio.sleep(1)
 
@@ -299,6 +348,14 @@ class GrowlightController(RelayController):
             year, month, day = self.time_provider.now_date_tuple()
             (sr_h, sr_m), (ss_h, ss_m) = self.time_provider.sunrise_sunset(year, month, day)
 
+            logger.debug(
+                "GrowlightCtrl",
+                "deriving dawn/sunset from sunrise_sunset",
+                date=f"{year:04d}-{month:02d}-{day:02d}",
+                sr=f"{sr_h:02d}:{sr_m:02d}",
+                ss=f"{ss_h:02d}:{ss_m:02d}",
+            )
+
             if dawn_hour is None:
                 dawn_hour = sr_h
             if dawn_minute is None:
@@ -321,6 +378,17 @@ class GrowlightController(RelayController):
             f"dawn={dawn_hour:02d}:{dawn_minute:02d}, "
             f"sunset={sunset_hour:02d}:{sunset_minute:02d}",
         )
+        logger.debug(
+            "GrowlightCtrl",
+            "init config",
+            name=self.name,
+            pin=pin,
+            dawn_h=dawn_hour,
+            dawn_m=dawn_minute,
+            sunset_h=sunset_hour,
+            sunset_m=sunset_minute,
+            poll_interval_s=poll_interval_s,
+        )
 
     async def start_scheduler(self) -> None:
         """
@@ -336,8 +404,26 @@ class GrowlightController(RelayController):
 
                 should_be_on = dawn_seconds <= seconds_since_midnight < sunset_seconds
 
+                self.logger.debug(
+                    "GrowlightCtrl",
+                    "schedule tick",
+                    name=self.name,
+                    sec_midnight=seconds_since_midnight,
+                    dawn_s=dawn_seconds,
+                    sunset_s=sunset_seconds,
+                    should_on=should_be_on,
+                    last_state=self.last_state,
+                    is_on=self._state,
+                )
+
                 # Only log state changes
                 if should_be_on != self.last_state:
+                    self.logger.debug(
+                        "GrowlightCtrl",
+                        "state change",
+                        name=self.name,
+                        direction="ON" if should_be_on else "OFF",
+                    )
                     if should_be_on:
                         self.turn_on()
                         self.logger.info("GrowlightController", f"{self.name} ON")
@@ -350,9 +436,11 @@ class GrowlightController(RelayController):
 
             except asyncio.CancelledError:
                 self.turn_off()
+                self.logger.debug("GrowlightCtrl", "scheduler cancelled cleanup", name=self.name)
                 self.logger.warning("GrowlightController", f"{self.name} scheduler cancelled")
                 raise
             except Exception as e:
+                self.logger.debug("GrowlightCtrl", "unexpected error", name=self.name, error=str(e))
                 self.logger.error("GrowlightController", f"{self.name} unexpected error: {e}")
                 await asyncio.sleep(1)
 

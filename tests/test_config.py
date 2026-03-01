@@ -289,17 +289,17 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["system"]["button_poll_ms"] = original
 
-    def test_debug_enabled_default_false(self):
-        """event_logger.debug_enabled defaults to False."""
+    def test_debug_enabled_default_true(self):
+        """event_logger.debug_enabled defaults to True."""
         from config import DEVICE_CONFIG
 
-        assert DEVICE_CONFIG["event_logger"]["debug_enabled"] is False
+        assert DEVICE_CONFIG["event_logger"]["debug_enabled"] is True
 
-    def test_debug_to_file_default_false(self):
-        """event_logger.debug_to_file defaults to False."""
+    def test_debug_to_file_default_true(self):
+        """event_logger.debug_to_file defaults to True."""
         from config import DEVICE_CONFIG
 
-        assert DEVICE_CONFIG["event_logger"]["debug_to_file"] is False
+        assert DEVICE_CONFIG["event_logger"]["debug_to_file"] is True
 
     def test_missing_debug_enabled_raises(self):
         """Missing event_logger.debug_enabled raises ValueError."""

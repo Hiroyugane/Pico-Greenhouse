@@ -7,6 +7,8 @@
 - [x] GitHub Actions CI pipeline (lint → test → host-sim-smoke)
 - [x] Inject `EventLogger` into `BufferManager`, `LEDButtonHandler`, `ServiceReminder`
 - [x] Migrate `print()` calls to structured logger with fallback
+- [x] Agent pipeline — 5-phase (Brainstorm → Design → Implement → Verify → Review) with handoffs
+- [x] Bug-fix prompt template for diagnosis → minimal fix → regression test workflow
 
 ## Backlog
 

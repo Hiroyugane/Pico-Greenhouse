@@ -4,6 +4,12 @@ Use this prompt to safely refactor an existing module while maintaining DI contr
 
 ---
 
+## Pipeline integration
+
+This is a **Phase 3 sub-prompt** for the agent pipeline (`docs/prompts/pipeline.md`). When used from the pipeline, the pre-refactor checklist maps to Phase 1 (Brainstorm), the implementation steps map to Phase 3 (Implement), and the post-refactor checklist maps to Phase 4 (Verify). Can also be used standalone.
+
+---
+
 ## Context
 
 The Pi Greenhouse uses dependency injection throughout. Modules communicate via injected interfaces, not imports. Tests mock these interfaces via fixtures in `conftest.py`. Changing a module's constructor signature or public API may break:

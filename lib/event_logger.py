@@ -72,6 +72,12 @@ class EventLogger:
 
         self._refresh_log_size()
         print(f"[EventLogger] Initialized: {self.logfile}")
+        if self.debug_enabled:
+            print(
+                f"[EventLogger][DEBUG] init config | logfile={self.logfile} max_size={self.max_size} "
+                f"info_flush={info_flush_threshold} warn_flush={warn_flush_threshold} "
+                f"debug_enabled={debug_enabled} debug_to_file={debug_to_file}"
+            )
 
     def _refresh_log_size(self) -> None:
         """Refresh cached log size from primary storage when available."""
@@ -81,6 +87,8 @@ class EventLogger:
         size = self.buffer_manager.get_primary_file_size(relpath)
         if size is not None:
             self._log_size = size
+        if self.debug_enabled:
+            print(f"[EventLogger][DEBUG] refresh log size | relpath={relpath} size={size}")
 
     def _get_timestamp(self) -> str:
         """
@@ -194,6 +202,7 @@ class EventLogger:
             self.buffer = []
             return
 
+        entry_count = len(self.buffer)
         try:
             # Normalize logfile path (strip only '/sd/' prefix)
             relpath = self._strip_sd_prefix(self.logfile)
@@ -203,6 +212,11 @@ class EventLogger:
                 self._log_size += len(entry)
 
             self.flush_count += 1
+            if self.debug_enabled:
+                print(
+                    f"[EventLogger][DEBUG] flush complete | entries={entry_count} "
+                    f"relpath={relpath} flush_count={self.flush_count} log_size={self._log_size}"
+                )
         except Exception as e:
             print(f"[EventLogger] WARNING: Error during flush: {e}")
         finally:
@@ -219,6 +233,10 @@ class EventLogger:
         self._refresh_log_size()
 
         if self._log_size > self.max_size:
+            if self.debug_enabled:
+                print(
+                    f"[EventLogger][DEBUG] log rotation triggered | log_size={self._log_size} max_size={self.max_size}"
+                )
             try:
                 # Flush any pending entries so the rotated file is complete
                 self.flush()

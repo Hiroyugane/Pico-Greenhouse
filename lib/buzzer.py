@@ -73,7 +73,10 @@ class BuzzerController:
 
     def _is_active(self) -> bool:
         """Return True if buzzer should produce sound."""
-        return self.enabled and not self.muted
+        active = self.enabled and not self.muted
+        if self.logger:
+            self.logger.debug("Buzzer", "is_active check", enabled=self.enabled, muted=self.muted, active=active)
+        return active
 
     def tone(self, freq: int | None = None) -> None:
         """
@@ -85,6 +88,8 @@ class BuzzerController:
         if not self._is_active():
             return
         freq = freq or self.default_freq
+        if self.logger:
+            self.logger.debug("Buzzer", "tone", freq=freq)
         self.pwm.freq(freq)
         self.pwm.duty_u16(self.duty_u16)
 
@@ -102,6 +107,8 @@ class BuzzerController:
         """
         if not self._is_active():
             return
+        if self.logger:
+            self.logger.debug("Buzzer", "beep", freq=freq or self.default_freq, duration_ms=duration_ms)
         self.tone(freq)
         await asyncio.sleep_ms(duration_ms)
         self.stop()
@@ -116,6 +123,14 @@ class BuzzerController:
         """
         if not self._is_active():
             return
+        if self.logger:
+            self.logger.debug(
+                "Buzzer",
+                "play_pattern",
+                steps=len(pattern),
+                first_freq=pattern[0][0] if pattern else 0,
+                last_freq=pattern[-1][0] if pattern else 0,
+            )
         for freq, duration_ms, pause_ms in pattern:
             if freq > 0:
                 self.tone(freq)
@@ -141,12 +156,16 @@ class BuzzerController:
             if self.logger:
                 self.logger.warning("Buzzer", f"Unknown pattern: {name}")
             return
+        if self.logger:
+            self.logger.debug("Buzzer", "play_named", name=name, steps=len(pattern))
         await self.play_pattern(pattern)
 
     # ── Convenience alert methods ─────────────────────────────────────
 
     async def startup(self) -> None:
         """Play startup melody (if configured)."""
+        if self.logger:
+            self.logger.debug("Buzzer", "startup", has_melody="startup_melody" in self.patterns)
         if "startup_melody" in self.patterns:
             await self.play_named("startup_melody")
         else:
@@ -154,6 +173,8 @@ class BuzzerController:
 
     async def error(self) -> None:
         """Play error alert (if configured)."""
+        if self.logger:
+            self.logger.debug("Buzzer", "error alert", has_pattern="error_pattern" in self.patterns)
         if "error_pattern" in self.patterns:
             await self.play_named("error_pattern")
         else:
@@ -161,6 +182,8 @@ class BuzzerController:
 
     async def alert(self) -> None:
         """Play generic alert (if configured)."""
+        if self.logger:
+            self.logger.debug("Buzzer", "alert", has_pattern="alert_pattern" in self.patterns)
         if "alert_pattern" in self.patterns:
             await self.play_named("alert_pattern")
         else:
@@ -168,6 +191,8 @@ class BuzzerController:
 
     async def reminder(self) -> None:
         """Play service reminder beep (if configured)."""
+        if self.logger:
+            self.logger.debug("Buzzer", "reminder", has_pattern="reminder_pattern" in self.patterns)
         if "reminder_pattern" in self.patterns:
             await self.play_named("reminder_pattern")
         else:

@@ -61,6 +61,10 @@ class BufferManager:
         # Internal buffers: per-file in-memory storage
         self._buffers = {}  # {relpath: [entry1, entry2, ...]}
 
+        # Re-entrancy guard: when True, _log_debug uses print() instead of
+        # self._logger.debug() to prevent feedback loops with EventLogger.
+        self._in_io = False
+
         # Metrics
         self.writes_to_primary = 0
         self.writes_to_fallback = 0
@@ -90,8 +94,11 @@ class BufferManager:
             with open(test_file, "r") as f:
                 readback = f.read()
             os.remove(test_file)
-            return readback == test_data
-        except Exception:
+            available = readback == test_data
+            self._log_debug("is_primary_available", available=available)
+            return available
+        except Exception as e:
+            self._log_debug("is_primary_available failed", error=str(e))
             return False
 
     def set_logger(self, logger) -> None:
@@ -104,11 +111,21 @@ class BufferManager:
         self._logger = logger
 
     def _log_debug(self, message: str, **fields) -> None:
-        """Log debug message if logger is available."""
-        if self._logger:
+        """Log debug message if logger is available.
+
+        Uses print() instead of the injected logger when inside a write()
+        or flush() call to prevent a feedback loop: EventLogger.flush() →
+        BufferManager.write() → _log_debug → EventLogger.debug() → buffer
+        grows → next flush writes even more BufferManager debug lines → ∞
+        """
+        if self._logger and not self._in_io:
             self._logger.debug("BufferMgr", message, **fields)
         else:
-            print(f"[BufferManager][DEBUG] {message}")
+            if fields:
+                field_str = " ".join(f"{k}={v}" for k, v in fields.items())
+                print(f"[BufferManager][DEBUG] {message} | {field_str}")
+            else:
+                print(f"[BufferManager][DEBUG] {message}")
 
     def _ensure_fallback_dir(self) -> bool:
         """
@@ -122,9 +139,11 @@ class BufferManager:
         try:
             fallback_dir = self._path_dirname(self.fallback_path) or "."
             if not self._dir_exists(fallback_dir):
+                self._log_debug("creating fallback dir", path=fallback_dir)
                 self._mkdirs(fallback_dir)
             return True
-        except Exception:
+        except Exception as e:
+            self._log_debug("fallback dir creation failed", error=str(e))
             return False
 
     def _mkdirs(self, path: str) -> None:
@@ -236,12 +255,14 @@ class BufferManager:
         try:
             with open(primary_path, "r") as f:
                 if f.read(1):
+                    self._log_debug("has_data_for", relpath=relpath, found_in="primary")
                     return True
         except Exception:
             pass
 
         # 2. Check in-memory buffers
         if relpath in self._buffers and self._buffers[relpath]:
+            self._log_debug("has_data_for", relpath=relpath, found_in="buffer")
             return True
 
         # 3. Check fallback file for entries tagged with this relpath
@@ -249,10 +270,12 @@ class BufferManager:
             with open(self.fallback_path, "r") as f:
                 for line in f:
                     if line.startswith(f"{relpath}|"):
+                        self._log_debug("has_data_for", relpath=relpath, found_in="fallback")
                         return True
         except Exception:
             pass
 
+        self._log_debug("has_data_for", relpath=relpath, found_in="none")
         return False
 
     def write(self, relpath: str, data: str) -> bool:
@@ -291,6 +314,16 @@ class BufferManager:
 
         primary_path = f"{self.sd_mount_point}/{relpath}"
 
+        self._in_io = True
+        try:
+            return self._write_inner(relpath, primary_path, data)
+        finally:
+            self._in_io = False
+
+    def _write_inner(self, relpath: str, primary_path: str, data: str) -> bool:
+        """Inner write logic (called with _in_io guard held)."""
+        self._log_debug("write entry", relpath=relpath, data_len=len(data))
+
         # CRITICAL ORDERING: If primary is available, migrate pending data BEFORE accepting new writes.
         # 1. Migrate fallback entries (SD was disconnected, now reconnected)
         # 2. Flush in-memory buffer (both primary and fallback were unavailable, now primary is back)
@@ -302,6 +335,8 @@ class BufferManager:
         # reduces SD I/O and avoids timing-related false negatives that
         # silently route data to fallback.
         primary_ok = self.is_primary_available()
+
+        self._log_debug("write routing", relpath=relpath, primary_ok=primary_ok)
 
         if primary_ok:
             if self._has_fallback_entries():
@@ -315,6 +350,12 @@ class BufferManager:
                 with open(primary_path, "a") as f:
                     f.write(data)
                 self.writes_to_primary += 1
+                self._log_debug(
+                    "write completed",
+                    tier="primary",
+                    relpath=relpath,
+                    writes_primary=self.writes_to_primary,
+                )
                 return True
             except Exception:
                 # Primary write failed (e.g., file locked, permissions)
@@ -338,6 +379,12 @@ class BufferManager:
             with open(self.fallback_path, "a") as f:
                 f.write(f"{relpath}|{data}")  # Include relpath in fallback for migration
             self.writes_to_fallback += 1
+            self._log_debug(
+                "write completed",
+                tier="fallback",
+                relpath=relpath,
+                writes_fallback=self.writes_to_fallback,
+            )
             return False
         except Exception:
             # Both primary and fallback failed; buffer in RAM as last resort
@@ -352,9 +399,22 @@ class BufferManager:
                 for path_key, entries in self._buffers.items():
                     if entries:
                         entries.pop(0)
+                        self._log_debug(
+                            "buffer overflow",
+                            buffer_size=buffer_size,
+                            max=self.max_buffer_entries,
+                            dropped_from=path_key,
+                        )
                         break
 
             self.write_failures += 1
+            self._log_debug(
+                "write completed",
+                tier="ram",
+                relpath=relpath,
+                write_failures=self.write_failures,
+                buffer_entries=buffer_size if "buffer_size" in dir() else len(self._buffers.get(relpath, [])),
+            )
             return False
 
     def flush(self, relpath: str | None = None) -> bool:
@@ -384,8 +444,23 @@ class BufferManager:
             True  # Flushed to primary
         """
         paths_to_flush = [relpath] if relpath else list(self._buffers.keys())
-        flushed_to_primary = False
         primary_available = self.is_primary_available()
+
+        self._in_io = True
+        try:
+            return self._flush_inner(paths_to_flush, primary_available)
+        finally:
+            self._in_io = False
+
+    def _flush_inner(self, paths_to_flush: list, primary_available: bool) -> bool:
+        """Inner flush logic (called with _in_io guard held)."""
+        flushed_to_primary = False
+
+        self._log_debug(
+            "flush start",
+            paths=str(paths_to_flush),
+            primary_available=primary_available,
+        )
 
         for path in paths_to_flush:
             if path not in self._buffers or not self._buffers[path]:
@@ -398,8 +473,14 @@ class BufferManager:
                     with open(primary_path, "a") as f:
                         for entry in self._buffers[path]:
                             f.write(entry)
+                    entry_count = len(self._buffers[path])
                     self._buffers[path] = []
                     flushed_to_primary = True
+                    self._log_debug(
+                        "flush to primary",
+                        path=path,
+                        entries=entry_count,
+                    )
                     continue
                 except Exception:
                     pass  # Fall through to fallback
@@ -407,12 +488,19 @@ class BufferManager:
             # Primary unavailable or write failed — drain to fallback file
             if self._ensure_fallback_dir():
                 try:
+                    entry_count = len(self._buffers[path])
                     with open(self.fallback_path, "a") as f:
                         for entry in self._buffers[path]:
                             f.write(f"{path}|{entry}")
                     self.writes_to_fallback += len(self._buffers[path])
                     self._buffers[path] = []
+                    self._log_debug(
+                        "flush to fallback",
+                        path=path,
+                        entries=entry_count,
+                    )
                 except Exception:
+                    self._log_debug("flush failed, entries stay in RAM", path=path)
                     pass  # Entries stay in RAM as last resort
 
         return flushed_to_primary
@@ -517,6 +605,7 @@ class BufferManager:
             with open(new_path, "w") as dst:
                 dst.write(content)
             os.remove(old_path)
+            self._log_debug("rename succeeded", old=old_relpath, new=new_relpath, size=len(content))
             return True
         except Exception as e:
             if self._logger:
@@ -541,9 +630,13 @@ class BufferManager:
             st = os.stat(primary_path)
             # MicroPython returns a tuple; CPython returns an os.stat_result
             if isinstance(st, tuple):
-                return int(st[6]) if len(st) > 6 else None
-            return int(st.st_size)
+                size = int(st[6]) if len(st) > 6 else None
+            else:
+                size = int(st.st_size)
+            self._log_debug("get_primary_file_size", relpath=relpath, size=size)
+            return size
         except Exception:
+            self._log_debug("get_primary_file_size unavailable", relpath=relpath)
             return None
 
     def get_metrics(self) -> dict:

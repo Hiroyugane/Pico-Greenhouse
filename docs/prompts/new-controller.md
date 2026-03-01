@@ -4,6 +4,12 @@ Use this prompt with any AI coding agent to add a new relay-controlled device (e
 
 ---
 
+## Pipeline integration
+
+This is a **Phase 3 sub-prompt** for the agent pipeline (`docs/prompts/pipeline.md`). When used from the pipeline, Phase 2 produces the implementation plan based on these steps, and Phase 3 executes it. Can also be used standalone.
+
+---
+
 ## Context
 
 You are working on the Pi Greenhouse project — a MicroPython system running on a Raspberry Pi Pico. The codebase uses dependency injection, `uasyncio` for concurrency, and `RelayController` as a base class for all relay-driven devices. GPIO logic is **inverted** (HIGH=off, LOW=on).

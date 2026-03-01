@@ -4,6 +4,12 @@ Use this prompt to add a new sensor reader (e.g., CO2/UART, soil moisture/ADC, l
 
 ---
 
+## Pipeline integration
+
+This is a **Phase 3 sub-prompt** for the agent pipeline (`docs/prompts/pipeline.md`). When used from the pipeline, Phase 2 produces the implementation plan based on these steps, and Phase 3 executes it. Can also be used standalone.
+
+---
+
 ## Context
 
 You are working on the Pi Greenhouse project — a MicroPython system on a Raspberry Pi Pico. Sensor data is logged to CSV files via `BufferManager` (SD → fallback → RAM). The existing `DHTLogger` is the reference implementation for sensor modules.

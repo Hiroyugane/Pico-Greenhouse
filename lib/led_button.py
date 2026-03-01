@@ -195,6 +195,15 @@ class LEDButtonHandler:
         # Also set legacy alias to short_press for backward compat
         self.button_callback = short_press
         self.button.irq(trigger=machine.Pin.IRQ_FALLING | machine.Pin.IRQ_RISING, handler=self._button_dual_isr)
+        if self._logger:
+            self._logger.debug(
+                "LEDButton",
+                "callbacks registered",
+                has_short=short_press is not None,
+                has_long=long_press is not None,
+                debounce_ms=self.debounce_ms,
+                long_press_ms=self.long_press_ms,
+            )
 
     def _button_isr(self, pin) -> None:
         """ISR (FALLING only): debounce + set flag.  No heap allocation."""
@@ -242,6 +251,13 @@ class LEDButtonHandler:
         while True:
             if self._pending_long:
                 self._pending_long = False
+                if self._logger:
+                    self._logger.debug(
+                        "LEDButton",
+                        "button press detected",
+                        press_type="long",
+                        has_callback=self.long_press_callback is not None,
+                    )
                 if self.long_press_callback:
                     try:
                         self.long_press_callback()
@@ -252,6 +268,13 @@ class LEDButtonHandler:
                             print(f"[LEDButtonHandler] Long press callback error: {e}")
             if self._pending_short:
                 self._pending_short = False
+                if self._logger:
+                    self._logger.debug(
+                        "LEDButton",
+                        "button press detected",
+                        press_type="short",
+                        has_callback=(self.short_press_callback or self.button_callback) is not None,
+                    )
                 cb = self.short_press_callback or self.button_callback
                 if cb:
                     try:
@@ -380,6 +403,17 @@ class ServiceReminder:
                 "ServiceReminder",
                 f"Init: {self.days_interval}d interval, last={self.last_serviced_timestamp}",
             )
+            self._logger.debug(
+                "ServiceReminder",
+                "init config",
+                days_interval=self.days_interval,
+                blink_after_days=self.blink_after_days,
+                monitor_interval_s=self.monitor_interval_s,
+                storage_path=self.storage_path,
+                last_serviced=self.last_serviced_timestamp,
+                last_date=str(self.last_serviced_date),
+                auto_register=auto_register_button,
+            )
         else:
             print(f"[ServiceReminder] Init: {self.days_interval}d, last={self.last_serviced_timestamp}")
 
@@ -403,8 +437,17 @@ class ServiceReminder:
         try:
             with open(self.storage_path, "r") as f:
                 value = f.read().strip()
+                if self._logger:
+                    self._logger.debug(
+                        "ServiceReminder",
+                        "loaded timestamp",
+                        path=self.storage_path,
+                        value=value or "(empty)",
+                    )
                 return value if value else None
         except Exception:
+            if self._logger:
+                self._logger.debug("ServiceReminder", "no saved timestamp found", path=self.storage_path)
             return None
 
     def _save_last_serviced_timestamp(self, timestamp: str) -> None:
@@ -416,6 +459,8 @@ class ServiceReminder:
         try:
             with open(self.storage_path, "w") as f:
                 f.write(timestamp)
+            if self._logger:
+                self._logger.debug("ServiceReminder", "saved timestamp", path=self.storage_path, value=timestamp)
         except Exception as e:
             if self._logger:
                 self._logger.error("ServiceReminder", f"Failed saving timestamp: {e}")
@@ -442,7 +487,16 @@ class ServiceReminder:
                 (self.last_serviced_date[0], self.last_serviced_date[1], self.last_serviced_date[2], 0, 0, 0, 0, 0)
             )
 
-            return int((current_secs - last_secs) / 86400)
+            days = int((current_secs - last_secs) / 86400)
+            if self._logger:
+                self._logger.debug(
+                    "ServiceReminder",
+                    "days since service",
+                    current_date=str(current_date),
+                    last_date=str(self.last_serviced_date),
+                    days_elapsed=days,
+                )
+            return days
         except Exception:
             return 0
 
@@ -453,6 +507,7 @@ class ServiceReminder:
         Updates last_serviced_timestamp to now.
         """
         try:
+            old_timestamp = self.last_serviced_timestamp
             self.last_serviced_timestamp = self.time_provider.now_timestamp()
             self.last_serviced_date = self.time_provider.now_date_tuple()
             self._save_last_serviced_timestamp(self.last_serviced_timestamp)
@@ -460,6 +515,12 @@ class ServiceReminder:
             self.led_handler.set_off()  # Stop blinking immediately
 
             if self._logger:
+                self._logger.debug(
+                    "ServiceReminder",
+                    "reset",
+                    old_timestamp=old_timestamp,
+                    new_timestamp=self.last_serviced_timestamp,
+                )
                 self._logger.info("ServiceReminder", f"Reset: last_serviced={self.last_serviced_timestamp}")
             else:
                 print(f"[ServiceReminder] Reset: last_serviced={self.last_serviced_timestamp}")
@@ -486,6 +547,18 @@ class ServiceReminder:
                 is_due = days_elapsed >= self.days_interval
                 days_overdue = days_elapsed - self.days_interval if is_due else 0
                 should_blink = is_due and days_overdue >= self.blink_after_days
+
+                if self._logger:
+                    self._logger.debug(
+                        "ServiceReminder",
+                        "monitor tick",
+                        days_elapsed=days_elapsed,
+                        is_due=is_due,
+                        days_overdue=days_overdue,
+                        should_blink=should_blink,
+                        reminder_due=reminder_due,
+                        was_blinking=was_blinking,
+                    )
 
                 # Detect transition from not-due to due
                 if is_due and not reminder_due:

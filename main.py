@@ -359,18 +359,19 @@ async def main():
         # returns True (cached VFS metadata) but real writes are failing.
         # refresh_sd() performs a block-level readblocks check and is
         # cheap when the card is actually present.
-        sd_needs_check = not buffer_manager.is_primary_available() or buffered > 0
+        primary_avail = buffer_manager.is_primary_available()
+        sd_needs_check = not primary_avail or buffered > 0
         logger.debug(
             "MAIN",
             "SD check decision",
             sd_needs_check=sd_needs_check,
-            primary_available=buffer_manager.is_primary_available() if not sd_needs_check else "skipped",
+            primary_available=primary_avail if not sd_needs_check else "skipped",
             buffered=buffered,
         )
         if sd_needs_check:
             logger.debug(
                 "MAIN",
-                f"SD needs check: primary_avail={buffer_manager.is_primary_available()}, buffered={buffered}",
+                f"SD needs check: primary_avail={primary_avail}, buffered={buffered}",
             )
             if hardware.refresh_sd():
                 logger.info("MAIN", "SD card re-mounted after hot-swap")

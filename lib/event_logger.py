@@ -317,6 +317,10 @@ class EventLogger:
                     self._log_size = 0
                     self.info("EventLogger", f"Log rotated -> {rotated_name}")
                 else:
+                    # Reset size so we don't retry every cycle while SD is down.
+                    # The threshold will re-trigger naturally once SD recovers and
+                    # _refresh_log_size() can read the real file size again.
+                    self._log_size = 0
                     self.info("EventLogger", "Log rotation rename failed; will retry next cycle")
             except Exception as e:
                 print(f"[EventLogger] WARNING: Log rotation failed: {e}")

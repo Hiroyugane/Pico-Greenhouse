@@ -167,16 +167,17 @@ class TestEventLoggerRotation:
         event_logger.check_size()
         assert event_logger._log_size == original_size
 
-    def test_check_size_rename_failure_preserves_counter(self, time_provider, buffer_manager):
-        """If rename fails, _log_size is NOT zeroed so rotation retries next cycle."""
+    def test_check_size_rename_failure_resets_counter(self, time_provider, buffer_manager):
+        """If rename fails, _log_size IS zeroed to suppress retry spam until SD recovers."""
         from lib.event_logger import EventLogger
 
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
             logger = EventLogger(time_provider, buffer_manager, logfile="/sd/system.log", max_size=100)
             logger._log_size = 200
-            # rename will fail since file doesn't exist — counter must not be zeroed
+            # rename will fail since file doesn't exist — counter must be zeroed to avoid
+            # hammering the SD with rename attempts every cycle while it is unavailable.
             logger.check_size()
-        assert logger._log_size != 0
+        assert logger._log_size == 0
 
     def test_check_size_uses_debug_max_size_when_debug_to_file(self, time_provider, buffer_manager, tmp_path):
         """When debug_to_file=True, debug_max_size is the rotation threshold, not max_size."""

@@ -244,16 +244,9 @@ class FanController(RelayController):
                             "FanController",
                             f"{self.name} thermostat deactivating: {current_temp:.1f}°C < {threshold}°C",
                         )
-                        # Explicitly synchronize fan state with current schedule
-                        if not schedule_should_be_on:
-                            try:
-                                self.turn_off()
-                            except Exception as e:
-                                self.logger.error(
-                                    "FanController",
-                                    f"{self.name} failed to turn OFF after thermostat deactivation: {e}",
-                                )
-                        # Force schedule state re-evaluation
+                        # Force schedule state re-evaluation; the schedule block
+                        # immediately below will make the correct turn_on/turn_off
+                        # call for the current schedule window.
                         self.last_schedule_state = None
                         self.logger.info(
                             "FanController",

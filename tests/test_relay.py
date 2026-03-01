@@ -276,15 +276,17 @@ class TestFanController:
         error_calls = [str(c) for c in fan_controller.logger.error.call_args_list]
         assert any("failed to turn ON" in c for c in error_calls)
 
-    def test_thermostat_deactivation_turn_off_error(self, fan_controller, mock_dht_logger):
-        """When turn_off() raises after thermostat deactivation, error is logged."""
-        # First activate thermostat
+    def test_thermostat_deactivation_routes_relay_to_schedule_block(self, fan_controller, mock_dht_logger):
+        """Thermostat deactivation resets last_schedule_state; the schedule block
+        makes the single relay call (no extra turn_off in the thermostat block)."""
+        # Activate thermostat; schedule window is OFF (pos_in_cycle outside on_time)
         fan_controller.thermostat_active = True
         fan_controller.thermostat_on_count = 1
+        fan_controller.last_schedule_state = False  # schedule was off before thermostat took over
         # Temperature below hysteresis threshold: 24.0 - 1.0 = 23.0
         mock_dht_logger.last_temperature = 22.5
-        # Make turn_off raise
-        fan_controller.pin.value = Mock(side_effect=OSError("pin fault"))
+
+        pin_calls_before = fan_controller.pin.value.call_count
 
         async def run():
             with patch("asyncio.sleep", side_effect=RuntimeError("stop")):
@@ -296,8 +298,15 @@ class TestFanController:
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
             asyncio.run(run())
 
-        error_calls = [str(c) for c in fan_controller.logger.error.call_args_list]
-        assert any("failed to turn OFF after thermostat deactivation" in c for c in error_calls)
+        # Thermostat should be deactivated
+        assert not fan_controller.thermostat_active
+        # Relay must have been called exactly once (by the schedule block, not twice)
+        pin_calls_after = fan_controller.pin.value.call_count
+        assert pin_calls_after - pin_calls_before == 1
+        # No error should have been logged for the deactivation itself
+        # (the RuntimeError("stop") from asyncio.sleep is an expected test-harness artifact)
+        real_errors = [str(c) for c in fan_controller.logger.error.call_args_list if "stop" not in str(c)]
+        assert real_errors == []
 
     def test_schedule_transition_error(self, fan_controller, mock_dht_logger):
         """When turn_on/turn_off raises during schedule transition, error is logged."""

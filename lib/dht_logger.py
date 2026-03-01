@@ -149,6 +149,9 @@ class DHTLogger:
             self.logger.debug("DHTLogger", "file exists (created cache)", relpath=relpath)
             return True
         exists = self.buffer_manager.has_data_for(relpath)
+        if exists:
+            # Cache the confirmed existence so a later SD outage won't re-trigger header creation
+            self._created_files.add(relpath)
         self.logger.debug("DHTLogger", "file exists check", relpath=relpath, found=exists)
         return exists
 

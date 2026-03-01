@@ -25,17 +25,34 @@ class TimeProvider:
     def __init__(self):
         self._logger = None
         self._debug_callback = None
+        # Re-entrancy guard: prevents EventLogger.debug() → _get_timestamp()
+        # → now_timestamp() → _sync_from_rtc() → _debug() → EventLogger.debug() loop.
+        self._in_debug = False
 
     def set_logger(self, logger) -> None:
         """Attach an EventLogger for debug diagnostics (wired after EventLogger creation)."""
         self._logger = logger
 
     def _debug(self, message: str, **fields) -> None:
-        """Emit debug message if logger is attached, else use debug_callback."""
-        if self._logger:
-            self._logger.debug("TimeProv", message, **fields)
-        elif hasattr(self, "_debug_callback") and self._debug_callback:
-            self._debug_callback(message)
+        """Emit debug message if logger is attached, else use debug_callback.
+
+        Falls back to print/callback when re-entrancy is detected to prevent
+        the feedback loop: EventLogger.debug() → _get_timestamp() →
+        now_timestamp() → _sync_from_rtc() → _debug() → EventLogger.debug() → ∞
+        """
+        if self._logger and not self._in_debug:
+            self._in_debug = True
+            try:
+                self._logger.debug("TimeProv", message, **fields)
+            finally:
+                self._in_debug = False
+        else:
+            # Inside a recursive call or no logger — use callback/print
+            if hasattr(self, "_debug_callback") and self._debug_callback:
+                self._debug_callback(message)
+            elif self._in_debug:
+                # Only print when recursion detected to avoid noise on boot
+                pass
 
     def now_timestamp(self) -> str:
         """

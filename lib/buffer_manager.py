@@ -472,10 +472,10 @@ class BufferManager:
             True  # Flushed to primary
         """
         paths_to_flush = [relpath] if relpath else list(self._buffers.keys())
-        primary_available = self.is_primary_available()
 
         self._in_io = True
         try:
+            primary_available = self.is_primary_available()
             return self._flush_inner(paths_to_flush, primary_available)
         finally:
             self._in_io = False
@@ -549,6 +549,14 @@ class BufferManager:
         Returns:
             int: Number of entries migrated, 0 if primary unavailable or fallback empty
         """
+        self._in_io = True
+        try:
+            return self._migrate_fallback_inner()
+        finally:
+            self._in_io = False
+
+    def _migrate_fallback_inner(self) -> int:
+        """Inner migration logic (called with _in_io guard held)."""
         if not self.is_primary_available():
             self._log_debug("SD not available during migration")
             return 0

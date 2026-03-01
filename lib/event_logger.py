@@ -260,11 +260,12 @@ class EventLogger:
         try:
             # Normalize logfile path (strip only '/sd/' prefix)
             relpath = self._strip_sd_prefix(self.logfile)
-            count = len(self.buffer)
 
-            for entry in self.buffer:
-                self.buffer_manager.write(relpath, entry)
-                self._log_size += len(entry)
+            # Batch all entries into one write to avoid N SD probes per flush
+            # (one is_primary_available() call instead of one per entry).
+            combined = "".join(self.buffer)
+            self.buffer_manager.write(relpath, combined)
+            self._log_size += len(combined)
 
             self.flush_count += 1
             if self.debug_enabled:

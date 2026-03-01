@@ -117,7 +117,7 @@ class FanController(RelayController):
         on_time_s: int = 20,
         max_temp: float = 24.0,
         temp_hysteresis: float = 1.0,
-        poll_interval_s: int = 5,
+        poll_interval_s: int = 15,
         name=None,
     ):
         """
@@ -132,7 +132,7 @@ class FanController(RelayController):
             on_time_s (int): ON duration per cycle (default: 20)
             max_temp (float): Temperature threshold in °C (default: 24.0)
             temp_hysteresis (float): Hysteresis in °C (default: 1.0)
-            poll_interval_s (int): Schedule/thermostat check interval (default: 5)
+            poll_interval_s (int): Schedule/thermostat check interval (default: 15)
             name (str, optional): Relay name
         """
         super().__init__(pin, invert=True, name=name or f"Fan_{pin}", logger=logger)

@@ -130,8 +130,8 @@ async def main():
     )
 
     logger.info("MAIN", "System startup")
-    log_lvl = logger_config.get('log_level', 'INFO')
-    dbg_on = logger_config.get('debug_enabled', False)
+    log_lvl = logger_config.get("log_level", "INFO")
+    dbg_on = logger_config.get("debug_enabled", False)
     logger.debug("MAIN", f"log_level={log_lvl}, debug_enabled={dbg_on}")
 
     # Wire logger into StatusManager, BufferManager, TimeProvider, and HardwareFactory

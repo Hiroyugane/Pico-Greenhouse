@@ -24,6 +24,7 @@ class TimeProvider:
 
     def __init__(self):
         self._logger = None
+        self._debug_callback = None
 
     def set_logger(self, logger) -> None:
         """Attach an EventLogger for debug diagnostics (wired after EventLogger creation)."""
@@ -33,7 +34,7 @@ class TimeProvider:
         """Emit debug message if logger is attached, else use debug_callback."""
         if self._logger:
             self._logger.debug("TimeProv", message, **fields)
-        elif hasattr(self, '_debug_callback') and self._debug_callback:
+        elif hasattr(self, "_debug_callback") and self._debug_callback:
             self._debug_callback(message)
 
     def now_timestamp(self) -> str:

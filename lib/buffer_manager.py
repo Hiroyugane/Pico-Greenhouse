@@ -222,7 +222,7 @@ class BufferManager:
         return normalized.rsplit("/", 1)[-1]
 
     def _is_host(self) -> bool:
-        return sys.implementation.name != "micropython"
+        return getattr(sys.implementation, "name", "") != "micropython"
 
     def _normalize_host_path(self, path: str, default_rel: str) -> str:
         if not path:

@@ -29,7 +29,7 @@ pytest tests/ --cov=lib --cov=config --cov-report=term-missing
 
 ## Configuration
 
-- **`pyproject.toml`** at project root configures pytest (`asyncio_mode = "auto"`) and coverage (`fail_under = 85`).
+- **`pyproject.toml`** at project root configures pytest (`asyncio_mode = "auto"`) and coverage (`fail_under = 88`).
 - **`conftest.py`** patches `sys.modules` for `machine`, `dht`, `micropython`, `uasyncio` using structured `MagicMock` objects with realistic Pin constants (`OUT`, `IN`, `PULL_UP`, `IRQ_FALLING`).
 - **Fixtures** provide pre-wired instances: `time_provider`, `buffer_manager(tmp_path)`, `event_logger`, `fan_controller`, `growlight_controller`, `led_handler`, etc.
 - **Async tests** use `pytest-asyncio` auto mode — just write `async def test_*()` methods.
@@ -78,7 +78,7 @@ open htmlcov/index.html
 5. Create EventLogger (system event tracking with persistence)
 6. Create DHTLogger (temperature/humidity sensor)
 7. Create relay controllers: FanController × 2, GrowlightController
-8. Create LED/button handler and CleaningReminder task
+8. Create LED/button handler and ServiceReminder task
 9. Spawn all async tasks (fan cycles, growlight scheduler, sensor logging, reminder monitoring)
 10. Enter main event loop with periodic health checks
 
@@ -116,7 +116,7 @@ def test_mock_was_called(self, mock_rtc):
     from lib.time_provider import RTCTimeProvider
     provider = RTCTimeProvider(mock_rtc)
     provider.now_timestamp()
-    
+
     mock_rtc.ReadTime.assert_called()  # Verify ReadTime was called
     print(mock_rtc.ReadTime.call_count)  # How many times?
     print(mock_rtc.ReadTime.call_args)   # With what arguments?
@@ -124,7 +124,7 @@ def test_mock_was_called(self, mock_rtc):
 
 ## Known Limitations
 
-1. **Async Tests**: CleaningReminder, DHTLogger, and FanController have async methods not fully tested (would need pytest-asyncio fixtures)
+1. **Async Tests**: ServiceReminder, DHTLogger, and FanController have async methods not fully tested (would need pytest-asyncio fixtures)
 2. **File I/O**: File operations are partially mocked; real SD behavior may differ
 3. **MicroPython Specifics**: Some MicroPython-only features (e.g., memory constraints, interrupt handlers) aren't tested
 4. **GPIO Interrupts**: Button interrupt handlers are mocked; real debouncing untested

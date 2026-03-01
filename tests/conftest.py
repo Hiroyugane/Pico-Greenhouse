@@ -214,6 +214,7 @@ def mock_event_logger():
     logger.info = Mock()
     logger.warning = Mock()
     logger.error = Mock()
+    logger.debug = Mock()
     logger.flush = Mock()
     logger.check_size = Mock()
     return logger

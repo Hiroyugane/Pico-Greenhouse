@@ -98,12 +98,6 @@ async def main():
     # Reflect initial SD state
     status_manager.set_sd_status(hardware.is_sd_mounted())
 
-    # Run POST (visual LED walk) if enabled
-    if status_led_config.get("post_enabled", True):
-        post_step = status_led_config.get("post_step_ms", 150)
-        await status_manager.run_post(step_ms=post_step)
-        print("[STARTUP] POST complete — all status LEDs verified")
-
     # Step 4: Create BufferManager
     buffer_config = DEVICE_CONFIG.get("buffer_manager", {})
     buffer_manager = BufferManager(
@@ -122,12 +116,15 @@ async def main():
         status_manager=status_manager,
         info_flush_threshold=logger_config.get("info_flush_threshold", 5),
         warn_flush_threshold=logger_config.get("warn_flush_threshold", 3),
+        debug_enabled=logger_config.get("debug_enabled", False),
+        debug_to_file=logger_config.get("debug_to_file", False),
     )
 
     logger.info("MAIN", "System startup")
 
-    # Wire logger into StatusManager for condition-change logging
+    # Wire logger into StatusManager and BufferManager for condition-change logging
     status_manager.set_logger(logger)
+    buffer_manager.set_logger(logger)
 
     # Step 6: Create DHTLogger
     dht_config = DEVICE_CONFIG.get("dht_logger", {})
@@ -230,7 +227,14 @@ async def main():
         button_pin=DEVICE_CONFIG["pins"]["button_menu"],
         debounce_ms=DEVICE_CONFIG.get("system", {}).get("button_debounce_ms", 200),
         long_press_ms=DEVICE_CONFIG.get("system", {}).get("long_press_ms", 3000),
+        logger=logger,
     )
+
+    # Run POST (visual LED walk) if enabled
+    if status_led_config.get("post_enabled", True):
+        post_step = status_led_config.get("post_step_ms", 150)
+        await status_manager.run_post(step_ms=post_step, reminder_led=led_handler.led)
+        print("[STARTUP] POST complete — all status LEDs verified")
 
     Service_config = DEVICE_CONFIG.get("Service_reminder", {})
     reminder = ServiceReminder(
@@ -242,6 +246,7 @@ async def main():
         storage_path=Service_config.get("storage_path", "/service_reminder.txt"),
         monitor_interval_s=Service_config.get("monitor_interval_s", 3600),
         auto_register_button=False,
+        logger=logger,
     )
 
     # Register button callbacks:

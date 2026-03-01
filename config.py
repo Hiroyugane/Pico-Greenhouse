@@ -127,6 +127,8 @@ DEVICE_CONFIG = {
         "max_size": 50000,  # Max log file size (bytes) before rotation
         "info_flush_threshold": 5,  # Flush after N info-level entries buffered
         "warn_flush_threshold": 3,  # Flush after N warning-level entries buffered
+        "debug_enabled": False,  # Enable DEBUG messages to console (zero-cost when disabled)
+        "debug_to_file": False,  # Also write DEBUG entries to SD log (caution: fills card)
     },
     # Buzzer Configuration (passive buzzer via PWM)
     "buzzer": {
@@ -240,7 +242,14 @@ def validate_config():
         ],
         "buzzer": ["enabled", "default_freq", "default_duty_pct"],
         "buffer_manager": ["sd_mount_point", "fallback_path", "max_buffer_entries"],
-        "event_logger": ["logfile", "max_size", "info_flush_threshold", "warn_flush_threshold"],
+        "event_logger": [
+            "logfile",
+            "max_size",
+            "info_flush_threshold",
+            "warn_flush_threshold",
+            "debug_enabled",
+            "debug_to_file",
+        ],
         "output_pins": [
             "relay_fan_1",
             "relay_fan_2",

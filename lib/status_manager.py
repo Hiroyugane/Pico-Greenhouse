@@ -111,17 +111,20 @@ class StatusManager:
 
     # ── Power-on Self-Test (POST) ─────────────────────────────────────
 
-    async def run_post(self, step_ms: int = 150) -> bool:
+    async def run_post(self, step_ms: int = 150, reminder_led=None) -> bool:
         """
         Power-on self-test: walk all owned LEDs to verify visual output.
 
         Sequence:
-        1. Walk each LED on→wait→off (activity, SD, warning, error, heartbeat)
+        1. Walk each LED on→wait→off (activity, reminder, SD, warning, error, heartbeat)
         2. Flash all LEDs on simultaneously, then off
         3. All LEDs left OFF on success
 
         Args:
             step_ms (int): Duration each LED stays on during the walk (ms).
+            reminder_led: Optional LED instance (GP5) owned by LEDButtonHandler.
+                          Included in the walk when provided so the operator can
+                          verify all six LEDs during POST.
 
         Returns:
             bool: True (POST passed). Always returns True since GPIO
@@ -131,11 +134,17 @@ class StatusManager:
         step_s = step_ms / 1000.0
         leds = [
             self._activity_led,
-            self._sd_led,
-            self._warning_led,
-            self._error_led,
-            self._heartbeat_led,
         ]
+        if reminder_led is not None:
+            leds.append(reminder_led)
+        leds.extend(
+            [
+                self._sd_led,
+                self._warning_led,
+                self._error_led,
+                self._heartbeat_led,
+            ]
+        )
 
         # Phase 1: sequential walk
         for led in leds:

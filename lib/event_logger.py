@@ -11,7 +11,7 @@ class EventLogger:
     Centralized system event logger.
 
     Logs events to console and SD card (via BufferManager) with timestamps.
-    Supports three severity levels: info, warning, error.
+    Supports four severity levels: debug, info, warning, error.
     Implements buffering and log rotation.
 
     Dependencies injected:
@@ -25,6 +25,8 @@ class EventLogger:
         max_size: Max file size before rotation (bytes)
         buffer: In-memory buffer for log entries (flushed periodically)
         flush_count: Number of successful flush operations
+        debug_enabled: Whether debug messages are printed to console
+        debug_to_file: Whether debug messages are also written to SD
     """
 
     def __init__(
@@ -36,6 +38,8 @@ class EventLogger:
         status_manager=None,
         info_flush_threshold: int = 5,
         warn_flush_threshold: int = 3,
+        debug_enabled: bool = False,
+        debug_to_file: bool = False,
     ):
         """
         Initialize EventLogger with dependency injection.
@@ -50,6 +54,8 @@ class EventLogger:
             status_manager: StatusManager instance for LED feedback (optional)
             info_flush_threshold (int): Flush after N info entries buffered (default: 5)
             warn_flush_threshold (int): Flush after N warning entries buffered (default: 3)
+            debug_enabled (bool): Enable debug messages to console (default: False)
+            debug_to_file (bool): Also write debug messages to SD log (default: False)
         """
         self.time_provider = time_provider
         self.buffer_manager = buffer_manager
@@ -61,8 +67,20 @@ class EventLogger:
         self.status_manager = status_manager
         self.info_flush_threshold = info_flush_threshold
         self.warn_flush_threshold = warn_flush_threshold
+        self.debug_enabled = debug_enabled
+        self.debug_to_file = debug_to_file
 
+        self._refresh_log_size()
         print(f"[EventLogger] Initialized: {self.logfile}")
+
+    def _refresh_log_size(self) -> None:
+        """Refresh cached log size from primary storage when available."""
+        if self.buffer_manager is None:
+            return
+        relpath = self._strip_sd_prefix(self.logfile)
+        size = self.buffer_manager.get_primary_file_size(relpath)
+        if size is not None:
+            self._log_size = size
 
     def _get_timestamp(self) -> str:
         """
@@ -91,6 +109,40 @@ class EventLogger:
 
         if len(self.buffer) >= self.info_flush_threshold:
             self.flush()
+
+    def debug(self, module: str, message: str, **fields) -> None:
+        """
+        Log debug message with optional structured fields.
+
+        Console-only by default. Only written to SD when debug_to_file is True.
+        Skipped entirely when debug_enabled is False (zero overhead).
+
+        Debug entries support structured key=value fields for machine-parseable
+        diagnostics that AI agents can analyze:
+
+            logger.debug("FanController", "cycle tick",
+                         temp=23.5, state="ON", elapsed_s=45)
+            # → [2026-03-01 14:23:45] [DEBUG] [FanController] cycle tick | temp=23.5 state=ON elapsed_s=45
+
+        Args:
+            module (str): Module/component name
+            message (str): Human-readable log message
+            **fields: Optional key=value pairs appended after ' | '
+        """
+        if not self.debug_enabled:
+            return
+
+        timestamp = self._get_timestamp()
+        if fields:
+            field_str = " ".join(f"{k}={v}" for k, v in fields.items())
+            log_entry = f"[{timestamp}] [DEBUG] [{module}] {message} | {field_str}\n"
+        else:
+            log_entry = f"[{timestamp}] [DEBUG] [{module}] {message}\n"
+
+        print(log_entry.rstrip())
+
+        if self.debug_to_file:
+            self.buffer.append(log_entry)
 
     def warning(self, module: str, message: str) -> None:
         """
@@ -164,6 +216,8 @@ class EventLogger:
         timestamp (e.g. system_2026-02-16_143022.log) and a fresh
         system.log is started on the next write — similar to Linux logrotate.
         """
+        self._refresh_log_size()
+
         if self._log_size > self.max_size:
             try:
                 # Flush any pending entries so the rotated file is complete

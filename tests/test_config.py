@@ -288,3 +288,39 @@ class TestValidateConfig:
                 config.validate_config()
         finally:
             config.DEVICE_CONFIG["system"]["button_poll_ms"] = original
+
+    def test_debug_enabled_default_false(self):
+        """event_logger.debug_enabled defaults to False."""
+        from config import DEVICE_CONFIG
+
+        assert DEVICE_CONFIG["event_logger"]["debug_enabled"] is False
+
+    def test_debug_to_file_default_false(self):
+        """event_logger.debug_to_file defaults to False."""
+        from config import DEVICE_CONFIG
+
+        assert DEVICE_CONFIG["event_logger"]["debug_to_file"] is False
+
+    def test_missing_debug_enabled_raises(self):
+        """Missing event_logger.debug_enabled raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["event_logger"]["debug_enabled"]
+        del config.DEVICE_CONFIG["event_logger"]["debug_enabled"]
+        try:
+            with pytest.raises(ValueError, match="Missing config key"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["event_logger"]["debug_enabled"] = original
+
+    def test_missing_debug_to_file_raises(self):
+        """Missing event_logger.debug_to_file raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["event_logger"]["debug_to_file"]
+        del config.DEVICE_CONFIG["event_logger"]["debug_to_file"]
+        try:
+            with pytest.raises(ValueError, match="Missing config key"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["event_logger"]["debug_to_file"] = original

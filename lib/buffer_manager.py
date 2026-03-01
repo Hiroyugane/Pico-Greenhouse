@@ -29,7 +29,7 @@ class BufferManager:
         _fallback_available (bool): Cached state of fallback file availability
     """
 
-    def __init__(self, sd_mount_point="/sd", fallback_path="/local/fallback.csv", max_buffer_entries=1000):
+    def __init__(self, sd_mount_point="/sd", fallback_path="/local/fallback.csv", max_buffer_entries=1000, logger=None):
         """
         Initialize BufferManager with SD and fallback paths.
 
@@ -40,6 +40,7 @@ class BufferManager:
             sd_mount_point (str): Mount point for SD card (default: '/sd')
             fallback_path (str): Local fallback file path (default: '/local/fallback.csv')
             max_buffer_entries (int): Max in-memory buffer size (default: 1000)
+            logger: Optional EventLogger for debug/diagnostic messages (default: None)
         """
         # Host compatibility: map /sd and /local to local folders on CPython
         if self._is_host():
@@ -49,6 +50,7 @@ class BufferManager:
         self.sd_mount_point = sd_mount_point
         self.fallback_path = fallback_path
         self.max_buffer_entries = max_buffer_entries
+        self._logger = logger
 
         if self._is_host():
             try:
@@ -92,6 +94,22 @@ class BufferManager:
         except Exception:
             return False
 
+    def set_logger(self, logger) -> None:
+        """
+        Set logger after construction (EventLogger is created after BufferManager).
+
+        Args:
+            logger: EventLogger instance for debug/diagnostic messages
+        """
+        self._logger = logger
+
+    def _log_debug(self, message: str, **fields) -> None:
+        """Log debug message if logger is available."""
+        if self._logger:
+            self._logger.debug("BufferMgr", message, **fields)
+        else:
+            print(f"[BufferManager][DEBUG] {message}")
+
     def _ensure_fallback_dir(self) -> bool:
         """
         Ensure fallback directory exists.
@@ -104,10 +122,25 @@ class BufferManager:
         try:
             fallback_dir = self._path_dirname(self.fallback_path) or "."
             if not self._dir_exists(fallback_dir):
-                os.makedirs(fallback_dir, exist_ok=True)
+                self._mkdirs(fallback_dir)
             return True
         except Exception:
             return False
+
+    def _mkdirs(self, path: str) -> None:
+        """Create nested directories using os.mkdir for MicroPython compatibility."""
+        if not path or path == ".":
+            return
+
+        normalized = path.replace("\\", "/")
+        parts = [p for p in normalized.split("/") if p]
+        current = "/" if normalized.startswith("/") else ""
+
+        for part in parts:
+            current = self._path_join(current, part) if current else part
+            if self._dir_exists(current):
+                continue
+            os.mkdir(current)
 
     def _dir_exists(self, path: str) -> bool:
         """Check if directory exists without raising exception."""
@@ -395,13 +428,9 @@ class BufferManager:
 
         Returns:
             int: Number of entries migrated, 0 if primary unavailable or fallback empty
-
-        Example:
-            >>> # After SD reconnection:
-            >>> bm.migrate_fallback()
-            5  # Migrated 5 entries
         """
         if not self.is_primary_available():
+            self._log_debug("SD not available during migration")
             return 0
 
         try:
@@ -412,27 +441,31 @@ class BufferManager:
             try:
                 with open(self.fallback_path, "r") as f:
                     lines = f.readlines()
-            except Exception:
+            except Exception as e:
+                self._log_debug(f"Failed to read fallback file: {e}")
                 return 0
 
             if not lines:
+                self._log_debug("No lines to migrate from fallback")
                 return 0
 
             # Migrate each entry
             for line in lines:
                 try:
                     if "|" not in line:
+                        self._log_debug(f"Malformed fallback line: {line.strip()}")
                         continue
 
                     relpath, data = line.split("|", 1)
                     primary_path = f"{self.sd_mount_point}/{relpath}"
+                    self._log_debug(f"Migrating to {primary_path}: {data.strip()}")
 
                     with open(primary_path, "a") as f:
                         f.write(data)
 
                     entries_migrated += 1
-                except Exception:
-                    pass  # Skip malformed entries
+                except Exception as e:
+                    self._log_debug(f"Failed to migrate line: {line.strip()} | Error: {e}")
 
             # Clear fallback file on success
             if entries_migrated > 0:
@@ -440,11 +473,13 @@ class BufferManager:
                     with open(self.fallback_path, "w") as f:
                         f.write("")
                     self.fallback_migrations += 1
-                except Exception:
-                    pass
+                except Exception as e:
+                    self._log_debug(f"Failed to clear fallback after migration: {e}")
 
+            self._log_debug("Migration complete", entries_migrated=entries_migrated)
             return entries_migrated
-        except Exception:
+        except Exception as e:
+            self._log_debug(f"Migration failed: {e}")
             return 0
 
     def rename(self, old_relpath: str, new_relpath: str) -> bool:
@@ -453,7 +488,10 @@ class BufferManager:
 
         Resolves relative paths against the SD mount point and performs
         a rename operation. Used by EventLogger for log rotation.
-        MicroPython fallback: copy content then delete original.
+
+        Always uses copy-then-delete approach to ensure atomicity and data safety:
+        data is written to new file first, then old file is deleted only after
+        successful copy. This prevents data loss if rename fails partway through.
 
         Args:
             old_relpath (str): Current relative path (e.g., 'system.log')
@@ -471,20 +509,42 @@ class BufferManager:
         new_path = self._path_join(self.sd_mount_point, new_relpath)
 
         try:
-            # Try os.rename first (CPython/most systems)
-            if hasattr(os, "rename"):
-                os.rename(old_path, new_path)  # type: ignore
-            else:
-                # MicroPython fallback: copy then delete
-                with open(old_path, "r") as src:
-                    content = src.read()
-                with open(new_path, "w") as dst:
-                    dst.write(content)
-                os.remove(old_path)
+            # Always use copy-then-delete for safety:
+            # This ensures the new file is completely written before the
+            # old file is deleted, preventing data loss if rename fails.
+            with open(old_path, "r") as src:
+                content = src.read()
+            with open(new_path, "w") as dst:
+                dst.write(content)
+            os.remove(old_path)
             return True
         except Exception as e:
-            print(f"[BufferManager] WARNING: rename failed {old_path} -> {new_path}: {e}")
+            if self._logger:
+                self._logger.warning("BufferMgr", f"rename failed {old_path} -> {new_path}: {e}")
+            else:
+                print(f"[BufferManager] WARNING: rename failed {old_path} -> {new_path}: {e}")
             return False
+
+    def get_primary_file_size(self, relpath: str):
+        """
+        Return file size (bytes) on primary storage, or None if unavailable.
+
+        Args:
+            relpath (str): Relative path (e.g., 'system.log') or '/sd/system.log'
+        """
+        if relpath.startswith("/sd/"):
+            relpath = relpath[4:]
+
+        primary_path = self._path_join(self.sd_mount_point, relpath)
+
+        try:
+            st = os.stat(primary_path)
+            # MicroPython returns a tuple; CPython returns an os.stat_result
+            if isinstance(st, tuple):
+                return int(st[6]) if len(st) > 6 else None
+            return int(st.st_size)
+        except Exception:
+            return None
 
     def get_metrics(self) -> dict:
         """

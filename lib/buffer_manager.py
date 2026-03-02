@@ -12,6 +12,7 @@
 
 import os
 import sys
+import time
 
 
 class BufferManager:
@@ -80,19 +81,41 @@ class BufferManager:
         self.fallback_migrations = 0
         self.write_failures = 0
 
+        # Primary availability cache: prevents blocking I/O on every write check
+        # cache TTL = 5 seconds (configurable, balances responsiveness vs. I/O overhead)
+        self._primary_avail_cache = None
+        self._primary_avail_cache_time = 0
+        self._primary_avail_cache_ttl_s = 5
+
     def is_primary_available(self) -> bool:
         """
-        Non-blocking check whether SD mount is accessible.
+        Check whether SD mount is accessible (with caching to prevent event loop blocking).
 
-        Performs a write-then-read-verify to confirm writable access.
-        Writing an empty string is not enough: MicroPython's FAT VFS can
-        satisfy a zero-byte create/delete from cached directory entries even
-        after the physical SD card has been removed.  Writing real data and
-        reading it back forces actual block-level I/O.
+        CRITICAL: Performs a write-then-read-verify to confirm writable access only when
+        cache has expired. Caching prevents repeated blocking I/O that can starve the
+        event loop on slow/unresponsive SD cards. Result is cached for 5 seconds or
+        can be manually invalidated.
+
+        The blocking I/O is only performed once every TTL (default 5s), not on every
+        write check. This prevents the health-check loop from blocking if the SD card
+        is slow to respond.
 
         Returns:
             bool: True if SD mount is available and writable, False otherwise
         """
+        now = time.time()
+
+        # Return cached result if still valid
+        cache_age = now - self._primary_avail_cache_time
+        if self._primary_avail_cache is not None and cache_age < self._primary_avail_cache_ttl_s:
+            self._log_debug(
+                "is_primary_available cached",
+                available=self._primary_avail_cache,
+                age_s=round(cache_age, 1),
+            )
+            return self._primary_avail_cache
+
+        # Cache expired; perform actual check
         try:
             test_file = f"{self.sd_mount_point}/.test"
             test_data = "SDok"
@@ -104,10 +127,19 @@ class BufferManager:
                 readback = f.read()
             os.remove(test_file)
             available = readback == test_data
-            self._log_debug("is_primary_available", available=available)
+            ttl_str = f"{self._primary_avail_cache_ttl_s}s"
+            self._log_debug(
+                "is_primary_available check",
+                available=available,
+                cached_for=ttl_str,
+            )
+            self._primary_avail_cache = available
+            self._primary_avail_cache_time = now
             return available
         except Exception as e:
             self._log_debug("is_primary_available failed", error=str(e))
+            self._primary_avail_cache = False
+            self._primary_avail_cache_time = now
             return False
 
     def set_logger(self, logger) -> None:
@@ -118,6 +150,21 @@ class BufferManager:
             logger: EventLogger instance for debug/diagnostic messages
         """
         self._logger = logger
+
+    def invalidate_primary_cache(self) -> None:
+        """
+        Invalidate the SD availability cache.
+
+        Forces the next is_primary_available() call to perform a fresh check.
+        Useful when the caller detects the SD card was ejected/reinserted.
+
+        Example:
+            >>> bm.invalidate_primary_cache()
+            >>> # Next write will force a fresh SD check
+        """
+        self._primary_avail_cache = None
+        self._primary_avail_cache_time = 0
+        self._log_debug("primary availability cache invalidated")
 
     def _log_debug(self, message: str, **fields) -> None:
         """Log debug message if logger is available.

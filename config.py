@@ -98,7 +98,12 @@ DEVICE_CONFIG = {
     # Service Reminder Configuration
     "Service_reminder": {
         "days_interval": 7,  # Remind every 7 days
-        "blink_pattern_ms": [200, 200, 200, 800],  # ON 200ms, OFF 200ms, ON 200ms, OFF 800ms
+        "blink_pattern_ms": [
+            200,
+            200,
+            200,
+            800,
+        ],  # ON 200ms, OFF 200ms, ON 200ms, OFF 800ms
         "blink_after_days": 3,  # Days overdue before LED switches from solid to blink
         "storage_path": "/service_reminder.txt",  # Persistence file for last-serviced timestamp
         "monitor_interval_s": 3600,  # Re-check interval when not due (seconds)
@@ -164,6 +169,11 @@ DEVICE_CONFIG = {
         "width": 128,
         "height": 64,
         "i2c_address": 0x3C,  # SSD1306 default (RTC is 0x68; no conflict)
+        "enabled": True,  # Master enable/disable (False = skip display init)
+        "refresh_interval_s": 5,  # How often to re-render the current menu
+        "stats_window_s": 3600,  # Look-back window for temp/hum hi/lo/avg stats
+        "max_history": 120,  # Max readings to keep for stats (120 × 30 s ≈ 1 h)
+        "menu_timeout_s": 30,  # Return to default menu after this many seconds of inactivity
     },
     # Output Pin Initial States
     "output_pins": {
@@ -233,9 +243,27 @@ def validate_config():
         "spi": ["id", "baudrate", "sck", "mosi", "miso", "cs", "mount_point"],
         "files": ["dht_log_base", "system_log", "fallback_path"],
         "dht_logger": ["interval_s", "max_retries", "max_buffer_size", "retry_delay_s"],
-        "fan_1": ["interval_s", "on_time_s", "max_temp", "temp_hysteresis", "poll_interval_s"],
-        "fan_2": ["interval_s", "on_time_s", "max_temp", "temp_hysteresis", "poll_interval_s"],
-        "growlight": ["dawn_hour", "dawn_minute", "sunset_hour", "sunset_minute", "poll_interval_s"],
+        "fan_1": [
+            "interval_s",
+            "on_time_s",
+            "max_temp",
+            "temp_hysteresis",
+            "poll_interval_s",
+        ],
+        "fan_2": [
+            "interval_s",
+            "on_time_s",
+            "max_temp",
+            "temp_hysteresis",
+            "poll_interval_s",
+        ],
+        "growlight": [
+            "dawn_hour",
+            "dawn_minute",
+            "sunset_hour",
+            "sunset_minute",
+            "poll_interval_s",
+        ],
         "Service_reminder": [
             "days_interval",
             "blink_pattern_ms",
@@ -275,7 +303,8 @@ def validate_config():
             "rtc_min_year",
             "rtc_max_year",
         ],
-        "display": ["type", "width", "height", "i2c_address"],
+        "display": ["type", "width", "height", "i2c_address", "enabled",
+                    "refresh_interval_s", "stats_window_s", "max_history", "menu_timeout_s"],
         "system": [
             "require_sd_startup",
             "button_debounce_ms",
@@ -303,10 +332,16 @@ def validate_config():
     if DEVICE_CONFIG["dht_logger"]["interval_s"] <= 0:
         raise ValueError("dht_logger.interval_s must be > 0")
 
-    if DEVICE_CONFIG["fan_1"]["on_time_s"] <= 0 or DEVICE_CONFIG["fan_1"]["interval_s"] <= 0:
+    if (
+        DEVICE_CONFIG["fan_1"]["on_time_s"] <= 0
+        or DEVICE_CONFIG["fan_1"]["interval_s"] <= 0
+    ):
         raise ValueError("fan_1 timing values must be > 0")
 
-    if DEVICE_CONFIG["fan_2"]["on_time_s"] <= 0 or DEVICE_CONFIG["fan_2"]["interval_s"] <= 0:
+    if (
+        DEVICE_CONFIG["fan_2"]["on_time_s"] <= 0
+        or DEVICE_CONFIG["fan_2"]["interval_s"] <= 0
+    ):
         raise ValueError("fan_2 timing values must be > 0")
 
     if DEVICE_CONFIG["Service_reminder"]["days_interval"] <= 0:
@@ -333,8 +368,15 @@ def validate_config():
     if DEVICE_CONFIG["event_logger"]["warn_flush_threshold"] < 1:
         raise ValueError("event_logger.warn_flush_threshold must be >= 1")
 
-    if DEVICE_CONFIG["event_logger"]["log_level"] not in ("DEBUG", "INFO", "WARN", "ERR"):
-        raise ValueError("event_logger.log_level must be one of: DEBUG, INFO, WARN, ERR")
+    if DEVICE_CONFIG["event_logger"]["log_level"] not in (
+        "DEBUG",
+        "INFO",
+        "WARN",
+        "ERR",
+    ):
+        raise ValueError(
+            "event_logger.log_level must be one of: DEBUG, INFO, WARN, ERR"
+        )
 
     if not isinstance(DEVICE_CONFIG["event_logger"]["debug_enabled"], bool):
         raise ValueError("event_logger.debug_enabled must be a bool")

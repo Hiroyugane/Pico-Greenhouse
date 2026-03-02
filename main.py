@@ -26,7 +26,9 @@ import os
 import sys
 
 if sys.implementation.name != "micropython":  # type: ignore[union-attr]
-    host_shims_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "host_shims")  # type: ignore[attr-defined]
+    host_shims_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "host_shims"
+    )  # type: ignore[attr-defined]
     sys.path.insert(0, host_shims_path)
 
 import uasyncio as asyncio
@@ -250,7 +252,10 @@ async def main():
                 },
             )
             await buzzer.startup()
-            logger.debug("MAIN", f"Buzzer GP{DEVICE_CONFIG['pins']['buzzer']}: patterns={list(buzzer.patterns.keys())}")
+            logger.debug(
+                "MAIN",
+                f"Buzzer GP{DEVICE_CONFIG['pins']['buzzer']}: patterns={list(buzzer.patterns.keys())}",
+            )
             logger.info("MAIN", "Buzzer initialized")
             status_manager.set_buzzer(buzzer)
         except Exception as e:
@@ -288,16 +293,59 @@ async def main():
         logger=logger,
     )
 
+    # Step 8b: Create OLED display controller
+    display_config = DEVICE_CONFIG.get("display", {})
+    oled = None
+    if display_config.get("enabled", True):
+        def _sd_remount_cb():
+            """Callback for OLED long-press SD remount action."""
+            if hardware.refresh_sd():
+                logger.info("MAIN", "SD remounted via OLED long-press")
+                status_manager.set_sd_status(True)
+            else:
+                logger.warning("MAIN", "SD remount failed via OLED long-press")
+
+        try:
+            oled = OLEDDisplay(
+                i2c=hardware.get_i2c(),
+                time_provider=time_provider,
+                dht_logger=dht_logger,
+                buffer_manager=buffer_manager,
+                status_manager=status_manager,
+                reminder=reminder,
+                fans=fans,
+                growlight=growlight,
+                sd_remount_cb=_sd_remount_cb,
+                start_time_ms=0,
+                logger=logger,
+                width=display_config.get("width", 128),
+                height=display_config.get("height", 64),
+                i2c_address=display_config.get("i2c_address", 0x3C),
+                refresh_interval_s=display_config.get("refresh_interval_s", 5),
+                stats_window_s=display_config.get("stats_window_s", 3600),
+                menu_timeout_s=display_config.get("menu_timeout_s", 30),
+            )
+            logger.info("MAIN", f"OLED display initialized (on={oled.display_on})")
+        except Exception as e:
+            logger.warning("MAIN", f"OLED display init failed (non-critical): {e}")
+            oled = None
+
     # Register button callbacks:
-    # - Short press: cycle display menu (placeholder for future OLED menu)
-    # - Long press: reset service reminder
+    # - Short press: cycle OLED display menu
+    # - Long press: context action delegated to OLEDDisplay (or fallback: reset service reminder)
     def _on_short_press():
-        # TODO: cycle OLED display menu page
-        pass
+        if oled is not None:
+            oled.next_menu()
+
+    def _on_long_press():
+        if oled is not None:
+            oled.long_press_action()
+        else:
+            reminder.reset()
 
     led_handler.register_callbacks(
         short_press=_on_short_press,
-        long_press=reminder.reset,
+        long_press=_on_long_press,
     )
 
     # Step 9: Spawn all async tasks
@@ -322,6 +370,10 @@ async def main():
     )
     logger.debug("MAIN", "task spawned", task="led_handler.poll_button")
 
+    if oled is not None:
+        asyncio.create_task(oled.refresh_loop())
+        logger.debug("MAIN", "task spawned", task="oled.refresh_loop")
+
     logger.info("MAIN", "All tasks spawned. System running.")
 
     # Main event loop with adaptive health-check interval:
@@ -331,7 +383,9 @@ async def main():
     recovery_interval = system_config.get("sd_recovery_interval_s", 10)
     health_interval = normal_interval
 
-    logger.debug("MAIN", f"health_check={normal_interval}s, sd_recovery={recovery_interval}s")
+    logger.debug(
+        "MAIN", f"health_check={normal_interval}s, sd_recovery={recovery_interval}s"
+    )
 
     while True:
         await asyncio.sleep(health_interval)
@@ -376,7 +430,9 @@ async def main():
             )
             if hardware.refresh_sd():
                 logger.info("MAIN", "SD card re-mounted after hot-swap")
-                logger.debug("MAIN", "SD recovery success", prev_interval=health_interval)
+                logger.debug(
+                    "MAIN", "SD recovery success", prev_interval=health_interval
+                )
                 status_manager.set_sd_status(True)
                 # Clear any stale logged_error that was SD-related
                 status_manager.clear_error("logged_error")
@@ -399,7 +455,9 @@ async def main():
         # the recovery attempt first, then the remaining state.
         new_buffered = sum(len(v) for v in buffer_manager._buffers.values())
         if new_buffered > 0:
-            logger.warning("MAIN", f"Buffer has {new_buffered} entries (SD may be unavailable)")
+            logger.warning(
+                "MAIN", f"Buffer has {new_buffered} entries (SD may be unavailable)"
+            )
             status_manager.set_warning("buffer_backlog", True)
         else:
             status_manager.clear_warning("buffer_backlog")
@@ -414,7 +472,9 @@ async def main():
             )
             migrated = buffer_manager.migrate_fallback()
             if migrated > 0:
-                logger.info("MAIN", f"Migrated {migrated} fallback entries to primary SD")
+                logger.info(
+                    "MAIN", f"Migrated {migrated} fallback entries to primary SD"
+                )
 
 
 if __name__ == "__main__":

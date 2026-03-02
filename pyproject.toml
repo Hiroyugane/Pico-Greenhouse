@@ -20,6 +20,8 @@ omit = [
     "lib/sdcard.py",
     "lib/ds3231.py",
     "lib/ds2321_gen.py",
+    "lib/ssd1306.py",
+    "lib/ssd1306-*",
     "hw_probe.py"
 ]
 
@@ -44,6 +46,7 @@ exclude = [
     "lib/sdcard*",
     "lib/ds3231.py",
     "lib/ds2321_gen.py",
+    "lib/ssd1306.py",
     "host_shims",
     "typings",
 ]

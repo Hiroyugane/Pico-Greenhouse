@@ -43,8 +43,12 @@ def _make_pin(*args, **kwargs):
         pin._call_history.append(("value", v))
 
     pin.value = MagicMock(side_effect=_value_fn)
-    pin.on = MagicMock(side_effect=lambda: (_value_fn(1), pin._call_history.append(("on", 1)))[0])
-    pin.off = MagicMock(side_effect=lambda: (_value_fn(0), pin._call_history.append(("off", 0)))[0])
+    pin.on = MagicMock(
+        side_effect=lambda: (_value_fn(1), pin._call_history.append(("on", 1)))[0]
+    )
+    pin.off = MagicMock(
+        side_effect=lambda: (_value_fn(0), pin._call_history.append(("off", 0)))[0]
+    )
     pin.irq = MagicMock()
     return pin
 
@@ -93,10 +97,17 @@ _dht_mock = MagicMock()
 _micropython_mock = MagicMock()
 _micropython_mock.const = lambda x: x
 
+# --- framebuf module (use host shim so ssd1306 driver imports cleanly) ---
+_host_shims_path = str(Path(__file__).resolve().parents[1] / "host_shims")
+if _host_shims_path not in sys.path:
+    sys.path.insert(0, _host_shims_path)
+import host_shims.framebuf as _framebuf_shim  # noqa: E402
+
 # --- uasyncio → standard asyncio ---
 sys.modules["machine"] = _machine_mock
 sys.modules["dht"] = _dht_mock
 sys.modules["micropython"] = _micropython_mock
+sys.modules["framebuf"] = _framebuf_shim
 
 # Patch sleep_ms onto asyncio so uasyncio.sleep_ms works in tests
 if not hasattr(asyncio, "sleep_ms"):
@@ -367,4 +378,61 @@ def buzzer_controller(mock_event_logger):
             "alert_pattern": [(2000, 150, 100), (2000, 150, 100), (2000, 150, 0)],
             "reminder_pattern": [(880, 100, 200), (880, 100, 0)],
         },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fixtures: OLED Display
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mock_i2c():
+    """Mock I2C bus that swallows all writes (simulates absent display)."""
+    i2c = MagicMock()
+    i2c.writeto = MagicMock()
+    return i2c
+
+
+@pytest.fixture
+def mock_reminder(time_provider):
+    """Mock ServiceReminder with controllable get_status()."""
+    reminder = Mock()
+    reminder.get_status = Mock(
+        return_value={
+            "days_elapsed": 3,
+            "days_interval": 7,
+            "is_due": False,
+            "last_serviced": "2026-01-26 10:00:00",
+            "days_until_due": 4,
+        }
+    )
+    reminder.reset = Mock()
+    return reminder
+
+
+@pytest.fixture
+def oled_display(mock_i2c, time_provider, dht_logger, buffer_manager, mock_status_manager, mock_reminder,
+                 fan_controller, growlight_controller, mock_event_logger):
+    """OLEDDisplay with a mock I2C bus (display_on=True after init)."""
+    from lib.oled_display import OLEDDisplay
+
+    return OLEDDisplay(
+        i2c=mock_i2c,
+        time_provider=time_provider,
+        dht_logger=dht_logger,
+        buffer_manager=buffer_manager,
+        status_manager=mock_status_manager,
+        reminder=mock_reminder,
+        fans=[fan_controller],
+        growlight=growlight_controller,
+        sd_remount_cb=Mock(),
+        start_time_ms=0,
+        logger=mock_event_logger,
+        width=128,
+        height=64,
+        i2c_address=0x3C,
+        refresh_interval_s=5,
+        stats_window_s=3600,
+        menu_timeout_s=30,
     )

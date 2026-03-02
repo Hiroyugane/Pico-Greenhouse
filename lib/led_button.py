@@ -545,6 +545,30 @@ class ServiceReminder:
             else:
                 print(f"[ServiceReminder] ERROR during reset: {e}")
 
+    def get_status(self) -> dict:
+        """
+        Return current service reminder status for display.
+
+        Returns:
+            dict: {
+                'days_elapsed': int,
+                'days_interval': int,
+                'is_due': bool,
+                'last_serviced': str (ISO timestamp),
+                'days_until_due': int (0 when overdue),
+            }
+        """
+        days_elapsed = self._days_since_Service()
+        is_due = days_elapsed >= self.days_interval
+        days_until_due = max(0, self.days_interval - days_elapsed)
+        return {
+            "days_elapsed": days_elapsed,
+            "days_interval": self.days_interval,
+            "is_due": is_due,
+            "last_serviced": self.last_serviced_timestamp,
+            "days_until_due": days_until_due,
+        }
+
     async def monitor(self) -> None:
         """
         Async loop that monitors days elapsed and signals LED.

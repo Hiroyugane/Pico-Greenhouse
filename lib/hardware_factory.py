@@ -137,7 +137,9 @@ class HardwareFactory:
             i2c_freq = self.config.get("system", {}).get("i2c_freq", 100000)
             self.i2c1 = I2C(i2c_port, sda=Pin(sda), scl=Pin(scl), freq=i2c_freq)
             if self._debug:
-                self._debug(f"I2C1 init: port={i2c_port}, sda={sda}, scl={scl}, freq={i2c_freq}")
+                self._debug(
+                    f"I2C1 init: port={i2c_port}, sda={sda}, scl={scl}, freq={i2c_freq}"
+                )
             return True
         except Exception as e:
             self.errors.append(f"I2C1 init failed: {e}")
@@ -190,9 +192,13 @@ class HardwareFactory:
             mosi = spi_config.get("mosi", 11)
             miso = spi_config.get("miso", 12)
 
-            self.spi = SPI(spi_id, baudrate=baudrate, sck=Pin(sck), mosi=Pin(mosi), miso=Pin(miso))
+            self.spi = SPI(
+                spi_id, baudrate=baudrate, sck=Pin(sck), mosi=Pin(mosi), miso=Pin(miso)
+            )
             if self._debug:
-                self._debug(f"SPI init: id={spi_id}, baud={baudrate}, sck={sck}, mosi={mosi}, miso={miso}")
+                self._debug(
+                    f"SPI init: id={spi_id}, baud={baudrate}, sck={sck}, mosi={mosi}, miso={miso}"
+                )
             return True
         except Exception as e:
             self.errors.append(f"SPI init failed: {e}")
@@ -241,13 +247,19 @@ class HardwareFactory:
                     self.sd = sd
                     self.sd_mounted = True
                     if self._debug:
-                        self._debug(f"SD mounted: attempt={attempt + 1}, mount_point={mount_point}")
+                        self._debug(
+                            f"SD mounted: attempt={attempt + 1}, mount_point={mount_point}"
+                        )
                     return True
                 if attempt < max_retries - 1:
-                    print(f"[HardwareFactory] SD mount attempt {attempt + 1} failed, retrying...")
+                    print(
+                        f"[HardwareFactory] SD mount attempt {attempt + 1} failed, retrying..."
+                    )
                     time.sleep_ms(sd_retry_delay_ms)
 
-            self.errors.append("SD card mount failed after retries (will use fallback buffering)")
+            self.errors.append(
+                "SD card mount failed after retries (will use fallback buffering)"
+            )
             return False
         except Exception as e:
             self.errors.append(f"SD init failed: {e}")
@@ -265,7 +277,13 @@ class HardwareFactory:
         Returns True if all pins initialized (non-fatal if some fail).
         """
         # LED pins managed by StatusManager — skip in generic init
-        _SM_OWNED = {"activity_led", "sd_led", "warning_led", "error_led", "onboard_led"}
+        _SM_OWNED = {
+            "activity_led",
+            "sd_led",
+            "warning_led",
+            "error_led",
+            "onboard_led",
+        }
 
         try:
             pins_config = self.config.get("pins", {})
@@ -282,7 +300,9 @@ class HardwareFactory:
                         pin.value(1 if initial_high else 0)
                         self.pins[pin_name] = pin
                         if self._debug:
-                            self._debug(f"Pin {pin_name}: GP{pin_num} OUT, initial={'HIGH' if initial_high else 'LOW'}")
+                            self._debug(
+                                f"Pin {pin_name}: GP{pin_num} OUT, initial={'HIGH' if initial_high else 'LOW'}"
+                            )
                     except Exception as e:
                         self.errors.append(f"Failed to init output pin {pin_name}: {e}")
 
@@ -294,7 +314,9 @@ class HardwareFactory:
                         button = Pin(pin_num, Pin.IN, Pin.PULL_UP)
                         self.pins[button_name] = button
                     except Exception as e:
-                        self.errors.append(f"Failed to init button pin {button_name}: {e}")
+                        self.errors.append(
+                            f"Failed to init button pin {button_name}: {e}"
+                        )
 
             return True
         except Exception as e:
@@ -304,6 +326,10 @@ class HardwareFactory:
     def get_rtc(self):
         """Return RTC instance (or None if init failed)."""
         return self.rtc
+
+    def get_i2c(self):
+        """Return shared I2C1 bus instance (or None if init failed)."""
+        return self.i2c1
 
     def get_pin(self, name: str):
         """
@@ -332,7 +358,9 @@ class HardwareFactory:
         Returns True if SD is accessible after refresh, False otherwise.
         """
         try:
-            result = is_mounted(self.sd, self.spi, return_instances=True, debug_callback=self._debug)
+            result = is_mounted(
+                self.sd, self.spi, return_instances=True, debug_callback=self._debug
+            )
             if isinstance(result, tuple) and len(result) == 3:
                 ok, sd, spi = result
                 self.sd = sd

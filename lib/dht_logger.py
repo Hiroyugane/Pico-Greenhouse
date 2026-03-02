@@ -6,10 +6,17 @@
 # Decoupled from global state; supports hot-swap SD and date-based file rollover.
 
 import sys
+import time
 
 import dht
 import machine
 import uasyncio as asyncio
+
+try:
+    _ticks_ms = time.ticks_ms  # MicroPython
+except AttributeError:
+    def _ticks_ms() -> int:  # CPython fallback
+        return int(time.time() * 1000)
 
 
 class DHTLogger:
@@ -57,6 +64,7 @@ class DHTLogger:
         dht_warn_threshold=3,
         dht_error_threshold=10,
         retry_delay_s: float = 0.5,
+        max_history: int = 120,
     ):
         """
         Initialize DHTLogger with dependency injection.
@@ -73,10 +81,13 @@ class DHTLogger:
             dht_warn_threshold (int): Consecutive failures before warning (default: 3)
             dht_error_threshold (int): Consecutive failures before error (default: 10)
             retry_delay_s (float): Delay between sensor read retries in seconds (default: 0.5)
+            max_history (int): Maximum readings to keep for stats (default: 120)
         """
         self.dht_sensor = dht.DHT22(machine.Pin(pin))
         self.interval = interval
-        self.filename_base = filename if filename.startswith("/sd/") else f"/sd/{filename}"
+        self.filename_base = (
+            filename if filename.startswith("/sd/") else f"/sd/{filename}"
+        )
         self.time_provider = time_provider
         self.buffer_manager = buffer_manager
         self.logger = logger
@@ -85,6 +96,7 @@ class DHTLogger:
         self._dht_warn_threshold = dht_warn_threshold
         self._dht_error_threshold = dht_error_threshold
         self.retry_delay_s = retry_delay_s
+        self._max_history = max_history
 
         # State
         self.last_temperature = None
@@ -94,6 +106,8 @@ class DHTLogger:
         self._consecutive_failures = 0
         self.current_date = None
         self._created_files = set()  # relpaths confirmed created this session
+        # Bounded history for stats: list of (ticks_ms, temp, hum)
+        self._readings_history = []
 
         # Initialize filename with current date
         self._update_filename_for_date()
@@ -146,13 +160,17 @@ class DHTLogger:
         relpath = self._strip_sd_prefix(self.filename)
         # Fast path: already created this session (avoids unreliable FAT VFS check)
         if relpath in self._created_files:
-            self.logger.debug("DHTLogger", "file exists (created cache)", relpath=relpath)
+            self.logger.debug(
+                "DHTLogger", "file exists (created cache)", relpath=relpath
+            )
             return True
         exists = self.buffer_manager.has_data_for(relpath)
         if exists:
             # Cache the confirmed existence so a later SD outage won't re-trigger header creation
             self._created_files.add(relpath)
-        self.logger.debug("DHTLogger", "file exists check", relpath=relpath, found=exists)
+        self.logger.debug(
+            "DHTLogger", "file exists check", relpath=relpath, found=exists
+        )
         return exists
 
     def _resolve_path(self, file_path: str) -> str:
@@ -174,12 +192,16 @@ class DHTLogger:
         relpath = self._strip_sd_prefix(self.filename)
         self.logger.debug("DHTLogger", "creating CSV file", relpath=relpath)
         try:
-            wrote_to_primary = self.buffer_manager.write(relpath, "Timestamp,Temperature,Humidity\n")
+            wrote_to_primary = self.buffer_manager.write(
+                relpath, "Timestamp,Temperature,Humidity\n"
+            )
             self._created_files.add(relpath)
             if wrote_to_primary:
                 self.logger.debug("DHTLogger", f"Created CSV file: {self.filename}")
             else:
-                self.logger.debug("DHTLogger", f"Created CSV header (fallback): {self.filename}")
+                self.logger.debug(
+                    "DHTLogger", f"Created CSV header (fallback): {self.filename}"
+                )
         except Exception as e:
             self.logger.error("DHTLogger", f"Failed to create file: {e}")
             raise
@@ -219,9 +241,14 @@ class DHTLogger:
                         hum=hum,
                         attempt=attempt + 1,
                     )
-                    self.logger.warning("DHTLogger", f"Reading out of range: {temp}°C, {hum}%")
+                    self.logger.warning(
+                        "DHTLogger", f"Reading out of range: {temp}°C, {hum}%"
+                    )
             except Exception as e:
-                self.logger.debug("DHTLogger", f"Read attempt {attempt + 1}/{self.max_retries} failed: {e}")
+                self.logger.debug(
+                    "DHTLogger",
+                    f"Read attempt {attempt + 1}/{self.max_retries} failed: {e}",
+                )
                 if attempt < self.max_retries - 1:
                     import time  # importing time here to avoid global import in async context - useful?
 
@@ -251,11 +278,15 @@ class DHTLogger:
             err_thresh=self._dht_error_threshold,
         )
         if self._consecutive_failures >= self._dht_error_threshold:
-            self.logger.debug("DHTLogger", f"Status: error (failures={self._consecutive_failures})")
+            self.logger.debug(
+                "DHTLogger", f"Status: error (failures={self._consecutive_failures})"
+            )
             self.status_manager.set_error("dht_dead", True)
             self.status_manager.set_warning("dht_intermittent", False)
         elif self._consecutive_failures >= self._dht_warn_threshold:
-            self.logger.debug("DHTLogger", f"Status: warning (failures={self._consecutive_failures})")
+            self.logger.debug(
+                "DHTLogger", f"Status: warning (failures={self._consecutive_failures})"
+            )
             self.status_manager.set_warning("dht_intermittent", True)
             self.status_manager.set_error("dht_dead", False)
         else:
@@ -285,7 +316,10 @@ class DHTLogger:
                 if not self._file_exists():
                     self._create_file()
 
-                self.logger.info("DHTLogger", f"Date changed - switched from {old_filename} to {self.filename}")
+                self.logger.info(
+                    "DHTLogger",
+                    f"Date changed - switched from {old_filename} to {self.filename}",
+                )
                 return True
 
             self.logger.debug("DHTLogger", "Date rollover check: no change")
@@ -332,11 +366,18 @@ class DHTLogger:
                     self.last_temperature = temp
                     self.last_humidity = hum
 
+                    # Append to bounded history for OLED stats
+                    self._readings_history.append((_ticks_ms(), temp, hum))
+                    if len(self._readings_history) > self._max_history:
+                        self._readings_history.pop(0)
+
                     timestamp = self.time_provider.now_timestamp()
                     relpath = self._strip_sd_prefix(self.filename)
                     row = f"{timestamp},{temp:.1f},{hum:.1f}\n"
 
-                    self.logger.debug("DHTLogger", f"Writing row to {relpath}: {row.rstrip()}")
+                    self.logger.debug(
+                        "DHTLogger", f"Writing row to {relpath}: {row.rstrip()}"
+                    )
 
                     # Ensure CSV file exists on SD (recreate header if
                     # init-time creation failed, e.g. SD timing issues).
@@ -344,7 +385,10 @@ class DHTLogger:
                         try:
                             self._create_file()
                         except Exception as exc:
-                            self.logger.debug("DHTLogger", f"CSV re-create failed (will use fallback): {exc}")
+                            self.logger.debug(
+                                "DHTLogger",
+                                f"CSV re-create failed (will use fallback): {exc}",
+                            )
                             pass  # write() below will route to fallback
 
                     # Write to storage via BufferManager
@@ -362,12 +406,17 @@ class DHTLogger:
                             write_failures=self.write_failures,
                         )
                         if not wrote_primary:
-                            self.logger.warning("DHTLogger", f"Write went to fallback (SD unavailable?) for {relpath}")
+                            self.logger.warning(
+                                "DHTLogger",
+                                f"Write went to fallback (SD unavailable?) for {relpath}",
+                            )
                     except Exception as e:
                         self.logger.error("DHTLogger", f"Failed to write: {e}")
                         self.write_failures += 1
                 else:
-                    self.logger.warning("DHTLogger", f"Sensor read failed (total: {self.read_failures})")
+                    self.logger.warning(
+                        "DHTLogger", f"Sensor read failed (total: {self.read_failures})"
+                    )
 
                 self.logger.check_size()
                 await asyncio.sleep(self.interval)
@@ -377,7 +426,9 @@ class DHTLogger:
                 self.logger.warning("DHTLogger", "Log loop cancelled")
                 raise
             except Exception as e:
-                self.logger.debug("DHTLogger", "unexpected error in log loop", error=str(e))
+                self.logger.debug(
+                    "DHTLogger", "unexpected error in log loop", error=str(e)
+                )
                 self.logger.error("DHTLogger", f"Unexpected error: {e}")
                 await asyncio.sleep(1)
 
@@ -386,3 +437,59 @@ class DHTLogger:
         if path.startswith("/sd/"):
             return path[4:]
         return path
+
+    def get_stats(self, window_s: int = 3600) -> dict:
+        """
+        Return temperature/humidity statistics over the last ``window_s`` seconds.
+
+        Args:
+            window_s (int): Look-back window in seconds (default: 3600 = 1 hour)
+
+        Returns:
+            dict: {
+                'temp_now': float | None,
+                'temp_hi': float | None,
+                'temp_lo': float | None,
+                'temp_avg': float | None,
+                'hum_now': float | None,
+                'hum_hi': float | None,
+                'hum_lo': float | None,
+                'hum_avg': float | None,
+                'count': int,
+            }
+        """
+        now_ms = _ticks_ms()
+        cutoff_ms = now_ms - window_s * 1000
+        # Filter history within window (handles ticks_ms wrap-around gracefully on host)
+        window = [(ts, t, h) for ts, t, h in self._readings_history if ts >= cutoff_ms]
+
+        if not window:
+            return {
+                "temp_now": self.last_temperature,
+                "temp_hi": self.last_temperature,
+                "temp_lo": self.last_temperature,
+                "temp_avg": self.last_temperature,
+                "hum_now": self.last_humidity,
+                "hum_hi": self.last_humidity,
+                "hum_lo": self.last_humidity,
+                "hum_avg": self.last_humidity,
+                "count": 0,
+            }
+
+        temps = [t for _, t, _ in window]
+        hums = [h for _, _, h in window]
+        return {
+            "temp_now": self.last_temperature,
+            "temp_hi": max(temps),
+            "temp_lo": min(temps),
+            "temp_avg": sum(temps) / len(temps),
+            "hum_now": self.last_humidity,
+            "hum_hi": max(hums),
+            "hum_lo": min(hums),
+            "hum_avg": sum(hums) / len(hums),
+            "count": len(window),
+        }
+
+    def clear_history(self) -> None:
+        """Clear all in-memory reading history (used by OLED long-press action)."""
+        self._readings_history.clear()

@@ -347,7 +347,7 @@ class TestServiceReminderGetStatus:
             time_provider=time_provider,
             led_handler=handler,
             days_interval=7,
-            last_serviced_timestamp="2000-01-01 00:00:00",  # very old
+            last_serviced_timestamp="2026-01-01 00:00:00",  # 28 days before FAKE_LOCALTIME (2026-01-29)
             auto_register_button=False,
         )
         status = reminder.get_status()

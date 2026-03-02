@@ -9,8 +9,8 @@ DEVICE_CONFIG = {
     # Hardware Pins
     #
     # Pico GPIO layout (active header pins only):
-    #   GP0-GP1:   CO2 sensor UART0 (TX/RX)
-    #   GP2-GP3:   I2C1 bus (RTC + OLED display, shared)
+    #   GP0-GP1:   I2C0 bus (RTC + OLED display, shared)
+    #   GP2-GP3:   CO2 sensor UART1 (TX/RX)
     #   GP4:       Activity LED (brief blink on I/O actions)
     #   GP5:       Service-reminder LED (blinks when due)
     #   GP6:       SD-problem LED (solid = SD missing/failed)
@@ -36,15 +36,15 @@ DEVICE_CONFIG = {
         "sd_led": 8,  # SD-problem LED (solid = SD missing/failed)
         "button_menu": 9,  # Menu button (short=cycle menu, long≥3s=action)
         "button_reserved": 14,  # Reserved button (future use)
-        "rtc_i2c_port": 0,  # I2C1 peripheral (shared: RTC + OLED)
-        "rtc_sda": 0,  # I2C1 SDA
-        "rtc_scl": 1,  # I2C1 SCL
+        "rtc_i2c_port": 0,  # I2C0 peripheral (shared: RTC + OLED)
+        "rtc_sda": 0,  # I2C0 SDA (GP0)
+        "rtc_scl": 1,  # I2C0 SCL (GP1)
         "relay_fan_1": 16,  # Fan relay 1 (primary cycle)
         "relay_fan_2": 18,  # Fan relay 2 (secondary cycle)
         "relay_growlight": 17,  # Grow light relay
         "co2_uart_id": 1,  # CO2 sensor UART peripheral
-        "co2_uart_tx": 2,  # CO2 sensor UART TX (GP0)
-        "co2_uart_rx": 3,  # CO2 sensor UART RX (GP1)
+        "co2_uart_tx": 2,  # CO2 sensor UART1 TX (GP2)
+        "co2_uart_rx": 3,  # CO2 sensor UART1 RX (GP3)
         "co2_baudrate": 9600,  # CO2 sensor UART baudrate
         "buzzer": 20,  # Passive buzzer (PWM output)
     },
@@ -303,8 +303,17 @@ def validate_config():
             "rtc_min_year",
             "rtc_max_year",
         ],
-        "display": ["type", "width", "height", "i2c_address", "enabled",
-                    "refresh_interval_s", "stats_window_s", "max_history", "menu_timeout_s"],
+        "display": [
+            "type",
+            "width",
+            "height",
+            "i2c_address",
+            "enabled",
+            "refresh_interval_s",
+            "stats_window_s",
+            "max_history",
+            "menu_timeout_s",
+        ],
         "system": [
             "require_sd_startup",
             "button_debounce_ms",
@@ -332,16 +341,10 @@ def validate_config():
     if DEVICE_CONFIG["dht_logger"]["interval_s"] <= 0:
         raise ValueError("dht_logger.interval_s must be > 0")
 
-    if (
-        DEVICE_CONFIG["fan_1"]["on_time_s"] <= 0
-        or DEVICE_CONFIG["fan_1"]["interval_s"] <= 0
-    ):
+    if DEVICE_CONFIG["fan_1"]["on_time_s"] <= 0 or DEVICE_CONFIG["fan_1"]["interval_s"] <= 0:
         raise ValueError("fan_1 timing values must be > 0")
 
-    if (
-        DEVICE_CONFIG["fan_2"]["on_time_s"] <= 0
-        or DEVICE_CONFIG["fan_2"]["interval_s"] <= 0
-    ):
+    if DEVICE_CONFIG["fan_2"]["on_time_s"] <= 0 or DEVICE_CONFIG["fan_2"]["interval_s"] <= 0:
         raise ValueError("fan_2 timing values must be > 0")
 
     if DEVICE_CONFIG["Service_reminder"]["days_interval"] <= 0:
@@ -374,9 +377,7 @@ def validate_config():
         "WARN",
         "ERR",
     ):
-        raise ValueError(
-            "event_logger.log_level must be one of: DEBUG, INFO, WARN, ERR"
-        )
+        raise ValueError("event_logger.log_level must be one of: DEBUG, INFO, WARN, ERR")
 
     if not isinstance(DEVICE_CONFIG["event_logger"]["debug_enabled"], bool):
         raise ValueError("event_logger.debug_enabled must be a bool")

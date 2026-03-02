@@ -115,6 +115,17 @@ class OLEDDisplay:
             from lib.ssd1306 import SSD1306_I2C
 
             self._oled = SSD1306_I2C(self._width, self._height, self._i2c, addr=self._i2c_address)
+
+            # Clear any garbage from previous power cycles or undefined VRAM
+            self._oled.fill(0)
+            self._oled.show()
+            time.sleep(0.1)  # Let display settle
+
+            # Display startup message
+            self._oled.text("Pi Greenhouse", 8, 24, 1)
+            self._oled.text("Initializing...", 8, 36, 1)
+            self._oled.show()
+
             self.display_on = True
             if self._logger:
                 self._logger.info("OLEDDisplay", f"SSD1306 initialized at 0x{self._i2c_address:02X}")

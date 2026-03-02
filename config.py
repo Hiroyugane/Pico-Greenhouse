@@ -194,7 +194,7 @@ DEVICE_CONFIG = {
         "long_press_ms": 3000,  # Long-press threshold for menu action button
         "health_check_interval_s": 60,  # Normal health-check loop interval
         "sd_recovery_interval_s": 10,  # Fast retry interval when SD is unavailable
-        "i2c_freq": 100000,  # I2C bus frequency in Hz (100 kHz standard, 400 kHz fast)
+        "i2c_freq": 400000,  # I2C bus frequency in Hz (100 kHz standard, 400 kHz fast)
         "sd_power_up_ms": 250,  # SD card power-up stabilization delay (ms)
         "sd_mount_retries": 3,  # Number of SD mount attempts at cold boot
         "sd_retry_delay_ms": 500,  # Delay between SD mount retries (ms)

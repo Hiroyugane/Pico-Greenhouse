@@ -116,21 +116,42 @@ class OLEDDisplay:
 
             self._oled = SSD1306_I2C(self._width, self._height, self._i2c, addr=self._i2c_address)
 
-            # Clear any garbage from previous power cycles or undefined VRAM
+            # Aggressive clear sequence to remove garbage pixels
+            for _ in range(3):  # Triple-clear to ensure VRAM is zeroed
+                self._oled.fill(0)
+                self._oled.show()
+                time.sleep(0.05)
+
+            # Force display refresh by inverting and reverting
+            self._oled.invert(1)
+            self._oled.show()
+            time.sleep(0.05)
+            self._oled.invert(0)
+            self._oled.show()
+            time.sleep(0.1)
+
+            # Final clear
             self._oled.fill(0)
             self._oled.show()
-            time.sleep(0.1)  # Let display settle
+            time.sleep(0.1)
 
             # Display startup message
+            self._oled.fill(0)
             self._oled.text("Pi Greenhouse", 8, 24, 1)
-            self._oled.text("Initializing...", 8, 36, 1)
+            self._oled.text("Ready!", 48, 36, 1)
             self._oled.show()
+            time.sleep(2.0)  # Show startup message for 2 seconds
 
             self.display_on = True
             if self._logger:
                 self._logger.info("OLEDDisplay", f"SSD1306 initialized at 0x{self._i2c_address:02X}")
             else:
                 print(f"[OLEDDisplay] SSD1306 at 0x{self._i2c_address:02X}")
+
+            # Do initial menu render
+            self.render()
+            if self._logger:
+                self._logger.debug("OLEDDisplay", "initial render complete")
         except Exception as e:
             self.display_on = False
             if self._logger:
@@ -185,11 +206,15 @@ class OLEDDisplay:
         try:
             self._oled.fill(0)
             menu = MENUS[self.current_menu]
+            if self._logger:
+                self._logger.debug("OLEDDisplay", f"rendering menu={menu}")
             getattr(self, f"_render_{menu}")()
             self._oled.show()
         except Exception as e:
             if self._logger:
-                self._logger.warning("OLEDDisplay", f"Render error: {e}")
+                self._logger.error("OLEDDisplay", f"Render error (menu={MENUS[self.current_menu]}): {e}")
+            else:
+                print(f"[OLEDDisplay] Render error: {e}")
 
     async def refresh_loop(self) -> None:
         """

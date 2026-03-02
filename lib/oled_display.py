@@ -114,22 +114,16 @@ class OLEDDisplay:
         try:
             from lib.ssd1306 import SSD1306_I2C
 
-            self._oled = SSD1306_I2C(
-                self._width, self._height, self._i2c, addr=self._i2c_address
-            )
+            self._oled = SSD1306_I2C(self._width, self._height, self._i2c, addr=self._i2c_address)
             self.display_on = True
             if self._logger:
-                self._logger.info(
-                    "OLEDDisplay", f"SSD1306 initialized at 0x{self._i2c_address:02X}"
-                )
+                self._logger.info("OLEDDisplay", f"SSD1306 initialized at 0x{self._i2c_address:02X}")
             else:
                 print(f"[OLEDDisplay] SSD1306 at 0x{self._i2c_address:02X}")
         except Exception as e:
             self.display_on = False
             if self._logger:
-                self._logger.warning(
-                    "OLEDDisplay", f"Display init failed (non-critical): {e}"
-                )
+                self._logger.warning("OLEDDisplay", f"Display init failed (non-critical): {e}")
             else:
                 print(f"[OLEDDisplay] Init failed: {e}")
 
@@ -140,9 +134,7 @@ class OLEDDisplay:
         self.current_menu = (self.current_menu + 1) % len(MENUS)
         self._last_interaction_ms = _ticks_ms()
         if self._logger:
-            self._logger.debug(
-                "OLEDDisplay", "menu changed", menu=MENUS[self.current_menu]
-            )
+            self._logger.debug("OLEDDisplay", "menu changed", menu=MENUS[self.current_menu])
 
     def long_press_action(self) -> None:
         """
@@ -173,9 +165,7 @@ class OLEDDisplay:
                 self._logger.info("OLEDDisplay", "Long press: SD remount requested")
         else:
             if self._logger:
-                self._logger.debug(
-                    "OLEDDisplay", "Long press: no action for menu", menu=menu
-                )
+                self._logger.debug("OLEDDisplay", "Long press: no action for menu", menu=menu)
 
     def render(self) -> None:
         """Render the current menu to the display. No-op if display is off."""
@@ -202,15 +192,10 @@ class OLEDDisplay:
                 # Timeout: return to default menu after inactivity
                 if self._menu_timeout_s > 0:
                     idle_ms = _ticks_ms() - self._last_interaction_ms
-                    if (
-                        idle_ms >= self._menu_timeout_s * 1000
-                        and self.current_menu != 0
-                    ):
+                    if idle_ms >= self._menu_timeout_s * 1000 and self.current_menu != 0:
                         self.current_menu = 0
                         if self._logger:
-                            self._logger.debug(
-                                "OLEDDisplay", "menu timeout → returned to temp"
-                            )
+                            self._logger.debug("OLEDDisplay", "menu timeout → returned to temp")
 
                 self.render()
                 await asyncio.sleep(self._refresh_interval_s)
@@ -238,12 +223,16 @@ class OLEDDisplay:
 
     def _header(self, title: str) -> None:
         """Draw a menu title with underline on the top row."""
+        if not self._oled:
+            return
         o = self._oled
         o.text(title, 0, 0, 1)
         o.hline(0, 9, self._width, 1)
 
     def _row(self, text: str, row: int) -> None:
         """Draw text on display row (0-based, each row = 10 px after header)."""
+        if not self._oled:
+            return
         y = 12 + row * 10
         if y + 8 <= self._height:
             self._oled.text(text[:16], 0, y, 1)
@@ -272,27 +261,25 @@ class OLEDDisplay:
     # ── Menu renderers ────────────────────────────────────────────────────
 
     def _render_temp(self) -> None:
-        stats = (
-            self._dht_logger.get_stats(self._stats_window_s) if self._dht_logger else {}
-        )
+        stats = self._dht_logger.get_stats(self._stats_window_s) if self._dht_logger else {}
         self._header("TEMPERATURE")
         self._row(f"Now: {self._fmt_f(stats.get('temp_now'))}C", 0)
         self._row(f"Hi:  {self._fmt_f(stats.get('temp_hi'))}C", 1)
         self._row(f"Lo:  {self._fmt_f(stats.get('temp_lo'))}C", 2)
         self._row(f"Avg: {self._fmt_f(stats.get('temp_avg'))}C", 3)
         # Long-press hint at bottom
-        self._oled.text("[HOLD]=clr", 68, 56, 1)
+        if self._oled:
+            self._oled.text("[HOLD]=clr", 68, 56, 1)
 
     def _render_humidity(self) -> None:
-        stats = (
-            self._dht_logger.get_stats(self._stats_window_s) if self._dht_logger else {}
-        )
+        stats = self._dht_logger.get_stats(self._stats_window_s) if self._dht_logger else {}
         self._header("HUMIDITY")
         self._row(f"Now: {self._fmt_f(stats.get('hum_now'))}%", 0)
         self._row(f"Hi:  {self._fmt_f(stats.get('hum_hi'))}%", 1)
         self._row(f"Lo:  {self._fmt_f(stats.get('hum_lo'))}%", 2)
         self._row(f"Avg: {self._fmt_f(stats.get('hum_avg'))}%", 3)
-        self._oled.text("[HOLD]=clr", 68, 56, 1)
+        if self._oled:
+            self._oled.text("[HOLD]=clr", 68, 56, 1)
 
     def _render_service(self) -> None:
         self._header("SERVICE")
@@ -305,7 +292,8 @@ class OLEDDisplay:
             self._row(f"Last: {last}", 0)
             self._row(f"Days: {elapsed}/{interval}", 1)
             self._row("DUE!" if is_due else "OK", 2)
-            self._oled.text("[HOLD]=rst", 68, 56, 1)
+            if self._oled:
+                self._oled.text("[HOLD]=rst", 68, 56, 1)
         else:
             self._row("No reminder", 0)
 
@@ -325,7 +313,8 @@ class OLEDDisplay:
             self._row("Mounted" if mounted else "UNMOUNTED", 0)
             self._row(f"Used: {used_mb}MB", 1)
             self._row(f"Free: {free_mb}MB", 2)
-            self._oled.text("[HOLD]=mnt", 68, 56, 1)
+            if self._oled:
+                self._oled.text("[HOLD]=mnt", 68, 56, 1)
         except Exception:
             self._row("SD error", 0)
 

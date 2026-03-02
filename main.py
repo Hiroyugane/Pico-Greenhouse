@@ -26,8 +26,9 @@ import os
 import sys
 
 if sys.implementation.name != "micropython":  # type: ignore[union-attr]
-    host_shims_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "host_shims"
+    host_shims_path = os.path.join(  # type: ignore
+        os.path.dirname(os.path.abspath(__file__)),  # type: ignore
+        "host_shims",  # type: ignore
     )  # type: ignore[attr-defined]
     sys.path.insert(0, host_shims_path)
 
@@ -40,6 +41,7 @@ from lib.dht_logger import DHTLogger
 from lib.event_logger import EventLogger
 from lib.hardware_factory import HardwareFactory
 from lib.led_button import LEDButtonHandler, ServiceReminder
+from lib.oled_display import OLEDDisplay
 from lib.relay import FanController, GrowlightController
 from lib.status_manager import StatusManager
 from lib.time_provider import RTCTimeProvider
@@ -297,6 +299,7 @@ async def main():
     display_config = DEVICE_CONFIG.get("display", {})
     oled = None
     if display_config.get("enabled", True):
+
         def _sd_remount_cb():
             """Callback for OLED long-press SD remount action."""
             if hardware.refresh_sd():
@@ -383,9 +386,7 @@ async def main():
     recovery_interval = system_config.get("sd_recovery_interval_s", 10)
     health_interval = normal_interval
 
-    logger.debug(
-        "MAIN", f"health_check={normal_interval}s, sd_recovery={recovery_interval}s"
-    )
+    logger.debug("MAIN", f"health_check={normal_interval}s, sd_recovery={recovery_interval}s")
 
     while True:
         await asyncio.sleep(health_interval)
@@ -430,9 +431,7 @@ async def main():
             )
             if hardware.refresh_sd():
                 logger.info("MAIN", "SD card re-mounted after hot-swap")
-                logger.debug(
-                    "MAIN", "SD recovery success", prev_interval=health_interval
-                )
+                logger.debug("MAIN", "SD recovery success", prev_interval=health_interval)
                 status_manager.set_sd_status(True)
                 # Clear any stale logged_error that was SD-related
                 status_manager.clear_error("logged_error")
@@ -455,9 +454,7 @@ async def main():
         # the recovery attempt first, then the remaining state.
         new_buffered = sum(len(v) for v in buffer_manager._buffers.values())
         if new_buffered > 0:
-            logger.warning(
-                "MAIN", f"Buffer has {new_buffered} entries (SD may be unavailable)"
-            )
+            logger.warning("MAIN", f"Buffer has {new_buffered} entries (SD may be unavailable)")
             status_manager.set_warning("buffer_backlog", True)
         else:
             status_manager.clear_warning("buffer_backlog")
@@ -472,9 +469,7 @@ async def main():
             )
             migrated = buffer_manager.migrate_fallback()
             if migrated > 0:
-                logger.info(
-                    "MAIN", f"Migrated {migrated} fallback entries to primary SD"
-                )
+                logger.info("MAIN", f"Migrated {migrated} fallback entries to primary SD")
 
 
 if __name__ == "__main__":

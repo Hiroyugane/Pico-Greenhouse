@@ -10,7 +10,7 @@ import time
 
 # Patchable flag: True when running on the Pico, False on host/CPython.
 # Tests can override this to exercise device-only code paths.
-_IS_DEVICE = sys.implementation.name == "micropython"
+_IS_DEVICE = sys.implementation.name == "micropython"  # type: ignore
 
 # Type checkers don't know about MicroPython-specific os functions;
 # the host shim in host_shims/os.py provides them for host testing.

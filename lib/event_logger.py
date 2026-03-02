@@ -62,6 +62,7 @@ class EventLogger:
         status_manager=None,
         info_flush_threshold: int = 5,
         warn_flush_threshold: int = 3,
+        debug_flush_threshold: int = 10,
         log_level: str = "INFO",
         debug_enabled: bool = False,
         debug_to_file: bool = False,
@@ -81,6 +82,7 @@ class EventLogger:
             status_manager: StatusManager instance for LED feedback (optional)
             info_flush_threshold (int): Flush after N info entries buffered (default: 5)
             warn_flush_threshold (int): Flush after N warning entries buffered (default: 3)
+            debug_flush_threshold (int): Flush after N debug entries buffered when debug_to_file=True (default: 10)
             log_level (str): Minimum level to emit — "DEBUG", "INFO", "WARN", or "ERR" (default: "INFO")
             debug_enabled (bool): Enable debug messages to console (default: False)
             debug_to_file (bool): Also write debug messages to SD log (default: False)
@@ -96,6 +98,7 @@ class EventLogger:
         self.status_manager = status_manager
         self.info_flush_threshold = info_flush_threshold
         self.warn_flush_threshold = warn_flush_threshold
+        self.debug_flush_threshold = debug_flush_threshold
         self._level = LEVEL_NAMES.get(log_level, LOG_INFO)
         self.debug_enabled = debug_enabled
         self.debug_to_file = debug_to_file
@@ -203,6 +206,8 @@ class EventLogger:
 
         if self.debug_to_file:
             self.buffer.append(log_entry)
+            if len(self.buffer) >= self.debug_flush_threshold:
+                self.flush()
 
     def warning(self, module: str, message: str) -> None:
         """

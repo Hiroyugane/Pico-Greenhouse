@@ -125,6 +125,7 @@ async def main():
         status_manager=status_manager,
         info_flush_threshold=logger_config.get("info_flush_threshold", 5),
         warn_flush_threshold=logger_config.get("warn_flush_threshold", 3),
+        debug_flush_threshold=logger_config.get("debug_flush_threshold", 10),
         log_level=logger_config.get("log_level", "INFO"),
         debug_enabled=logger_config.get("debug_enabled", False),
         debug_to_file=logger_config.get("debug_to_file", False),

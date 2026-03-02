@@ -331,6 +331,48 @@ class TestEventLoggerDebug:
         assert len(logger.buffer) == 1
         assert "| temp=22.0 hum=65" in logger.buffer[0]
 
+    def test_debug_to_file_flushes_at_threshold(self, time_provider, buffer_manager):
+        """debug() triggers flush when buffer reaches debug_flush_threshold."""
+        from lib.event_logger import EventLogger
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            logger = EventLogger(
+                time_provider,
+                buffer_manager,
+                logfile="/sd/test.log",
+                debug_enabled=True,
+                debug_to_file=True,
+                debug_flush_threshold=3,
+            )
+            logger.buffer.clear()
+            logger.debug("TEST", "entry 1")
+            logger.debug("TEST", "entry 2")
+            assert len(logger.buffer) == 2
+            logger.debug("TEST", "entry 3")
+            # Buffer should have been flushed (threshold=3)
+            assert len(logger.buffer) == 0
+            assert logger.flush_count >= 1
+
+    def test_debug_to_file_no_flush_below_threshold(self, time_provider, buffer_manager):
+        """debug() does not flush when buffer is below debug_flush_threshold."""
+        from lib.event_logger import EventLogger
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            logger = EventLogger(
+                time_provider,
+                buffer_manager,
+                logfile="/sd/test.log",
+                debug_enabled=True,
+                debug_to_file=True,
+                debug_flush_threshold=10,
+            )
+            logger.buffer.clear()
+            initial_flush = logger.flush_count
+            for i in range(5):
+                logger.debug("TEST", f"entry {i}")
+            assert len(logger.buffer) == 5
+            assert logger.flush_count == initial_flush
+
 
 class TestEventLoggerLevelGating:
     """Tests for log level gating."""

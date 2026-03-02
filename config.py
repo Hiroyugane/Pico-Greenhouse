@@ -129,14 +129,14 @@ DEVICE_CONFIG = {
     # Event Logger Configuration
     "event_logger": {
         "logfile": "/sd/system.log",
-        "max_size": 50000,  # Max log file size (bytes) before rotation
+        "max_size": 1000000,  # Max log file size (bytes) before rotation
         "info_flush_threshold": 5,  # Flush after N info-level entries buffered
         "warn_flush_threshold": 3,  # Flush after N warning-level entries buffered
         "log_level": "INFO",  # Minimum severity: DEBUG, INFO, WARN, ERR
         "debug_enabled": True,  # Enable DEBUG messages to console (zero-cost when disabled)
         "debug_to_file": True,  # Also write DEBUG entries to SD log (caution: fills card)
         "debug_flush_threshold": 10,  # Flush after N debug entries buffered (when debug_to_file=True)
-        "debug_max_size": 25000,  # Rotation threshold when debug_to_file=True (lower: debug spam fills log faster)
+        "debug_max_size": 1000000,  # Rotation threshold when debug_to_file=True (lower: debug spam fills log faster)
     },
     # Buzzer Configuration (passive buzzer via PWM)
     "buzzer": {

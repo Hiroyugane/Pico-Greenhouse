@@ -241,6 +241,30 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["Service_reminder"]["monitor_interval_s"] = original
 
+    def test_negative_button_debounce_raises(self):
+        """system.button_debounce_ms < 0 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["system"]["button_debounce_ms"]
+        config.DEVICE_CONFIG["system"]["button_debounce_ms"] = -1
+        try:
+            with pytest.raises(ValueError, match="button_debounce_ms"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["system"]["button_debounce_ms"] = original
+
+    def test_zero_long_press_ms_raises(self):
+        """system.long_press_ms = 0 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["system"]["long_press_ms"]
+        config.DEVICE_CONFIG["system"]["long_press_ms"] = 0
+        try:
+            with pytest.raises(ValueError, match="long_press_ms"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["system"]["long_press_ms"] = original
+
     def test_zero_i2c_freq_raises(self):
         """system.i2c_freq = 0 raises ValueError."""
         import config

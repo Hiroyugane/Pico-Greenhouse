@@ -178,6 +178,7 @@ class OLEDDisplay:
         self.current_menu = (self.current_menu + 1) % len(MENUS)
         if self._logger:
             self._logger.debug("OLEDDisplay", "menu changed", menu=MENUS[self.current_menu])
+        self.render()
 
     def long_press_action(self) -> None:
         """
@@ -213,6 +214,7 @@ class OLEDDisplay:
         else:
             if self._logger:
                 self._logger.debug("OLEDDisplay", "Long press: no action for menu", menu=menu)
+        self.render()
 
     def render(self) -> None:
         """Render the current menu to the display. No-op if display is off or inactive."""

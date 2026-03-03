@@ -365,6 +365,44 @@ class TestLEDButtonHandler:
         short_cb.assert_not_called()
         long_cb.assert_not_called()
 
+    def test_dual_isr_medium_press_classified_as_short(self):
+        """Medium press (< long_press_ms) should still dispatch as short press."""
+        from lib.led_button import LEDButtonHandler
+
+        handler = LEDButtonHandler(5, 9, debounce_ms=50, long_press_ms=3000)
+        short_cb = Mock()
+        long_cb = Mock()
+        handler.register_callbacks(short_press=short_cb, long_press=long_cb)
+
+        mock_pin = MagicMock()
+        # Press for 2000ms: below long threshold, treated as short
+        with patch("lib.led_button._ticks_ms", side_effect=[1000, 3000]):
+            mock_pin.value.return_value = 0
+            handler._button_dual_isr(mock_pin)
+            mock_pin.value.return_value = 1
+            handler._button_dual_isr(mock_pin)
+
+        assert handler._pending_short is True
+        assert handler._pending_long is False
+
+    def test_dual_isr_release_not_blocked_by_press_debounce(self):
+        """Release edge should classify a valid short press even if near prior press edge."""
+        from lib.led_button import LEDButtonHandler
+
+        handler = LEDButtonHandler(5, 9, debounce_ms=60, long_press_ms=3000)
+        handler.register_callbacks(short_press=Mock(), long_press=Mock())
+
+        mock_pin = MagicMock()
+        # 120ms press should be accepted as a short press with 60ms debounce.
+        with patch("lib.led_button._ticks_ms", side_effect=[1000, 1120]):
+            mock_pin.value.return_value = 0
+            handler._button_dual_isr(mock_pin)
+            mock_pin.value.return_value = 1
+            handler._button_dual_isr(mock_pin)
+
+        assert handler._pending_short is True
+        assert handler._pending_long is False
+
     def test_dual_isr_debounce(self):
         """Rapid edges within debounce window are ignored."""
         from lib.led_button import LEDButtonHandler

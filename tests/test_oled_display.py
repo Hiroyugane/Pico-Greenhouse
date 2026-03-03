@@ -73,6 +73,12 @@ class TestOLEDDisplayMenuCycling:
         oled_display.next_menu()
         assert oled_display.current_menu == 0
 
+    def test_next_menu_renders_immediately(self, oled_display):
+        """next_menu() should trigger an immediate render for responsive UX."""
+        oled_display.render = Mock()
+        oled_display.next_menu()
+        oled_display.render.assert_called_once()
+
     def test_all_menus_enumerated(self):
         """MENUS tuple should contain all expected menu IDs."""
         expected = {
@@ -125,6 +131,13 @@ class TestOLEDDisplayLongPressActions:
         oled_display.current_menu = MENUS.index("system")
         oled_display.long_press_action()
         mock_reminder.reset.assert_not_called()
+
+    def test_long_press_renders_immediately(self, oled_display):
+        """long_press_action() should trigger immediate render after handling action."""
+        oled_display.current_menu = MENUS.index("service")
+        oled_display.render = Mock()
+        oled_display.long_press_action()
+        oled_display.render.assert_called_once()
 
     def test_long_press_no_remount_cb_safe(
         self,

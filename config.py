@@ -191,7 +191,7 @@ DEVICE_CONFIG = {
     # System Configuration
     "system": {
         "require_sd_startup": False,  # If True, system won't start without SD; if False, runs with buffering only # noqa: E501
-        "button_debounce_ms": 200,  # Debounce delay for button presses
+        "button_debounce_ms": 60,  # Debounce delay for button presses
         "long_press_ms": 3000,  # Long-press threshold for menu action button
         "health_check_interval_s": 60,  # Normal health-check loop interval
         "sd_recovery_interval_s": 10,  # Fast retry interval when SD is unavailable
@@ -408,6 +408,12 @@ def validate_config():
     sys_cfg = DEVICE_CONFIG["system"]
     if sys_cfg["i2c_freq"] <= 0:
         raise ValueError("system.i2c_freq must be > 0")
+
+    if sys_cfg["button_debounce_ms"] < 0:
+        raise ValueError("system.button_debounce_ms must be >= 0")
+
+    if sys_cfg["long_press_ms"] <= 0:
+        raise ValueError("system.long_press_ms must be > 0")
 
     if sys_cfg["sd_mount_retries"] < 1:
         raise ValueError("system.sd_mount_retries must be >= 1")

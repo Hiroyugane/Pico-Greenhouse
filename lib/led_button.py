@@ -127,14 +127,14 @@ class LEDButtonHandler:
         long_press_callback: Registered long-press callback
     """
 
-    def __init__(self, led_pin: int, button_pin: int, debounce_ms: int = 200, long_press_ms: int = 3000, logger=None):
+    def __init__(self, led_pin: int, button_pin: int, debounce_ms: int = 60, long_press_ms: int = 3000, logger=None):
         """
         Initialize LED and multi-function button.
 
         Args:
             led_pin (int): GPIO pin for LED
             button_pin (int): GPIO pin for button
-            debounce_ms (int): Debounce delay in milliseconds (default: 200)
+            debounce_ms (int): Debounce delay in milliseconds (default: 60)
             long_press_ms (int): Long-press threshold in ms (default: 3000)
             logger: Optional EventLogger for debug/diagnostic messages (default: None)
         """
@@ -148,7 +148,10 @@ class LEDButtonHandler:
         # Legacy alias for backward compatibility
         self.button_callback = None
         self._last_press_time = 0
+        self._last_press_edge_time = 0
+        self._last_release_edge_time = 0
         self._press_start_time = 0
+        self._button_down = False
         # ISR-safe flags — set in ISR, consumed by poll_button()
         self._pending_short = False
         self._pending_long = False
@@ -224,23 +227,34 @@ class LEDButtonHandler:
     def _button_dual_isr(self, pin) -> None:
         """ISR (FALLING+RISING): debounce + set flags.  No heap allocation."""
         current_time = _ticks_ms()
-
-        # Debounce guard
-        if current_time - self._last_press_time < self.debounce_ms:
-            return
-        self._last_press_time = current_time
+        pin_state = pin.value()
 
         # Button pressed (FALLING edge, pin reads 0 when pressed with PULL_UP)
-        if pin.value() == 0:
+        if pin_state == 0:
+            if self._button_down:
+                return
+            if current_time - self._last_press_edge_time < self.debounce_ms:
+                return
+            self._last_press_edge_time = current_time
+            self._last_press_time = current_time
             self._press_start_time = current_time
+            self._button_down = True
             return
 
         # Button released (RISING edge)
-        if self._press_start_time == 0:
-            return  # No matching press start
+        if not self._button_down or self._press_start_time == 0:
+            return
+        if current_time - self._last_release_edge_time < self.debounce_ms:
+            return
 
+        self._last_release_edge_time = current_time
         duration = current_time - self._press_start_time
         self._press_start_time = 0
+        self._button_down = False
+
+        # Ignore very short bounce-like pulses.
+        if duration < self.debounce_ms:
+            return
 
         if duration >= self.long_press_ms:
             self._pending_long = True

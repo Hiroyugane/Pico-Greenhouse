@@ -327,6 +327,7 @@ async def main():
                 refresh_interval_s=display_config.get("refresh_interval_s", 5),
                 stats_window_s=display_config.get("stats_window_s", 3600),
                 menu_timeout_s=display_config.get("menu_timeout_s", 30),
+                display_timeout_s=display_config.get("display_timeout_s", 120),
             )
             logger.info("MAIN", f"OLED display initialized (on={oled.display_on})")
         except Exception as e:

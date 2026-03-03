@@ -174,6 +174,7 @@ DEVICE_CONFIG = {
         "stats_window_s": 3600,  # Look-back window for temp/hum hi/lo/avg stats
         "max_history": 120,  # Max readings to keep for stats (120 × 30 s ≈ 1 h)
         "menu_timeout_s": 30,  # Return to default menu after this many seconds of inactivity
+        "display_timeout_s": 120,  # Turn off display after this many seconds of inactivity (extends OLED lifetime)
     },
     # Output Pin Initial States
     "output_pins": {

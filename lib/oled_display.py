@@ -56,6 +56,7 @@ class OLEDDisplay:
     - refresh_interval_s: how often to redraw (default 5 s)
     - stats_window_s:   stats look-back window (default 3600 s)
     - menu_timeout_s:   return to menu 0 after inactivity (default 30 s)
+    - display_timeout_s: turn off display after inactivity (default 120 s, extends OLED lifetime)
 
     Attributes:
         current_menu (int): index into MENUS tuple
@@ -81,6 +82,7 @@ class OLEDDisplay:
         refresh_interval_s: int = 5,
         stats_window_s: int = 3600,
         menu_timeout_s: int = 30,
+        display_timeout_s: int = 120,
     ):
         self._i2c = i2c
         self._time_provider = time_provider
@@ -99,11 +101,15 @@ class OLEDDisplay:
         self._refresh_interval_s = refresh_interval_s
         self._stats_window_s = stats_window_s
         self._menu_timeout_s = menu_timeout_s
+        self._display_timeout_s = display_timeout_s
+        self._menu_timeout_s = menu_timeout_s
 
         self.current_menu: int = 0
         self.display_on: bool = False
+        self._display_active: bool = False  # Whether the display is powered on (separate from display_on)
         self._oled = None
         self._last_interaction_ms: int = _ticks_ms()
+        self._last_activity_ms: int = _ticks_ms()  # Track activity for display timeout
 
         self._init_display()
 
@@ -149,6 +155,7 @@ class OLEDDisplay:
                 print(f"[OLEDDisplay] SSD1306 at 0x{self._i2c_address:02X}")
 
             # Do initial menu render
+            self._display_active = True  # Display starts powered on
             self.render()
             if self._logger:
                 self._logger.debug("OLEDDisplay", "initial render complete")
@@ -163,8 +170,12 @@ class OLEDDisplay:
 
     def next_menu(self) -> None:
         """Advance to next menu (wraps around). Called on short button press."""
-        self.current_menu = (self.current_menu + 1) % len(MENUS)
         self._last_interaction_ms = _ticks_ms()
+        self._last_activity_ms = self._last_interaction_ms
+        # Turn on display if it was off
+        if not self._display_active:
+            self._turn_on_display()
+        self.current_menu = (self.current_menu + 1) % len(MENUS)
         if self._logger:
             self._logger.debug("OLEDDisplay", "menu changed", menu=MENUS[self.current_menu])
 
@@ -180,6 +191,10 @@ class OLEDDisplay:
         """
         menu = MENUS[self.current_menu]
         self._last_interaction_ms = _ticks_ms()
+        self._last_activity_ms = self._last_interaction_ms
+        # Turn on display if it was off
+        if not self._display_active:
+            self._turn_on_display()
         if menu in ("temp", "humidity"):
             if self._dht_logger:
                 self._dht_logger.clear_history()
@@ -200,8 +215,8 @@ class OLEDDisplay:
                 self._logger.debug("OLEDDisplay", "Long press: no action for menu", menu=menu)
 
     def render(self) -> None:
-        """Render the current menu to the display. No-op if display is off."""
-        if not self.display_on or self._oled is None:
+        """Render the current menu to the display. No-op if display is off or inactive."""
+        if not self.display_on or not self._display_active or self._oled is None:
             return
         try:
             self._oled.fill(0)
@@ -222,6 +237,9 @@ class OLEDDisplay:
 
         Also handles menu timeout: returns to menu 0 after
         menu_timeout_s seconds of no button presses.
+
+        Display timeout: turns off display after display_timeout_s
+        seconds of no activity to extend OLED lifetime.
         """
         while True:
             try:
@@ -232,6 +250,12 @@ class OLEDDisplay:
                         self.current_menu = 0
                         if self._logger:
                             self._logger.debug("OLEDDisplay", "menu timeout → returned to temp")
+
+                # Display timeout: turn off display after inactivity
+                if self._display_timeout_s > 0 and self._display_active:
+                    activity_idle_ms = _ticks_ms() - self._last_activity_ms
+                    if activity_idle_ms >= self._display_timeout_s * 1000:
+                        self._turn_off_display()
 
                 self.render()
                 await asyncio.sleep(self._refresh_interval_s)
@@ -245,6 +269,35 @@ class OLEDDisplay:
                 if self._logger:
                     self._logger.error("OLEDDisplay", f"Refresh loop error: {e}")
                 await asyncio.sleep(1)
+
+    # ── Display Power Management ──────────────────────────────────────
+
+    def _turn_off_display(self) -> None:
+        """Turn off the physical display to extend OLED lifetime."""
+        if not self._display_active or self._oled is None:
+            return
+        try:
+            self._oled.fill(0)
+            self._oled.show()
+            self._display_active = False
+            if self._logger:
+                self._logger.debug("OLEDDisplay", f"Display turned off after {self._display_timeout_s}s inactivity")
+        except Exception as e:
+            if self._logger:
+                self._logger.warning("OLEDDisplay", f"Error turning off display: {e}")
+
+    def _turn_on_display(self) -> None:
+        """Turn on the physical display from sleep."""
+        if self._display_active or self._oled is None:
+            return
+        try:
+            self._display_active = True
+            self._last_activity_ms = _ticks_ms()  # Reset inactivity timer
+            if self._logger:
+                self._logger.debug("OLEDDisplay", "Display turned on by button press")
+        except Exception as e:
+            if self._logger:
+                self._logger.warning("OLEDDisplay", f"Error turning on display: {e}")
 
     # ── Helpers ───────────────────────────────────────────────────────────
 

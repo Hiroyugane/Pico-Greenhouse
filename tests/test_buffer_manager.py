@@ -227,6 +227,25 @@ class TestBufferManagerMigration:
         new_pos = content.find("new_entry")
         assert old_pos < new_pos
 
+    def test_auto_migration_not_retried_every_write_when_fallback_persists(self, buffer_manager, tmp_path):
+        """Auto-migration is attempted once until new fallback writes occur."""
+        fallback = tmp_path / "local" / "fallback.csv"
+        fallback.write_text("system.log|stale-entry\n")
+
+        calls = {"count": 0}
+
+        def fake_migrate():
+            calls["count"] += 1
+            # Simulate failed clear/unchanged fallback so entries still exist.
+            return 0
+
+        buffer_manager.migrate_fallback = fake_migrate
+
+        assert buffer_manager.write("system.log", "run-entry-1\n") is True
+        assert buffer_manager.write("system.log", "run-entry-2\n") is True
+
+        assert calls["count"] == 1
+
 
 class TestBufferManagerRename:
     """Tests for file rename operations."""

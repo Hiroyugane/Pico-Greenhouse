@@ -81,6 +81,12 @@ class BufferManager:
         self.fallback_migrations = 0
         self.write_failures = 0
 
+        # Auto-migration guard: after a primary write path attempts to migrate
+        # existing fallback content once, suppress repeated attempts until new
+        # fallback writes occur. This prevents replaying stale fallback data
+        # into primary on every write when fallback cannot be cleared.
+        self._auto_migration_allowed = True
+
         # Primary availability cache: prevents blocking I/O on every write check
         # cache TTL = 5 seconds (configurable, balances responsiveness vs. I/O overhead)
         self._primary_avail_cache = None
@@ -403,7 +409,8 @@ class BufferManager:
         self._log_debug("write routing", relpath=relpath, primary_ok=primary_ok)
 
         if primary_ok:
-            if self._has_fallback_entries():
+            if self._auto_migration_allowed and self._has_fallback_entries():
+                self._auto_migration_allowed = False
                 if self._debug:
                     self._debug("write: migrating fallback entries before primary write")
                 self.migrate_fallback()
@@ -452,6 +459,7 @@ class BufferManager:
             with open(self.fallback_path, "a") as f:
                 f.write(f"{relpath}|{data}")  # Include relpath in fallback for migration
             self.writes_to_fallback += 1
+            self._auto_migration_allowed = True
             self._log_debug(
                 "write completed",
                 tier="fallback",
@@ -572,6 +580,7 @@ class BufferManager:
                     if self._debug:
                         self._debug(f"flush: {len(self._buffers[path])} entries -> fallback for {path}")
                     self.writes_to_fallback += len(self._buffers[path])
+                    self._auto_migration_allowed = True
                     self._buffers[path] = []
                     self._log_debug(
                         "flush to fallback",

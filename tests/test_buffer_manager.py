@@ -317,6 +317,18 @@ class TestBufferManagerRename:
 class TestBufferManagerUtilities:
     """Tests for path utilities and metrics."""
 
+    def test_clear_fallback_startup_deletes_existing_file(self, buffer_manager, tmp_path):
+        """clear_fallback_startup removes fallback.csv when present."""
+        fallback = tmp_path / "local" / "fallback.csv"
+        fallback.write_text("stale\n")
+
+        assert buffer_manager.clear_fallback_startup() is True
+        assert not fallback.exists()
+
+    def test_clear_fallback_startup_returns_false_when_missing(self, buffer_manager):
+        """clear_fallback_startup is non-fatal when fallback.csv is absent."""
+        assert buffer_manager.clear_fallback_startup() is False
+
     def test_is_primary_available_true(self, buffer_manager):
         """is_primary_available() returns True when SD directory is writable."""
         assert buffer_manager.is_primary_available() is True

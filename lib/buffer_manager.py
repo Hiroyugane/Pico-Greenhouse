@@ -303,6 +303,24 @@ class BufferManager:
         except Exception:
             return False
 
+    def clear_fallback_startup(self) -> bool:
+        """
+        Delete fallback file at startup so each boot starts clean.
+
+        This is non-fatal: if the file does not exist or cannot be removed,
+        the system continues to run.
+
+        Returns:
+            bool: True if a file was deleted, False otherwise
+        """
+        try:
+            os.remove(self.fallback_path)
+            self._log_debug("startup fallback cleared", path=self.fallback_path)
+            return True
+        except Exception as e:
+            self._log_debug("startup fallback clear skipped", path=self.fallback_path, error=str(e))
+            return False
+
     def has_data_for(self, relpath: str) -> bool:
         """
         Check whether data for *relpath* already exists anywhere.

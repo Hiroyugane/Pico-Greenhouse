@@ -148,6 +148,10 @@ async def main():
         max_buffer_entries=buffer_config.get("max_buffer_entries", 200),
         debug_callback=_dbg_cb,
     )
+    # Start each run with a clean fallback file.
+    clear_fallback = getattr(buffer_manager, "clear_fallback_startup", None)
+    if callable(clear_fallback):
+        clear_fallback()
 
     # Step 5: Create EventLogger
     logger = EventLogger(

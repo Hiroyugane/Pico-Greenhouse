@@ -95,6 +95,61 @@ class TestMainStartup:
 
         assert len(created_tasks) > 0
 
+    async def test_startup_clears_fallback_when_supported(self, monkeypatch):
+        """main() calls BufferManager.clear_fallback_startup when present."""
+        import main as main_module
+
+        monkeypatch.setattr(main_module, "validate_config", lambda: True)
+
+        mock_hw = Mock()
+        mock_hw.setup.return_value = True
+        mock_hw.get_rtc.return_value = Mock()
+        mock_hw.is_sd_mounted.return_value = True
+        monkeypatch.setattr(main_module, "HardwareFactory", lambda *a, **kw: mock_hw)
+
+        mock_buffer = Mock()
+        mock_buffer.clear_fallback_startup = Mock(return_value=True)
+        mock_buffer.get_metrics.return_value = {
+            "buffer_entries": 0,
+            "writes_to_fallback": 0,
+            "fallback_migrations": 0,
+            "writes_to_primary": 0,
+            "write_failures": 0,
+        }
+        mock_buffer.is_primary_available.return_value = True
+        mock_buffer._buffers = {}
+        monkeypatch.setattr(main_module, "BufferManager", lambda *a, **kw: mock_buffer)
+
+        mock_logger = Mock()
+        monkeypatch.setattr(main_module, "EventLogger", lambda *a, **kw: mock_logger)
+        monkeypatch.setattr(main_module, "DHTLogger", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "FanController", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "GrowlightController", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "ServiceReminder", lambda *a, **kw: Mock())
+        mock_buzzer = Mock()
+        mock_buzzer.startup = AsyncMock()
+        monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
+        monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: Mock(run_post=AsyncMock(return_value=True)))
+        monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: Mock())
+
+        call_count = 0
+
+        async def limited_sleep(duration):
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 1:
+                raise asyncio.CancelledError()
+
+        monkeypatch.setattr(main_module.asyncio, "sleep", limited_sleep)
+        monkeypatch.setattr(main_module.asyncio, "sleep_ms", limited_sleep)
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with pytest.raises(asyncio.CancelledError):
+                await main_module.main()
+
+        mock_buffer.clear_fallback_startup.assert_called_once()
+
 
 @pytest.mark.asyncio
 class TestMainHealthCheck:

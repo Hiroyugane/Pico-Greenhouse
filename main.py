@@ -22,6 +22,7 @@
 # 2. Run this main.py via Thonny
 # 3. Check /sd/dht_log_YYYY-MM-DD.csv for data
 
+import gc
 import os
 import sys
 
@@ -45,6 +46,35 @@ from lib.oled_display import OLEDDisplay
 from lib.relay import FanController, GrowlightController
 from lib.status_manager import StatusManager
 from lib.time_provider import RTCTimeProvider
+
+
+def _get_runtime_load_snapshot() -> dict:
+    """Collect lightweight runtime load indicators for diagnostics."""
+    snapshot = {}
+
+    # MicroPython memory telemetry (primary signal for resource pressure).
+    if hasattr(gc, "mem_free") and hasattr(gc, "mem_alloc"):
+        try:
+            mem_free = int(gc.mem_free())
+            mem_alloc = int(gc.mem_alloc())
+            mem_total = mem_free + mem_alloc
+            snapshot["mem_free_b"] = mem_free
+            snapshot["mem_alloc_b"] = mem_alloc
+            snapshot["mem_total_b"] = mem_total
+            if mem_total > 0:
+                snapshot["mem_used_pct"] = round((mem_alloc * 100.0) / mem_total, 1)
+        except Exception:
+            # Telemetry is best-effort; never fail the control loop.
+            pass
+
+    # Useful in host simulation to correlate with accidental task fan-out.
+    try:
+        if hasattr(asyncio, "all_tasks"):
+            snapshot["task_count"] = len(asyncio.all_tasks())
+    except Exception:
+        pass
+
+    return snapshot
 
 
 async def main():
@@ -395,6 +425,12 @@ async def main():
         # Heartbeat: toggle on-board LED to prove loop is alive
         status_manager.heartbeat_tick()
 
+        # Keep system.log bounded even when debug_to_file is enabled.
+        try:
+            logger.check_size()
+        except Exception as e:
+            logger.warning("MAIN", f"Log rotation check failed: {e}")
+
         # Periodic health checks
         metrics = buffer_manager.get_metrics()
         buffered = metrics["buffer_entries"]
@@ -409,6 +445,10 @@ async def main():
             failures=metrics["write_failures"],
             buffered=buffered,
         )
+
+        load_snapshot = _get_runtime_load_snapshot()
+        if load_snapshot:
+            logger.debug("MAIN", "runtime load", **load_snapshot)
 
         # Hot-swap recovery: attempt SD refresh when primary is
         # reported down OR when the in-memory buffer is growing.

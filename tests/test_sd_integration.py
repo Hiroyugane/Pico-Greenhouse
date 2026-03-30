@@ -94,6 +94,25 @@ class TestMountSD:
         assert ok is False
         assert sd is None
 
+    def test_mount_device_busy_mount_reuses_existing(self):
+        """On device path, busy/already-mounted mount point is treated as success when writable."""
+        import lib.sd_integration as sd_mod
+
+        mock_spi = Mock()
+        mock_cs = Mock()
+        mock_sd = Mock()
+        mock_sdcard = MagicMock()
+        mock_sdcard.SDCard.return_value = mock_sd
+
+        with patch.object(sd_mod, "_IS_DEVICE", True):
+            with _patch_lib_sdcard(mock_sdcard):
+                with patch("os.mount", create=True, side_effect=OSError("mount busy")):
+                    with patch.object(sd_mod, "_probe_mount_rw", return_value=True):
+                        ok, sd = sd_mod.mount_sd(mock_spi, mock_cs, "/sd")
+
+        assert ok is True
+        assert sd is mock_sd
+
 
 class TestIsMounted:
     """Tests for is_mounted() function."""
@@ -181,6 +200,43 @@ class TestIsMounted:
                         result = sd_mod.is_mounted(None, None, return_instances=False)
 
         assert result is True
+
+    def test_is_mounted_device_sd_none_busy_mount_reuses_existing(self):
+        """Device path with sd=None handles busy/already-mounted mount point when writable."""
+        import lib.sd_integration as sd_mod
+
+        mock_sd_instance = Mock()
+        mock_sd_instance.readblocks = Mock()
+        mock_spi_instance = Mock()
+
+        mock_sdcard_mod = MagicMock()
+        mock_sdcard_mod.SDCard.return_value = mock_sd_instance
+        mock_spi_class = MagicMock(return_value=mock_spi_instance)
+
+        mock_device_config = {
+            "spi": {"id": 1, "baudrate": 40000000, "sck": 10, "mosi": 11, "miso": 12, "cs": 13, "mount_point": "/sd"}
+        }
+        mock_machine = MagicMock()
+        mock_machine.Pin = MagicMock(return_value=Mock())
+        mock_machine.SPI = mock_spi_class
+
+        with patch.object(sd_mod, "_IS_DEVICE", True):
+            with _patch_lib_sdcard(mock_sdcard_mod):
+                with patch.dict(
+                    "sys.modules",
+                    {
+                        "config": MagicMock(DEVICE_CONFIG=mock_device_config),
+                        "machine": mock_machine,
+                    },
+                ):
+                    with patch("os.mount", create=True, side_effect=OSError("already mounted")):
+                        with patch.object(sd_mod, "_probe_mount_rw", return_value=True):
+                            result = sd_mod.is_mounted(None, None, return_instances=True)
+
+        assert isinstance(result, tuple)
+        assert result[0] is True
+        assert result[1] is mock_sd_instance
+        assert result[2] is mock_spi_instance
 
     def test_is_mounted_device_mbr_fail_reinit(self):
         """Device path: first readblocks fails, reinit succeeds."""

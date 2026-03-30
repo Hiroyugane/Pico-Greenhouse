@@ -18,6 +18,34 @@ if False:  # This block exists only for type checking
     from os import mount as _mount_typecheck  # noqa: F401
 
 
+def _is_mount_busy_error(exc: Exception) -> bool:
+    """Best-effort detection for 'already mounted / busy' mount errors."""
+    msg = str(exc).lower()
+    if "busy" in msg or "already mounted" in msg:
+        return True
+
+    # MicroPython OSError often exposes errno as first arg.
+    args = getattr(exc, "args", ())
+    if args:
+        code = args[0]
+        # POSIX errno values: EBUSY=16, EEXIST=17
+        if code in (16, 17):
+            return True
+    return False
+
+
+def _probe_mount_rw(mount_point: str) -> bool:
+    """Verify mount point is writable via write/read/remove probe file."""
+    probe_path = f"{mount_point}/.probe"
+    token = "ok"
+    with open(probe_path, "w") as f:
+        f.write(token)
+    with open(probe_path, "r") as f:
+        read_back = f.read()
+    os.remove(probe_path)
+    return read_back == token
+
+
 def mount_sd(spi, cs_pin, mount_point: str = "/sd", debug_callback=None):
     """
     Attempt to mount SD card on specified mount point.
@@ -48,7 +76,17 @@ def mount_sd(spi, cs_pin, mount_point: str = "/sd", debug_callback=None):
             cs_pin = Pin(cs_pin)
 
         sd = sdcard.SDCard(spi, cs_pin)
-        os.mount(sd, mount_point)  # type: ignore[attr-defined]
+        try:
+            os.mount(sd, mount_point)  # type: ignore[attr-defined]
+        except Exception as e:
+            # Soft-reset path: mount point may still be active.
+            # If storage at mount point is writable, treat as healthy.
+            if _is_mount_busy_error(e):
+                if _probe_mount_rw(mount_point):
+                    if debug_callback:
+                        debug_callback(f"SD mount busy/already-mounted; reusing existing mount at {mount_point}")
+                    return True, sd
+            raise
         if debug_callback:
             debug_callback(f"SD mounted at {mount_point}")
         return True, sd
@@ -95,7 +133,15 @@ def is_mounted(sd, spi=None, return_instances: bool = False, debug_callback=None
             new_spi = SPI(spi_id, baudrate=baudrate, sck=Pin(sck), mosi=Pin(mosi), miso=Pin(miso))
             try:
                 sd_local = sdcard.SDCard(new_spi, cs_pin)
-                os.mount(sd_local, mount_point)  # type: ignore[attr-defined]
+                try:
+                    os.mount(sd_local, mount_point)  # type: ignore[attr-defined]
+                except Exception as e:
+                    if _is_mount_busy_error(e):
+                        if _probe_mount_rw(mount_point):
+                            if debug_callback:
+                                debug_callback("is_mounted: mount busy/already-mounted, reusing active mount")
+                            return sd_local, new_spi
+                    raise
                 return sd_local, new_spi
             except Exception:
                 try:

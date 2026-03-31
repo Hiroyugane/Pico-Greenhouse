@@ -15,6 +15,7 @@ import uasyncio as asyncio
 try:
     _ticks_ms = time.ticks_ms  # MicroPython
 except AttributeError:
+
     def _ticks_ms() -> int:  # CPython fallback
         return int(time.time() * 1000)
 
@@ -85,9 +86,7 @@ class DHTLogger:
         """
         self.dht_sensor = dht.DHT22(machine.Pin(pin))
         self.interval = interval
-        self.filename_base = (
-            filename if filename.startswith("/sd/") else f"/sd/{filename}"
-        )
+        self.filename_base = filename if filename.startswith("/sd/") else f"/sd/{filename}"
         self.time_provider = time_provider
         self.buffer_manager = buffer_manager
         self.logger = logger
@@ -160,17 +159,13 @@ class DHTLogger:
         relpath = self._strip_sd_prefix(self.filename)
         # Fast path: already created this session (avoids unreliable FAT VFS check)
         if relpath in self._created_files:
-            self.logger.debug(
-                "DHTLogger", "file exists (created cache)", relpath=relpath
-            )
+            self.logger.debug("DHTLogger", "file exists (created cache)", relpath=relpath)
             return True
         exists = self.buffer_manager.has_data_for(relpath)
         if exists:
             # Cache the confirmed existence so a later SD outage won't re-trigger header creation
             self._created_files.add(relpath)
-        self.logger.debug(
-            "DHTLogger", "file exists check", relpath=relpath, found=exists
-        )
+        self.logger.debug("DHTLogger", "file exists check", relpath=relpath, found=exists)
         return exists
 
     def _resolve_path(self, file_path: str) -> str:
@@ -192,16 +187,12 @@ class DHTLogger:
         relpath = self._strip_sd_prefix(self.filename)
         self.logger.debug("DHTLogger", "creating CSV file", relpath=relpath)
         try:
-            wrote_to_primary = self.buffer_manager.write(
-                relpath, "Timestamp,Temperature,Humidity\n"
-            )
+            wrote_to_primary = self.buffer_manager.write(relpath, "Timestamp,Temperature,Humidity\n")
             self._created_files.add(relpath)
             if wrote_to_primary:
                 self.logger.debug("DHTLogger", f"Created CSV file: {self.filename}")
             else:
-                self.logger.debug(
-                    "DHTLogger", f"Created CSV header (fallback): {self.filename}"
-                )
+                self.logger.debug("DHTLogger", f"Created CSV header (fallback): {self.filename}")
         except Exception as e:
             self.logger.error("DHTLogger", f"Failed to create file: {e}")
             raise
@@ -241,9 +232,7 @@ class DHTLogger:
                         hum=hum,
                         attempt=attempt + 1,
                     )
-                    self.logger.warning(
-                        "DHTLogger", f"Reading out of range: {temp}°C, {hum}%"
-                    )
+                    self.logger.warning("DHTLogger", f"Reading out of range: {temp}°C, {hum}%")
             except Exception as e:
                 self.logger.debug(
                     "DHTLogger",
@@ -278,15 +267,11 @@ class DHTLogger:
             err_thresh=self._dht_error_threshold,
         )
         if self._consecutive_failures >= self._dht_error_threshold:
-            self.logger.debug(
-                "DHTLogger", f"Status: error (failures={self._consecutive_failures})"
-            )
+            self.logger.debug("DHTLogger", f"Status: error (failures={self._consecutive_failures})")
             self.status_manager.set_error("dht_dead", True)
             self.status_manager.set_warning("dht_intermittent", False)
         elif self._consecutive_failures >= self._dht_warn_threshold:
-            self.logger.debug(
-                "DHTLogger", f"Status: warning (failures={self._consecutive_failures})"
-            )
+            self.logger.debug("DHTLogger", f"Status: warning (failures={self._consecutive_failures})")
             self.status_manager.set_warning("dht_intermittent", True)
             self.status_manager.set_error("dht_dead", False)
         else:
@@ -375,9 +360,7 @@ class DHTLogger:
                     relpath = self._strip_sd_prefix(self.filename)
                     row = f"{timestamp},{temp:.1f},{hum:.1f}\n"
 
-                    self.logger.debug(
-                        "DHTLogger", f"Writing row to {relpath}: {row.rstrip()}"
-                    )
+                    self.logger.debug("DHTLogger", f"Writing row to {relpath}: {row.rstrip()}")
 
                     # Ensure CSV file exists on SD (recreate header if
                     # init-time creation failed, e.g. SD timing issues).
@@ -414,9 +397,7 @@ class DHTLogger:
                         self.logger.error("DHTLogger", f"Failed to write: {e}")
                         self.write_failures += 1
                 else:
-                    self.logger.warning(
-                        "DHTLogger", f"Sensor read failed (total: {self.read_failures})"
-                    )
+                    self.logger.warning("DHTLogger", f"Sensor read failed (total: {self.read_failures})")
 
                 self.logger.check_size()
                 await asyncio.sleep(self.interval)
@@ -426,9 +407,7 @@ class DHTLogger:
                 self.logger.warning("DHTLogger", "Log loop cancelled")
                 raise
             except Exception as e:
-                self.logger.debug(
-                    "DHTLogger", "unexpected error in log loop", error=str(e)
-                )
+                self.logger.debug("DHTLogger", "unexpected error in log loop", error=str(e))
                 self.logger.error("DHTLogger", f"Unexpected error: {e}")
                 await asyncio.sleep(1)
 

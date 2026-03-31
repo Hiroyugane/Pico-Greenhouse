@@ -350,7 +350,7 @@ class DHTLogger:
                     self._readings_history.append((_ticks_ms(), temp, hum))
                     if len(self._readings_history) > self._max_history:
                         self._readings_history.pop(0)
-                    
+
                     self._update_stats(temp, hum)
 
                     timestamp = self.time_provider.now_timestamp()
@@ -456,7 +456,7 @@ class DHTLogger:
             self._temp_stats["hi"] = temp
         if self._temp_stats["lo"] is None or temp < self._temp_stats["lo"]:
             self._temp_stats["lo"] = temp
-        
+
         # Update humidity stats
         if self._hum_stats["hi"] is None or hum > self._hum_stats["hi"]:
             self._hum_stats["hi"] = hum

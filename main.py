@@ -22,6 +22,7 @@
 # 2. Run this main.py via Thonny
 # 3. Check /sd/dht_log_YYYY-MM-DD.csv for data
 
+import gc
 import os
 import sys
 
@@ -395,6 +396,25 @@ async def main():
         # Heartbeat: toggle on-board LED to prove loop is alive
         status_manager.heartbeat_tick()
 
+        # System memory check
+        gc.collect()
+        mem_alloc = gc.mem_alloc()
+        mem_free = gc.mem_free()
+        used_pct = (mem_alloc / (mem_alloc + mem_free)) * 100 if (mem_alloc + mem_free) > 0 else 0
+
+        warn_pct = status_led_config.get("mem_warning_pct", 80)
+        error_pct = status_led_config.get("mem_error_pct", 90)
+
+        if used_pct >= error_pct:
+            status_manager.set_error("mem_error", True)
+            status_manager.clear_warning("mem_warn")
+        elif used_pct >= warn_pct:
+            status_manager.set_warning("mem_warn", True)
+            status_manager.clear_error("mem_error")
+        else:
+            status_manager.clear_warning("mem_warn")
+            status_manager.clear_error("mem_error")
+
         # Periodic health checks
         metrics = buffer_manager.get_metrics()
         buffered = metrics["buffer_entries"]
@@ -408,6 +428,7 @@ async def main():
             migrations=metrics["fallback_migrations"],
             failures=metrics["write_failures"],
             buffered=buffered,
+            mem_used_pct=f"{used_pct:.1f}%",
         )
 
         # Hot-swap recovery: attempt SD refresh when primary is

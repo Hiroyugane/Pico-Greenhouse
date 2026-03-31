@@ -119,6 +119,8 @@ DEVICE_CONFIG = {
         "rtc_max_year": 2035,  # Year above this → RTC invalid warning
         "post_enabled": True,  # Run LED power-on self-test at startup
         "post_step_ms": 150,  # Duration each LED stays on during POST walk (ms)
+        "mem_warning_pct": 80,  # RAM usage % above this → warning LED
+        "mem_error_pct": 90,  # RAM usage % above this → error LED
     },
     # Buffer Manager Configuration
     "buffer_manager": {
@@ -303,6 +305,8 @@ def validate_config():
             "dht_error_threshold",
             "rtc_min_year",
             "rtc_max_year",
+            "mem_warning_pct",
+            "mem_error_pct",
         ],
         "display": [
             "type",

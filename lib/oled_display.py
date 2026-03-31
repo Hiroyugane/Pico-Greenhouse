@@ -438,9 +438,12 @@ class OLEDDisplay:
         buffered = metrics.get("buffer_entries", 0)
 
         # Memory calculation
-        mem_alloc = gc.mem_alloc()
-        mem_free = gc.mem_free()
-        used_pct = (mem_alloc / (mem_alloc + mem_free)) * 100 if (mem_alloc + mem_free) > 0 else 0
+        if hasattr(gc, "mem_alloc") and hasattr(gc, "mem_free"):
+            mem_alloc = gc.mem_alloc()
+            mem_free = gc.mem_free()
+            used_pct = (mem_alloc / (mem_alloc + mem_free)) * 100 if (mem_alloc + mem_free) > 0 else 0
+        else:
+            used_pct = 0
 
         self._row(date_str, 0)
         self._row(time_str, 1)

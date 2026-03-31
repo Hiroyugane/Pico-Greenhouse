@@ -398,9 +398,13 @@ async def main():
 
         # System memory check
         gc.collect()
-        mem_alloc = gc.mem_alloc()
-        mem_free = gc.mem_free()
-        used_pct = (mem_alloc / (mem_alloc + mem_free)) * 100 if (mem_alloc + mem_free) > 0 else 0
+        if hasattr(gc, "mem_alloc") and hasattr(gc, "mem_free"):
+            mem_alloc = gc.mem_alloc()
+            mem_free = gc.mem_free()
+            used_pct = (mem_alloc / (mem_alloc + mem_free)) * 100 if (mem_alloc + mem_free) > 0 else 0
+        else:
+            # CPython gc does not expose mem_alloc/mem_free; keep health loop running.
+            used_pct = 0
 
         warn_pct = status_led_config.get("mem_warning_pct", 80)
         error_pct = status_led_config.get("mem_error_pct", 90)

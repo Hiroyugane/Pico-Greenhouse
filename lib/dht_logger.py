@@ -300,7 +300,8 @@ class DHTLogger:
                 )
 
                 self._update_filename_for_date()
-            self._reset_stats()
+                self._reset_stats()
+                return True
 
             self.logger.debug("DHTLogger", "Date rollover check: no change")
             return False
@@ -414,9 +415,13 @@ class DHTLogger:
             return path[4:]
         return path
 
-    def get_stats(self) -> dict:
+    def get_stats(self, window_s=None) -> dict:
         """
         Return temperature/humidity statistics.
+
+        When ``window_s`` is provided, stats are computed from in-memory
+        history entries that fall within the trailing time window.
+
         Returns:
             dict: {
                 'temp_now': float | None,
@@ -430,6 +435,39 @@ class DHTLogger:
                 'count': int,
             }
         """
+        if window_s is not None:
+            cutoff_ms = _ticks_ms() - max(int(window_s), 0) * 1000
+            window = [entry for entry in self._readings_history if entry[0] >= cutoff_ms]
+
+            if window:
+                temps = [entry[1] for entry in window]
+                hums = [entry[2] for entry in window]
+                temp_now = self.last_temperature if self.last_temperature is not None else temps[-1]
+                hum_now = self.last_humidity if self.last_humidity is not None else hums[-1]
+                return {
+                    "temp_now": temp_now,
+                    "temp_hi": max(temps),
+                    "temp_lo": min(temps),
+                    "temp_avg": sum(temps) / len(temps),
+                    "hum_now": hum_now,
+                    "hum_hi": max(hums),
+                    "hum_lo": min(hums),
+                    "hum_avg": sum(hums) / len(hums),
+                    "count": len(window),
+                }
+
+            return {
+                "temp_now": self.last_temperature,
+                "temp_hi": None,
+                "temp_lo": None,
+                "temp_avg": None,
+                "hum_now": self.last_humidity,
+                "hum_hi": None,
+                "hum_lo": None,
+                "hum_avg": None,
+                "count": 0,
+            }
+
         return {
             "temp_now": self._temp_stats["now"],
             "temp_hi": self._temp_stats["hi"],

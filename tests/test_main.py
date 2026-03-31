@@ -10,6 +10,23 @@ from config import DEVICE_CONFIG
 from tests.conftest import FAKE_LOCALTIME
 
 
+def _mock_create_task(coro):
+    """Test helper: consume coroutine objects when asyncio.create_task is monkeypatched."""
+    coro.close()
+    return Mock()
+
+
+def _capture_create_task(created_tasks):
+    """Return a create_task stub that records and closes coroutines."""
+
+    def _create_task(coro):
+        created_tasks.append(coro)
+        coro.close()
+        return Mock()
+
+    return _create_task
+
+
 @pytest.mark.asyncio
 class TestMainStartup:
     """Tests for main() startup sequence."""
@@ -76,7 +93,7 @@ class TestMainStartup:
         monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: Mock(run_post=AsyncMock(return_value=True)))
 
         created_tasks = []
-        monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: created_tasks.append(t) or Mock())
+        monkeypatch.setattr(main_module.asyncio, "create_task", _capture_create_task(created_tasks))
 
         call_count = 0
 
@@ -134,7 +151,7 @@ class TestMainHealthCheck:
         mock_buzzer.startup = AsyncMock()
         monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
         monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: Mock(run_post=AsyncMock(return_value=True)))
-        monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: Mock())
+        monkeypatch.setattr(main_module.asyncio, "create_task", _mock_create_task)
 
         call_count = 0
 
@@ -190,7 +207,7 @@ class TestMainHealthCheck:
         mock_buzzer.startup = AsyncMock()
         monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
         monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: Mock(run_post=AsyncMock(return_value=True)))
-        monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: Mock())
+        monkeypatch.setattr(main_module.asyncio, "create_task", _mock_create_task)
 
         call_count = 0
 
@@ -245,7 +262,7 @@ class TestMainHealthCheck:
         mock_buzzer.startup = AsyncMock()
         monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
         monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: Mock(run_post=AsyncMock(return_value=True)))
-        monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: Mock())
+        monkeypatch.setattr(main_module.asyncio, "create_task", _mock_create_task)
 
         call_count = 0
 
@@ -305,7 +322,7 @@ class TestMainHealthCheck:
         mock_buzzer.startup = AsyncMock()
         monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
         monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: Mock(run_post=AsyncMock(return_value=True)))
-        monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: Mock())
+        monkeypatch.setattr(main_module.asyncio, "create_task", _mock_create_task)
 
         call_count = 0
 
@@ -359,7 +376,7 @@ class TestMainHealthCheck:
         mock_buzzer.startup = AsyncMock()
         monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
         monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: Mock(run_post=AsyncMock(return_value=True)))
-        monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: Mock())
+        monkeypatch.setattr(main_module.asyncio, "create_task", _mock_create_task)
 
         sleep_durations = []
 
@@ -436,7 +453,7 @@ class TestMainHealthCheck:
         mock_buzzer.startup = AsyncMock()
         monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
         monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: Mock(run_post=AsyncMock(return_value=True)))
-        monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: Mock())
+        monkeypatch.setattr(main_module.asyncio, "create_task", _mock_create_task)
 
         sleep_durations = []
 
@@ -501,7 +518,7 @@ class TestMainInitFailures:
         mock_buzzer.startup = AsyncMock()
         monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
         monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: Mock(run_post=AsyncMock(return_value=True)))
-        monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: Mock())
+        monkeypatch.setattr(main_module.asyncio, "create_task", _mock_create_task)
 
         async def stop_sleep(duration):
             raise asyncio.CancelledError()
@@ -553,7 +570,7 @@ class TestMainInitFailures:
 
         mock_sm = Mock(run_post=AsyncMock(return_value=True))
         monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: mock_sm)
-        monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: Mock())
+        monkeypatch.setattr(main_module.asyncio, "create_task", _mock_create_task)
 
         async def stop_sleep(duration):
             raise asyncio.CancelledError()
@@ -607,7 +624,7 @@ class TestMainInitFailures:
 
         mock_sm = Mock(run_post=AsyncMock(return_value=True))
         monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: mock_sm)
-        monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: Mock())
+        monkeypatch.setattr(main_module.asyncio, "create_task", _mock_create_task)
 
         async def stop_sleep(duration):
             raise asyncio.CancelledError()
@@ -658,7 +675,7 @@ class TestMainInitFailures:
 
         mock_sm = Mock(run_post=AsyncMock(return_value=True))
         monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: mock_sm)
-        monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: Mock())
+        monkeypatch.setattr(main_module.asyncio, "create_task", _mock_create_task)
 
         async def stop_sleep(duration):
             raise asyncio.CancelledError()

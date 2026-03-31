@@ -298,7 +298,7 @@ class DHTLogger:
                     old_date=str(self.current_date),
                     new_date=str(current_date),
                 )
-                old_filename = self.filename
+
                 self._update_filename_for_date()
             self._reset_stats()
 

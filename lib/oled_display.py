@@ -436,12 +436,12 @@ class OLEDDisplay:
         date_str = now[:10] if len(now) >= 10 else now  # YYYY-MM-DD
         metrics = self._buffer_manager.get_metrics() if self._buffer_manager else {}
         buffered = metrics.get("buffer_entries", 0)
-        
+
         # Memory calculation
         mem_alloc = gc.mem_alloc()
         mem_free = gc.mem_free()
         used_pct = (mem_alloc / (mem_alloc + mem_free)) * 100 if (mem_alloc + mem_free) > 0 else 0
-        
+
         self._row(date_str, 0)
         self._row(time_str, 1)
         self._row(f"Up: {self._uptime_str()}", 2)

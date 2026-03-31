@@ -107,6 +107,9 @@ class DHTLogger:
         self._created_files = set()  # relpaths confirmed created this session
         # Bounded history for stats: list of (ticks_ms, temp, hum)
         self._readings_history = []
+        self._temp_stats = {"now": None, "hi": None, "lo": None, "avg": None, "count": 0}
+        self._hum_stats = {"now": None, "hi": None, "lo": None, "avg": None, "count": 0}
+        self._reset_stats()
 
         # Initialize filename with current date
         self._update_filename_for_date()
@@ -297,15 +300,7 @@ class DHTLogger:
                 )
                 old_filename = self.filename
                 self._update_filename_for_date()
-
-                if not self._file_exists():
-                    self._create_file()
-
-                self.logger.info(
-                    "DHTLogger",
-                    f"Date changed - switched from {old_filename} to {self.filename}",
-                )
-                return True
+            self._reset_stats()
 
             self.logger.debug("DHTLogger", "Date rollover check: no change")
             return False
@@ -355,6 +350,8 @@ class DHTLogger:
                     self._readings_history.append((_ticks_ms(), temp, hum))
                     if len(self._readings_history) > self._max_history:
                         self._readings_history.pop(0)
+                    
+                    self._update_stats(temp, hum)
 
                     timestamp = self.time_provider.now_timestamp()
                     relpath = self._strip_sd_prefix(self.filename)
@@ -417,13 +414,9 @@ class DHTLogger:
             return path[4:]
         return path
 
-    def get_stats(self, window_s: int = 3600) -> dict:
+    def get_stats(self) -> dict:
         """
-        Return temperature/humidity statistics over the last ``window_s`` seconds.
-
-        Args:
-            window_s (int): Look-back window in seconds (default: 3600 = 1 hour)
-
+        Return temperature/humidity statistics.
         Returns:
             dict: {
                 'temp_now': float | None,
@@ -437,38 +430,54 @@ class DHTLogger:
                 'count': int,
             }
         """
-        now_ms = _ticks_ms()
-        cutoff_ms = now_ms - window_s * 1000
-        # Filter history within window (handles ticks_ms wrap-around gracefully on host)
-        window = [(ts, t, h) for ts, t, h in self._readings_history if ts >= cutoff_ms]
-
-        if not window:
-            return {
-                "temp_now": self.last_temperature,
-                "temp_hi": self.last_temperature,
-                "temp_lo": self.last_temperature,
-                "temp_avg": self.last_temperature,
-                "hum_now": self.last_humidity,
-                "hum_hi": self.last_humidity,
-                "hum_lo": self.last_humidity,
-                "hum_avg": self.last_humidity,
-                "count": 0,
-            }
-
-        temps = [t for _, t, _ in window]
-        hums = [h for _, _, h in window]
         return {
-            "temp_now": self.last_temperature,
-            "temp_hi": max(temps),
-            "temp_lo": min(temps),
-            "temp_avg": sum(temps) / len(temps),
-            "hum_now": self.last_humidity,
-            "hum_hi": max(hums),
-            "hum_lo": min(hums),
-            "hum_avg": sum(hums) / len(hums),
-            "count": len(window),
+            "temp_now": self._temp_stats["now"],
+            "temp_hi": self._temp_stats["hi"],
+            "temp_lo": self._temp_stats["lo"],
+            "temp_avg": self._temp_stats["avg"],
+            "hum_now": self._hum_stats["now"],
+            "hum_hi": self._hum_stats["hi"],
+            "hum_lo": self._hum_stats["lo"],
+            "hum_avg": self._hum_stats["avg"],
+            "count": self._temp_stats["count"],
         }
 
     def clear_history(self) -> None:
         """Clear all in-memory reading history (used by OLED long-press action)."""
         self._readings_history.clear()
+
+    def _reset_stats(self):
+        self._temp_stats = {"now": None, "hi": None, "lo": None, "avg": None, "count": 0}
+        self._hum_stats = {"now": None, "hi": None, "lo": None, "avg": None, "count": 0}
+
+    def _update_stats(self, temp, hum):
+        # Update temperature stats
+        if self._temp_stats["hi"] is None or temp > self._temp_stats["hi"]:
+            self._temp_stats["hi"] = temp
+        if self._temp_stats["lo"] is None or temp < self._temp_stats["lo"]:
+            self._temp_stats["lo"] = temp
+        
+        # Update humidity stats
+        if self._hum_stats["hi"] is None or hum > self._hum_stats["hi"]:
+            self._hum_stats["hi"] = hum
+        if self._hum_stats["lo"] is None or hum < self._hum_stats["lo"]:
+            self._hum_stats["lo"] = hum
+
+        # Update averages
+        if self._temp_stats["avg"] is None:
+            self._temp_stats["avg"] = temp
+        else:
+            # Simple moving average
+            count = self._temp_stats["count"]
+            self._temp_stats["avg"] = (self._temp_stats["avg"] * count + temp) / (count + 1)
+
+        if self._hum_stats["avg"] is None:
+            self._hum_stats["avg"] = hum
+        else:
+            count = self._hum_stats["count"]
+            self._hum_stats["avg"] = (self._hum_stats["avg"] * count + hum) / (count + 1)
+
+        self._temp_stats["count"] += 1
+        self._hum_stats["count"] += 1
+        self._temp_stats["now"] = temp
+        self._hum_stats["now"] = hum

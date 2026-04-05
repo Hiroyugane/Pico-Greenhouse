@@ -127,7 +127,7 @@ DEVICE_CONFIG = {
         "sd_mount_point": "/sd",
         "fallback_path": "/local/fallback.csv",
         "max_buffer_entries": 150,  # Ring buffer cap (reduced from 200 to reduce RAM usage)
-        "max_fallback_size_kb": 50,  # Emergency fallback file size limit (KB); when exceeded, oldest entries are pruned to prevent /local/ filling up
+        "max_fallback_size_kb": 50,  # Emergency fallback file size limit (KB); when exceeded, oldest entries are pruned
     },
     # Event Logger Configuration
     "event_logger": {

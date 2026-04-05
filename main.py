@@ -34,6 +34,7 @@ if sys.implementation.name != "micropython":  # type: ignore[union-attr]
     sys.path.insert(0, host_shims_path)
 
 import uasyncio as asyncio
+from machine import WDT
 
 from config import DEVICE_CONFIG, validate_config
 from lib.buffer_manager import BufferManager
@@ -46,6 +47,43 @@ from lib.oled_display import OLEDDisplay
 from lib.relay import FanController, GrowlightController
 from lib.status_manager import StatusManager
 from lib.time_provider import RTCTimeProvider
+from lib.write_queue_manager import WriteQueueManager
+
+
+async def feed_watchdog(wdt, interval_ms, logger=None):
+    """
+    Async task that periodically feeds the watchdog timer.
+
+    If the uasyncio scheduler freezes, this task stops running and the
+    watchdog will reset the Pico after the configured timeout.
+
+    Args:
+        wdt: WDT instance to feed
+        interval_ms: Feed interval in milliseconds (must be < watchdog timeout)
+        logger: Optional EventLogger for debug output
+    """
+    while True:
+        try:
+            wdt.feed()
+            await asyncio.sleep_ms(interval_ms)
+        except asyncio.CancelledError:
+            if logger:
+                logger.warning("Watchdog", "Feed task cancelled")
+            raise
+        except Exception:
+            # Don't log here - logging can block and cause watchdog timeout
+            await asyncio.sleep_ms(1000)
+
+
+# Module-level WDT reference for feeding during long operations
+_wdt = None
+
+
+def feed_wdt():
+    """Feed the watchdog timer during long synchronous operations."""
+    global _wdt
+    if _wdt is not None:
+        _wdt.feed()
 
 
 def _get_runtime_load_snapshot() -> dict:
@@ -94,6 +132,16 @@ async def main():
         print(f"[STARTUP ERROR] Config validation failed: {e}")
         return
 
+    # Step 1b: Initialize watchdog timer (early, before any other hardware)
+    # If the system freezes during init or runtime, the watchdog will reset it.
+    global _wdt
+    system_config = DEVICE_CONFIG.get("system", {})
+    wdt_timeout_ms = system_config.get("watchdog_timeout_ms", 8000)
+    wdt_feed_interval_ms = system_config.get("watchdog_feed_interval_ms", 2000)
+    wdt = WDT(timeout=wdt_timeout_ms)
+    _wdt = wdt  # Store for feed_wdt() helper
+    print(f"[STARTUP] Watchdog enabled: timeout={wdt_timeout_ms}ms, feed_interval={wdt_feed_interval_ms}ms")
+
     # Step 2: Initialize hardware
     # Create debug callback for pre-logger modules (only active when DEBUG)
     logger_config = DEVICE_CONFIG.get("event_logger", {})
@@ -101,17 +149,18 @@ async def main():
     if logger_config.get("log_level", "INFO") == "DEBUG":
         _dbg_cb = lambda msg: print(f"[DEBUG] {msg}")  # noqa: E731
 
+    wdt.feed()  # Feed before hardware init
     hardware = HardwareFactory(DEVICE_CONFIG, debug_callback=_dbg_cb)
     if not hardware.setup():
         print("[STARTUP ERROR] Critical hardware initialization failed (RTC)")
         hardware.print_status()
         return
 
+    wdt.feed()  # Feed after hardware init
     hardware.print_status()
 
     # Step 3: Create TimeProvider (wraps RTC)
     rtc = hardware.get_rtc()
-    system_config = DEVICE_CONFIG.get("system", {})
     time_provider = RTCTimeProvider(
         rtc,
         sync_interval_s=system_config.get("rtc_sync_interval_s", 3600),
@@ -140,19 +189,26 @@ async def main():
     # Reflect initial SD state
     status_manager.set_sd_status(hardware.is_sd_mounted())
 
+    wdt.feed()  # Feed before buffer/logger init
+
     # Step 4: Create BufferManager
     buffer_config = DEVICE_CONFIG.get("buffer_manager", {})
     buffer_manager = BufferManager(
         sd_mount_point=buffer_config.get("sd_mount_point", "/sd"),
         fallback_path=buffer_config.get("fallback_path", "/local/fallback.csv"),
         max_buffer_entries=buffer_config.get("max_buffer_entries", 200),
+        max_fallback_size_kb=buffer_config.get("max_fallback_size_kb", 50),
         debug_callback=_dbg_cb,
     )
-    # Start each run with a clean fallback file.
-    clear_fallback = getattr(buffer_manager, "clear_fallback_startup", None)
-    if callable(clear_fallback):
-        clear_fallback()
-
+    # Step 4b: Create WriteQueueManager (async SD write batching)
+    system_config = DEVICE_CONFIG.get("system", {})
+    write_queue = WriteQueueManager(
+        buffer_manager=buffer_manager,
+        logger=None,  # Inject logger later after EventLogger created
+        max_queue_size=system_config.get("write_queue_max_size", 500),
+        drain_interval_ms=system_config.get("queue_drain_interval_ms", 100),
+        batch_size=system_config.get("queue_batch_size", 5),
+    )
     # Step 5: Create EventLogger
     logger = EventLogger(
         time_provider,
@@ -167,7 +223,13 @@ async def main():
         log_level=logger_config.get("log_level", "INFO"),
         debug_enabled=logger_config.get("debug_enabled", False),
         debug_to_file=logger_config.get("debug_to_file", False),
+        write_queue=write_queue,
     )
+
+    # Update write_queue with logger reference (now available)
+    write_queue.set_logger(logger)
+
+    wdt.feed()  # Feed after logger init
 
     logger.info("MAIN", "System startup")
     log_lvl = logger_config.get("log_level", "INFO")
@@ -205,6 +267,7 @@ async def main():
             dht_warn_threshold=status_led_config.get("dht_warn_threshold", 3),
             dht_error_threshold=status_led_config.get("dht_error_threshold", 10),
             retry_delay_s=dht_config.get("retry_delay_s", 0.5),
+            write_queue=write_queue,
         )
     except Exception as e:
         logger.error("MAIN", f"DHTLogger init failed: {e}")
@@ -218,7 +281,10 @@ async def main():
             filename=f"/sd/{files_config.get('dht_log_base', 'dht_log.csv')}",
             max_retries=dht_config.get("max_retries", 3),
             retry_delay_s=dht_config.get("retry_delay_s", 0.5),
+            write_queue=write_queue,
         )
+
+    wdt.feed()  # Feed after DHTLogger init
 
     # Step 7: Create relay controllers with dependency injection
     fan_configs = [
@@ -242,6 +308,7 @@ async def main():
         )
         fans.append(fan)
     logger.info("MAIN", "Fan controllers initialized")
+    wdt.feed()  # Feed after fan controllers
     logger.debug(
         "MAIN",
         "Step 7a fans",
@@ -270,6 +337,8 @@ async def main():
         poll_s=light_config.get("poll_interval_s", 60),
     )
 
+    wdt.feed()  # Feed before buzzer (startup melody takes time)
+
     # Step 7c: Create buzzer controller
     buzzer_config = DEVICE_CONFIG.get("buzzer", {})
     buzzer = None
@@ -288,6 +357,7 @@ async def main():
                 },
             )
             await buzzer.startup()
+            wdt.feed()  # Feed after buzzer startup melody
             logger.debug(
                 "MAIN",
                 f"Buzzer GP{DEVICE_CONFIG['pins']['buzzer']}: patterns={list(buzzer.patterns.keys())}",
@@ -314,6 +384,7 @@ async def main():
     if status_led_config.get("post_enabled", True):
         post_step = status_led_config.get("post_step_ms", 150)
         await status_manager.run_post(step_ms=post_step, reminder_led=led_handler.led)
+        wdt.feed()  # Feed after POST
         print("[STARTUP] POST complete — all status LEDs verified")
 
     Service_config = DEVICE_CONFIG.get("Service_reminder", {})
@@ -328,6 +399,8 @@ async def main():
         auto_register_button=False,
         logger=logger,
     )
+
+    wdt.feed()  # Feed before OLED init (I2C scan + initial render can be slow)
 
     # Step 8b: Create OLED display controller
     display_config = DEVICE_CONFIG.get("display", {})
@@ -363,6 +436,7 @@ async def main():
                 menu_timeout_s=display_config.get("menu_timeout_s", 30),
                 display_timeout_s=display_config.get("display_timeout_s", 120),
             )
+            wdt.feed()  # Feed after OLED init
             logger.info("MAIN", f"OLED display initialized (on={oled.display_on})")
         except Exception as e:
             logger.warning("MAIN", f"OLED display init failed (non-critical): {e}")
@@ -388,6 +462,20 @@ async def main():
 
     # Step 9: Spawn all async tasks
     logger.info("MAIN", "Spawning async tasks...")
+
+    # Spawn watchdog feed task first (highest priority for system stability)
+    asyncio.create_task(feed_watchdog(wdt, wdt_feed_interval_ms, logger))
+    logger.debug("MAIN", "task spawned", task="feed_watchdog")
+
+    # Spawn write queue drain task (async SD write batching)
+    # Drain task is resilient and catches all exceptions internally (never dies)
+    asyncio.create_task(write_queue.start_drain_task())
+    logger.debug("MAIN", "task spawned", task="write_queue.start_drain_task")
+
+    # Spawn fallback pruning task (async file maintenance, decoupled from drain)
+    # Periodically trims fallback file when it exceeds max size limit
+    asyncio.create_task(buffer_manager.start_fallback_prune_task(check_interval=10))
+    logger.debug("MAIN", "task spawned", task="buffer_manager.start_fallback_prune_task")
 
     # Spawn fan cycle tasks
     for fan in fans:
@@ -426,14 +514,34 @@ async def main():
     while True:
         await asyncio.sleep(health_interval)
 
+        # Feed watchdog at start of health check (redundant with async task, but ensures feed during heavy I/O)
+        wdt.feed()
+
         # Heartbeat: toggle on-board LED to prove loop is alive
         status_manager.heartbeat_tick()
 
-        # Keep system.log bounded even when debug_to_file is enabled.
-        try:
-            logger.check_size()
-        except Exception as e:
-            logger.warning("MAIN", f"Log rotation check failed: {e}")
+        # System memory check
+        gc.collect()
+        if hasattr(gc, "mem_alloc") and hasattr(gc, "mem_free"):
+            mem_alloc = gc.mem_alloc()
+            mem_free = gc.mem_free()
+            used_pct = (mem_alloc / (mem_alloc + mem_free)) * 100 if (mem_alloc + mem_free) > 0 else 0
+        else:
+            # CPython gc does not expose mem_alloc/mem_free; keep health loop running.
+            used_pct = 0
+
+        warn_pct = status_led_config.get("mem_warning_pct", 80)
+        error_pct = status_led_config.get("mem_error_pct", 90)
+
+        if used_pct >= error_pct:
+            status_manager.set_error("mem_error", True)
+            status_manager.clear_warning("mem_warn")
+        elif used_pct >= warn_pct:
+            status_manager.set_warning("mem_warn", True)
+            status_manager.clear_error("mem_error")
+        else:
+            status_manager.clear_warning("mem_warn")
+            status_manager.clear_error("mem_error")
 
         # Periodic health checks
         metrics = buffer_manager.get_metrics()
@@ -448,6 +556,7 @@ async def main():
             migrations=metrics["fallback_migrations"],
             failures=metrics["write_failures"],
             buffered=buffered,
+            mem_used_pct=f"{used_pct:.1f}%",
         )
 
         load_snapshot = _get_runtime_load_snapshot()

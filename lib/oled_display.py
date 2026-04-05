@@ -15,6 +15,7 @@
 #   6: relays    – fan and growlight relay states
 #   7: co2       – CO2 status placeholder
 
+import gc
 import time
 
 import uasyncio as asyncio
@@ -435,10 +436,20 @@ class OLEDDisplay:
         date_str = now[:10] if len(now) >= 10 else now  # YYYY-MM-DD
         metrics = self._buffer_manager.get_metrics() if self._buffer_manager else {}
         buffered = metrics.get("buffer_entries", 0)
+
+        # Memory calculation
+        if hasattr(gc, "mem_alloc") and hasattr(gc, "mem_free"):
+            mem_alloc = gc.mem_alloc()
+            mem_free = gc.mem_free()
+            used_pct = (mem_alloc / (mem_alloc + mem_free)) * 100 if (mem_alloc + mem_free) > 0 else 0
+        else:
+            used_pct = 0
+
         self._row(date_str, 0)
         self._row(time_str, 1)
         self._row(f"Up: {self._uptime_str()}", 2)
         self._row(f"Buf:{buffered}", 3)
+        self._row(f"RAM: {used_pct:.1f}%", 4)
 
     def _render_relays(self) -> None:
         self._header("RELAYS")

@@ -1,5 +1,5 @@
 # Tests for main.py orchestration
-# Covers startup, task spawning, error paths, health-check loop
+# Covers startup, task spawning, error paths, health-check loop, watchdog
 
 import asyncio
 from unittest.mock import AsyncMock, Mock, patch
@@ -8,6 +8,111 @@ import pytest
 
 from config import DEVICE_CONFIG
 from tests.conftest import FAKE_LOCALTIME
+
+
+def _mock_create_task(coro):
+    """Test helper: consume coroutine objects when asyncio.create_task is monkeypatched."""
+    coro.close()
+    return Mock()
+
+
+def _capture_create_task(created_tasks):
+    """Return a create_task stub that records and closes coroutines."""
+
+    def _create_task(coro):
+        created_tasks.append(coro)
+        coro.close()
+        return Mock()
+
+    return _create_task
+
+
+@pytest.mark.asyncio
+class TestFeedWatchdog:
+    """Tests for feed_watchdog() async task."""
+
+    async def test_feed_watchdog_feeds_wdt(self, monkeypatch):
+        """feed_watchdog() calls wdt.feed() each iteration."""
+        import main as main_module
+
+        mock_wdt = Mock()
+        feed_count = 0
+
+        async def limited_sleep_ms(ms):
+            nonlocal feed_count
+            feed_count += 1
+            if feed_count >= 3:
+                raise asyncio.CancelledError()
+
+        monkeypatch.setattr(main_module.asyncio, "sleep_ms", limited_sleep_ms)
+
+        with pytest.raises(asyncio.CancelledError):
+            await main_module.feed_watchdog(mock_wdt, 1000)
+
+        assert mock_wdt.feed.call_count == 3
+
+    async def test_feed_watchdog_cancelled_logs_warning(self, monkeypatch):
+        """feed_watchdog() logs warning on CancelledError."""
+        import main as main_module
+
+        mock_wdt = Mock()
+        mock_logger = Mock()
+
+        async def raise_cancelled(ms):
+            raise asyncio.CancelledError()
+
+        monkeypatch.setattr(main_module.asyncio, "sleep_ms", raise_cancelled)
+
+        with pytest.raises(asyncio.CancelledError):
+            await main_module.feed_watchdog(mock_wdt, 1000, logger=mock_logger)
+
+        mock_logger.warning.assert_called_once()
+        assert "cancelled" in str(mock_logger.warning.call_args).lower()
+
+    async def test_feed_watchdog_error_continues(self, monkeypatch):
+        """feed_watchdog() continues after unexpected exception (no logging to avoid blocking)."""
+        import main as main_module
+
+        mock_wdt = Mock()
+        mock_wdt.feed.side_effect = [RuntimeError("WDT failure"), None, None]
+
+        iteration = 0
+
+        async def limited_sleep_ms(ms):
+            nonlocal iteration
+            iteration += 1
+            if iteration >= 3:
+                raise asyncio.CancelledError()
+
+        monkeypatch.setattr(main_module.asyncio, "sleep_ms", limited_sleep_ms)
+
+        # Should continue despite error (no crash)
+        with pytest.raises(asyncio.CancelledError):
+            await main_module.feed_watchdog(mock_wdt, 1000)
+
+        # Verify it attempted to feed 3 times (first failed, next two succeeded)
+        assert mock_wdt.feed.call_count == 3
+
+    async def test_feed_watchdog_no_logger(self, monkeypatch):
+        """feed_watchdog() works without logger (no crash on error)."""
+        import main as main_module
+
+        mock_wdt = Mock()
+        mock_wdt.feed.side_effect = RuntimeError("WDT failure")
+
+        iteration = 0
+
+        async def limited_sleep_ms(ms):
+            nonlocal iteration
+            iteration += 1
+            if iteration >= 2:
+                raise asyncio.CancelledError()
+
+        monkeypatch.setattr(main_module.asyncio, "sleep_ms", limited_sleep_ms)
+
+        # Should not crash even with error and no logger
+        with pytest.raises(asyncio.CancelledError):
+            await main_module.feed_watchdog(mock_wdt, 1000, logger=None)
 
 
 @pytest.mark.asyncio
@@ -76,7 +181,7 @@ class TestMainStartup:
         monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: Mock(run_post=AsyncMock(return_value=True)))
 
         created_tasks = []
-        monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: created_tasks.append(t) or Mock())
+        monkeypatch.setattr(main_module.asyncio, "create_task", _capture_create_task(created_tasks))
 
         call_count = 0
 
@@ -243,7 +348,7 @@ class TestMainHealthCheck:
         mock_buzzer.startup = AsyncMock()
         monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
         monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: Mock(run_post=AsyncMock(return_value=True)))
-        monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: Mock())
+        monkeypatch.setattr(main_module.asyncio, "create_task", _mock_create_task)
 
         call_count = 0
 
@@ -299,7 +404,7 @@ class TestMainHealthCheck:
         mock_buzzer.startup = AsyncMock()
         monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
         monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: Mock(run_post=AsyncMock(return_value=True)))
-        monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: Mock())
+        monkeypatch.setattr(main_module.asyncio, "create_task", _mock_create_task)
 
         call_count = 0
 
@@ -354,7 +459,7 @@ class TestMainHealthCheck:
         mock_buzzer.startup = AsyncMock()
         monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
         monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: Mock(run_post=AsyncMock(return_value=True)))
-        monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: Mock())
+        monkeypatch.setattr(main_module.asyncio, "create_task", _mock_create_task)
 
         call_count = 0
 
@@ -414,7 +519,7 @@ class TestMainHealthCheck:
         mock_buzzer.startup = AsyncMock()
         monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
         monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: Mock(run_post=AsyncMock(return_value=True)))
-        monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: Mock())
+        monkeypatch.setattr(main_module.asyncio, "create_task", _mock_create_task)
 
         call_count = 0
 
@@ -468,7 +573,7 @@ class TestMainHealthCheck:
         mock_buzzer.startup = AsyncMock()
         monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
         monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: Mock(run_post=AsyncMock(return_value=True)))
-        monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: Mock())
+        monkeypatch.setattr(main_module.asyncio, "create_task", _mock_create_task)
 
         sleep_durations = []
 
@@ -545,7 +650,7 @@ class TestMainHealthCheck:
         mock_buzzer.startup = AsyncMock()
         monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
         monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: Mock(run_post=AsyncMock(return_value=True)))
-        monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: Mock())
+        monkeypatch.setattr(main_module.asyncio, "create_task", _mock_create_task)
 
         sleep_durations = []
 
@@ -610,7 +715,7 @@ class TestMainInitFailures:
         mock_buzzer.startup = AsyncMock()
         monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
         monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: Mock(run_post=AsyncMock(return_value=True)))
-        monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: Mock())
+        monkeypatch.setattr(main_module.asyncio, "create_task", _mock_create_task)
 
         async def stop_sleep(duration):
             raise asyncio.CancelledError()
@@ -662,7 +767,7 @@ class TestMainInitFailures:
 
         mock_sm = Mock(run_post=AsyncMock(return_value=True))
         monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: mock_sm)
-        monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: Mock())
+        monkeypatch.setattr(main_module.asyncio, "create_task", _mock_create_task)
 
         async def stop_sleep(duration):
             raise asyncio.CancelledError()
@@ -716,7 +821,7 @@ class TestMainInitFailures:
 
         mock_sm = Mock(run_post=AsyncMock(return_value=True))
         monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: mock_sm)
-        monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: Mock())
+        monkeypatch.setattr(main_module.asyncio, "create_task", _mock_create_task)
 
         async def stop_sleep(duration):
             raise asyncio.CancelledError()
@@ -767,7 +872,7 @@ class TestMainInitFailures:
 
         mock_sm = Mock(run_post=AsyncMock(return_value=True))
         monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: mock_sm)
-        monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: Mock())
+        monkeypatch.setattr(main_module.asyncio, "create_task", _mock_create_task)
 
         async def stop_sleep(duration):
             raise asyncio.CancelledError()

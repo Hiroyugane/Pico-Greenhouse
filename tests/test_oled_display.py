@@ -273,6 +273,184 @@ class TestOLEDDisplayTimeout:
 
 
 # ---------------------------------------------------------------------------
+# TestOLEDDisplayAdditionalCoverage
+# ---------------------------------------------------------------------------
+
+
+class TestOLEDDisplayAdditionalCoverage:
+    def _make_display(
+        self,
+        mock_i2c,
+        time_provider,
+        dht_logger,
+        buffer_manager,
+        mock_status_manager,
+        mock_reminder,
+        fan_controller,
+        growlight_controller,
+        logger,
+    ):
+        return OLEDDisplay(
+            i2c=mock_i2c,
+            time_provider=time_provider,
+            dht_logger=dht_logger,
+            buffer_manager=buffer_manager,
+            status_manager=mock_status_manager,
+            reminder=mock_reminder,
+            fans=[fan_controller],
+            growlight=growlight_controller,
+            sd_remount_cb=Mock(),
+            start_time_ms=0,
+            logger=logger,
+            width=128,
+            height=64,
+            i2c_address=0x3C,
+            refresh_interval_s=5,
+            stats_window_s=3600,
+            menu_timeout_s=30,
+        )
+
+    def test_init_logs_with_print_when_logger_missing(
+        self,
+        mock_i2c,
+        time_provider,
+        dht_logger,
+        buffer_manager,
+        mock_status_manager,
+        mock_reminder,
+        fan_controller,
+        growlight_controller,
+    ):
+        with patch("builtins.print") as print_mock:
+            display = self._make_display(
+                mock_i2c,
+                time_provider,
+                dht_logger,
+                buffer_manager,
+                mock_status_manager,
+                mock_reminder,
+                fan_controller,
+                growlight_controller,
+                logger=None,
+            )
+        assert display.display_on is True
+        assert isinstance(print_mock, Mock)
+        assert print_mock.call_count >= 1
+
+    def test_next_menu_wakes_display_if_inactive(self, oled_display):
+        oled_display._display_active = False
+        oled_display._turn_on_display = Mock()
+        oled_display.next_menu()
+        oled_display._turn_on_display.assert_called_once()
+
+    def test_long_press_wakes_display_if_inactive(self, oled_display):
+        oled_display.current_menu = MENUS.index("system")
+        oled_display._display_active = False
+        oled_display._turn_on_display = Mock()
+        oled_display.long_press_action()
+        oled_display._turn_on_display.assert_called_once()
+
+    def test_render_prints_error_when_no_logger(self, oled_display):
+        oled_display._logger = None
+        oled_display._oled.fill = Mock(side_effect=RuntimeError("fill failed"))
+        with patch("builtins.print") as print_mock:
+            oled_display.render()
+        assert isinstance(print_mock, Mock)
+        print_mock.assert_called_once()
+
+    async def test_refresh_loop_turns_off_display_after_timeout(self, oled_display):
+        oled_display._display_timeout_s = 1
+        oled_display._last_activity_ms = 0
+        oled_display._display_active = True
+        oled_display._turn_off_display = Mock()
+
+        async def _fake_sleep(s):
+            raise RuntimeError("stop")
+
+        with patch("lib.oled_display._ticks_ms", return_value=2000):
+            with patch("lib.oled_display.asyncio.sleep", side_effect=_fake_sleep):
+                with pytest.raises(RuntimeError, match="stop"):
+                    await oled_display.refresh_loop()
+
+        oled_display._turn_off_display.assert_called_once()
+
+    def test_turn_off_display_warning_on_error(self, oled_display, mock_event_logger):
+        oled_display._display_active = True
+        oled_display._logger = mock_event_logger
+        oled_display._oled.fill = Mock(side_effect=RuntimeError("off error"))
+        oled_display._turn_off_display()
+        mock_event_logger.warning.assert_called()
+
+    def test_turn_on_display_warning_on_error(self, oled_display, mock_event_logger):
+        oled_display._display_active = False
+        oled_display._logger = mock_event_logger
+        with patch("lib.oled_display._ticks_ms", side_effect=RuntimeError("tick error")):
+            oled_display._turn_on_display()
+        mock_event_logger.warning.assert_called()
+
+    def test_clear_display_swallows_driver_errors(self, oled_display):
+        oled_display._oled.fill = Mock(side_effect=RuntimeError("clear failed"))
+        oled_display._clear_display()
+
+    def test_header_and_row_noop_when_no_oled(self, oled_display):
+        oled_display._oled = None
+        oled_display._header("TITLE")
+        oled_display._row("row", 1)
+
+    def test_fmt_f_and_uptime_branches(self, oled_display):
+        assert oled_display._fmt_f(12.34, 1) == "12.3"
+
+        with patch("lib.oled_display._ticks_ms", return_value=2 * 3600 * 1000):
+            oled_display._start_time_ms = 0
+            assert "2h" in oled_display._uptime_str()
+
+        with patch("lib.oled_display._ticks_ms", return_value=59 * 1000):
+            oled_display._start_time_ms = 0
+            assert oled_display._uptime_str().endswith("59s")
+
+    def test_render_service_without_reminder(self, oled_display):
+        oled_display._reminder = None
+        oled_display._row = Mock()
+        oled_display._render_service()
+        oled_display._row.assert_any_call("No reminder", 0)
+
+    def test_render_sd_success_path(self, oled_display, mock_status_manager):
+        oled_display._status_manager = mock_status_manager
+        oled_display._status_manager._sd_healthy = False
+        oled_display._row = Mock()
+        with patch("os.statvfs", return_value=(1024, 0, 2048, 1024), create=True):
+            oled_display._render_sd()
+        oled_display._row.assert_any_call("UNMOUNTED", 0)
+        oled_display._row.assert_any_call("Used: 1MB", 1)
+        oled_display._row.assert_any_call("Free: 1MB", 2)
+
+    def test_render_alerts_branches_and_system_memory(self, oled_display):
+        oled_display._row = Mock()
+
+        status_with_alerts = {
+            "errors": ["ERR1", "ERR2", "ERR3"],
+            "warnings": ["WRN1", "WRN2", "WRN3"],
+        }
+        oled_display._status_manager.get_status = Mock(return_value=status_with_alerts)
+        oled_display._render_alerts()
+
+        oled_display._status_manager = None
+        oled_display._render_alerts()
+        oled_display._row.assert_any_call("No data", 0)
+
+        with patch("lib.oled_display.gc.mem_alloc", return_value=25, create=True):
+            with patch("lib.oled_display.gc.mem_free", return_value=75, create=True):
+                oled_display._buffer_manager.get_metrics = Mock(return_value={"buffer_entries": 3})
+                oled_display._time_provider.now_timestamp = Mock(return_value="2026-04-05 12:34:56")
+                oled_display._render_system()
+
+        ram_rows = [
+            call.args[0] for call in oled_display._row.call_args_list if call.args and isinstance(call.args[0], str)
+        ]
+        assert any(r.startswith("RAM: 25.0%") for r in ram_rows)
+
+
+# ---------------------------------------------------------------------------
 # TestDHTLoggerStats  (unit tests for new stats methods)
 # ---------------------------------------------------------------------------
 

@@ -1,7 +1,7 @@
 # Tests for rtc_set_time.py
 # Covers dec_to_bcd, get_weekday, and build_time_data
 
-from rtc_set_time import build_time_data, dec_to_bcd, get_weekday
+from prototypes.rtc_set_time import build_time_data, dec_to_bcd, get_weekday
 
 
 class TestDecToBcd:

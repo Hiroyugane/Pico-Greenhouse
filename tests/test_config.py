@@ -313,6 +313,71 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["system"]["button_poll_ms"] = original
 
+    def test_watchdog_timeout_too_small_raises(self):
+        """system.watchdog_timeout_ms < 1000 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["system"]["watchdog_timeout_ms"]
+        config.DEVICE_CONFIG["system"]["watchdog_timeout_ms"] = 500
+        try:
+            with pytest.raises(ValueError, match="watchdog_timeout_ms"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["system"]["watchdog_timeout_ms"] = original
+
+    def test_watchdog_timeout_exceeds_hw_limit_raises(self):
+        """system.watchdog_timeout_ms > 8388 raises ValueError (RP2040 limit)."""
+        import config
+
+        original = config.DEVICE_CONFIG["system"]["watchdog_timeout_ms"]
+        config.DEVICE_CONFIG["system"]["watchdog_timeout_ms"] = 9000
+        try:
+            with pytest.raises(ValueError, match="watchdog_timeout_ms"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["system"]["watchdog_timeout_ms"] = original
+
+    def test_watchdog_feed_interval_zero_raises(self):
+        """system.watchdog_feed_interval_ms = 0 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["system"]["watchdog_feed_interval_ms"]
+        config.DEVICE_CONFIG["system"]["watchdog_feed_interval_ms"] = 0
+        try:
+            with pytest.raises(ValueError, match="watchdog_feed_interval_ms"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["system"]["watchdog_feed_interval_ms"] = original
+
+    def test_watchdog_feed_interval_exceeds_timeout_raises(self):
+        """system.watchdog_feed_interval_ms >= watchdog_timeout_ms raises ValueError."""
+        import config
+
+        orig_feed = config.DEVICE_CONFIG["system"]["watchdog_feed_interval_ms"]
+        orig_timeout = config.DEVICE_CONFIG["system"]["watchdog_timeout_ms"]
+        config.DEVICE_CONFIG["system"]["watchdog_timeout_ms"] = 5000
+        config.DEVICE_CONFIG["system"]["watchdog_feed_interval_ms"] = 5000
+        try:
+            with pytest.raises(ValueError, match="watchdog_feed_interval_ms must be < watchdog_timeout_ms"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["system"]["watchdog_feed_interval_ms"] = orig_feed
+            config.DEVICE_CONFIG["system"]["watchdog_timeout_ms"] = orig_timeout
+
+    def test_watchdog_valid_config(self):
+        """Valid watchdog config passes validation."""
+        import config
+
+        orig_feed = config.DEVICE_CONFIG["system"]["watchdog_feed_interval_ms"]
+        orig_timeout = config.DEVICE_CONFIG["system"]["watchdog_timeout_ms"]
+        config.DEVICE_CONFIG["system"]["watchdog_timeout_ms"] = 8000
+        config.DEVICE_CONFIG["system"]["watchdog_feed_interval_ms"] = 2000
+        try:
+            assert config.validate_config() is True
+        finally:
+            config.DEVICE_CONFIG["system"]["watchdog_feed_interval_ms"] = orig_feed
+            config.DEVICE_CONFIG["system"]["watchdog_timeout_ms"] = orig_timeout
+
     def test_invalid_log_level_raises(self):
         """event_logger.log_level with invalid value raises ValueError."""
         import config

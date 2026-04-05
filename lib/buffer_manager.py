@@ -35,6 +35,7 @@ class BufferManager:
         sd_mount_point="/sd",
         fallback_path="/local/fallback.csv",
         max_buffer_entries=1000,
+        max_fallback_size_kb=50,
         debug_callback=None,
         logger=None,
     ):
@@ -48,6 +49,7 @@ class BufferManager:
             sd_mount_point (str): Mount point for SD card (default: '/sd')
             fallback_path (str): Local fallback file path (default: '/local/fallback.csv')
             max_buffer_entries (int): Max in-memory buffer size (default: 1000)
+            max_fallback_size_kb (int): Emergency fallback file size limit in KB (default: 50)
             debug_callback: Optional callable(str) for debug output (avoids circular dep with EventLogger)
             logger: Optional EventLogger for debug/diagnostic messages (default: None)
         """
@@ -59,6 +61,7 @@ class BufferManager:
         self.sd_mount_point = sd_mount_point
         self.fallback_path = fallback_path
         self.max_buffer_entries = max_buffer_entries
+        self.max_fallback_size_kb = max_fallback_size_kb
         self._debug = debug_callback
         self._logger = logger
 
@@ -477,7 +480,6 @@ class BufferManager:
             with open(self.fallback_path, "a") as f:
                 f.write(f"{relpath}|{data}")  # Include relpath in fallback for migration
             self.writes_to_fallback += 1
-            self._auto_migration_allowed = True
             self._log_debug(
                 "write completed",
                 tier="fallback",
@@ -691,6 +693,100 @@ class BufferManager:
             self._log_debug(f"Migration failed: {e}")
             return 0
 
+    async def start_fallback_prune_task(self, check_interval=10) -> None:
+        """
+        Async task to periodically prune fallback file when it exceeds max size limit.
+
+        Runs in background, checking every check_interval seconds. When fallback
+        exceeds max size, removes oldest entries and keeps only newest entries.
+
+        This is decoupled from the drain task to prevent file I/O from blocking
+        the event loop during normal drain operations.
+
+        Args:
+            check_interval (int): Seconds between pruning checks (default: 10)
+        """
+        # Import asyncio here to allow the module to work in both MicroPython and CPython
+        try:
+            import asyncio
+        except ImportError:
+            import uasyncio as asyncio
+
+        while True:
+            try:
+                await asyncio.sleep(check_interval)
+
+                max_bytes = self.max_fallback_size_kb * 1024
+                file_size = self._get_file_size(self.fallback_path)
+
+                if file_size is None or file_size < max_bytes:
+                    continue  # Within limit, no pruning needed
+
+                # File exceeds max; read, trim oldest entries, rewrite
+                try:
+                    with open(self.fallback_path, "r") as f:
+                        lines = f.readlines()
+                except Exception:
+                    continue  # Can't read fallback, skip this cycle
+
+                if not lines:
+                    continue
+
+                # Log warning: fallback is getting dangerously large
+                self._log_debug(
+                    "fallback size warning",
+                    current_bytes=file_size,
+                    max_bytes=max_bytes,
+                    line_count=len(lines),
+                )
+                if self._logger:
+                    self._logger.warning(
+                        "BufferMgr",
+                        f"Fallback file size {file_size // 1024}KB exceeds {self.max_fallback_size_kb}KB; pruning oldest entries",  # noqa: E501
+                    )
+
+                # Remove oldest entries until file is below target (80% of max)
+                target_bytes = int(max_bytes * 0.8)
+                current_size = file_size
+
+                kept_lines = []
+                for line in reversed(lines):  # Start from newest
+                    line_bytes = len(line.encode() if isinstance(line, str) else line)
+                    if current_size - line_bytes > target_bytes:
+                        current_size -= line_bytes
+                    else:
+                        kept_lines.append(line)
+
+                # Rewrite fallback with only kept (newest) entries
+                try:
+                    with open(self.fallback_path, "w") as f:
+                        for line in reversed(kept_lines):
+                            f.write(line)
+
+                    pruned_count = len(lines) - len(kept_lines)
+                    self._log_debug(
+                        "fallback pruned",
+                        removed_lines=pruned_count,
+                        kept_lines=len(kept_lines),
+                        new_size=current_size,
+                    )
+                    if self._logger:
+                        self._logger.info(
+                            "BufferMgr",
+                            f"Pruned {pruned_count} oldest entries from fallback ({len(kept_lines)} remaining)",
+                        )
+                except Exception as e:
+                    self._log_debug("fallback prune write failed", error=str(e))
+            except asyncio.CancelledError:
+                if self._logger:
+                    self._logger.warning("BufferMgr", "Fallback prune task cancelled")
+                raise
+            except Exception as e:
+                # Log error but continue looping to avoid task death
+                self._log_debug("fallback prune error", error=str(e))
+                if self._logger:
+                    self._logger.error("BufferMgr", f"Unexpected error in fallback prune task: {e}")
+
     def rename(self, old_relpath: str, new_relpath: str) -> bool:
         """
         Rename a file on the primary (SD) storage.
@@ -771,6 +867,26 @@ class BufferManager:
             return size
         except Exception:
             self._log_debug("get_primary_file_size unavailable", relpath=relpath)
+            return None
+
+    def _get_file_size(self, path: str):
+        """
+        Return file size in bytes for any file path, or None if unavailable.
+
+        Args:
+            path (str): Full file path
+
+        Returns:
+            int or None: File size in bytes, or None if stat fails
+        """
+        try:
+            st = os.stat(path)
+            # MicroPython returns a tuple; CPython returns an os.stat_result
+            if isinstance(st, tuple):
+                return int(st[6]) if len(st) > 6 else None
+            else:
+                return int(st.st_size)
+        except Exception:
             return None
 
     def get_metrics(self) -> dict:

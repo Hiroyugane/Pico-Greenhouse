@@ -40,10 +40,12 @@ class EventLogger:
     Dependencies injected:
     - time_provider: For consistent timestamp formatting
     - buffer_manager: For resilient writes (SD with fallback)
+    - write_queue: Optional WriteQueueManager for async write batching
 
     Attributes:
         time_provider: TimeProvider instance
         buffer_manager: BufferManager instance
+        write_queue: WriteQueueManager instance (optional for deferred writes)
         logfile: Path to system log file
         max_size: Max file size before rotation (bytes)
         buffer: In-memory buffer for log entries (flushed periodically)
@@ -66,6 +68,7 @@ class EventLogger:
         log_level: str = "INFO",
         debug_enabled: bool = False,
         debug_to_file: bool = False,
+        write_queue=None,
     ):
         """
         Initialize EventLogger with dependency injection.
@@ -86,9 +89,11 @@ class EventLogger:
             log_level (str): Minimum level to emit — "DEBUG", "INFO", "WARN", or "ERR" (default: "INFO")
             debug_enabled (bool): Enable debug messages to console (default: False)
             debug_to_file (bool): Also write debug messages to SD log (default: False)
+            write_queue: Optional WriteQueueManager for async write batching (default: None)
         """
         self.time_provider = time_provider
         self.buffer_manager = buffer_manager
+        self.write_queue = write_queue
         self.logfile = logfile
         self.max_size = max_size
         self.debug_max_size = debug_max_size
@@ -249,20 +254,22 @@ class EventLogger:
 
     def flush(self) -> None:
         """
-        Write all buffered log entries to storage via BufferManager.
+        Write all buffered log entries to storage via WriteQueue or BufferManager.
 
+        If write_queue is available, entries are enqueued for async batching (non-blocking).
+        Otherwise, entries are written directly to BufferManager (synchronous, may block).
         If BufferManager not yet available, logs to stdout only.
         Attempts primary (SD) write; falls back to fallback file if SD unavailable.
         """
         if not self.buffer:
             return
 
-        # If buffer_manager not yet initialized, skip persistent write
-        if self.buffer_manager is None:
+        # If neither write_queue nor buffer_manager available, skip persistent write
+        if self.write_queue is None and self.buffer_manager is None:
             count = len(self.buffer)
             self.buffer = []
             # Use raw print to avoid recursion
-            print(f"[EventLogger] flush: discarded {count} entries (no buffer_manager)")
+            print(f"[EventLogger] flush: discarded {count} entries (no storage)")
             return
 
         entry_count = len(self.buffer)
@@ -273,14 +280,22 @@ class EventLogger:
             # Batch all entries into one write to avoid N SD probes per flush
             # (one is_primary_available() call instead of one per entry).
             combined = "".join(self.buffer)
-            self.buffer_manager.write(relpath, combined)
+
+            # Use async write queue if available (non-blocking enqueue)
+            if self.write_queue is not None:
+                self.write_queue.enqueue_write(relpath, combined)
+            else:
+                # Otherwise use buffer_manager directly (synchronous write)
+                self.buffer_manager.write(relpath, combined)
+
             self._log_size += len(combined)
 
             self.flush_count += 1
             if self.debug_enabled:
+                write_mode = "queue" if self.write_queue else "direct"
                 print(
                     f"[EventLogger][DEBUG] flush complete | entries={entry_count} "
-                    f"relpath={relpath} flush_count={self.flush_count} log_size={self._log_size}"
+                    f"relpath={relpath} flush_count={self.flush_count} log_size={self._log_size} mode={write_mode}"
                 )
         except Exception as e:
             print(f"[EventLogger] WARNING: Error during flush: {e}")

@@ -119,22 +119,25 @@ DEVICE_CONFIG = {
         "rtc_max_year": 2035,  # Year above this → RTC invalid warning
         "post_enabled": True,  # Run LED power-on self-test at startup
         "post_step_ms": 150,  # Duration each LED stays on during POST walk (ms)
+        "mem_warning_pct": 80,  # RAM usage % above this → warning LED
+        "mem_error_pct": 90,  # RAM usage % above this → error LED
     },
     # Buffer Manager Configuration
     "buffer_manager": {
         "sd_mount_point": "/sd",
         "fallback_path": "/local/fallback.csv",
-        "max_buffer_entries": 200,  # Reduced from 1000 to limit RAM on Pico (264KB)
+        "max_buffer_entries": 150,  # Ring buffer cap (reduced from 200 to reduce RAM usage)
+        "max_fallback_size_kb": 50,  # Emergency fallback file size limit (KB); when exceeded, oldest entries are pruned
     },
     # Event Logger Configuration
     "event_logger": {
         "logfile": "/sd/system.log",
         "max_size": 1000000,  # Max log file size (bytes) before rotation
         "info_flush_threshold": 5,  # Flush after N info-level entries buffered
-        "warn_flush_threshold": 3,  # Flush after N warning-level entries buffered
+        "warn_flush_threshold": 1,  # Flush after N warning-level entries (1=immediate, like ERROR)
         "log_level": "INFO",  # Minimum severity: DEBUG, INFO, WARN, ERR
-        "debug_enabled": True,  # Enable DEBUG messages to console (zero-cost when disabled)
-        "debug_to_file": True,  # Also write DEBUG entries to SD log (caution: fills card)
+        "debug_enabled": False,  # Enable DEBUG messages to console (zero-cost when disabled)
+        "debug_to_file": False,  # Also write DEBUG entries to SD log (caution: fills card)
         "debug_flush_threshold": 10,  # Flush after N debug entries buffered (when debug_to_file=True)
         "debug_max_size": 1000000,  # Rotation threshold when debug_to_file=True (lower: debug spam fills log faster)
     },
@@ -201,6 +204,13 @@ DEVICE_CONFIG = {
         "sd_retry_delay_ms": 500,  # Delay between SD mount retries (ms)
         "rtc_sync_interval_s": 3600,  # RTC-to-Pico clock sync interval (seconds)
         "button_poll_ms": 50,  # Button ISR flag polling interval (ms)
+        "watchdog_timeout_ms": 8000,  # Watchdog timeout (ms); RP2040 max is ~8388ms
+        "watchdog_feed_interval_ms": 2000,  # Feed watchdog every N ms (must be < timeout)
+        # Write Queue Configuration (async SD write batching)
+        "write_queue_max_size": 500,  # Max queue entries before overflow to fallback
+        "queue_drain_interval_ms": 100,  # Milliseconds between drain cycles
+        "queue_batch_size": 5,  # Max writes per drain cycle
+        "sd_recovery_max_consecutive_failures": 5,  # Max failures before giving up in recovery attempt
     },
 }
 
@@ -273,7 +283,7 @@ def validate_config():
             "monitor_interval_s",
         ],
         "buzzer": ["enabled", "default_freq", "default_duty_pct"],
-        "buffer_manager": ["sd_mount_point", "fallback_path", "max_buffer_entries"],
+        "buffer_manager": ["sd_mount_point", "fallback_path", "max_buffer_entries", "max_fallback_size_kb"],
         "event_logger": [
             "logfile",
             "max_size",
@@ -303,6 +313,8 @@ def validate_config():
             "dht_error_threshold",
             "rtc_min_year",
             "rtc_max_year",
+            "mem_warning_pct",
+            "mem_error_pct",
         ],
         "display": [
             "type",
@@ -327,6 +339,12 @@ def validate_config():
             "sd_retry_delay_ms",
             "rtc_sync_interval_s",
             "button_poll_ms",
+            "watchdog_timeout_ms",
+            "watchdog_feed_interval_ms",
+            "write_queue_max_size",
+            "queue_drain_interval_ms",
+            "queue_batch_size",
+            "sd_recovery_max_consecutive_failures",
         ],
     }
 
@@ -359,6 +377,9 @@ def validate_config():
 
     if DEVICE_CONFIG["buffer_manager"]["max_buffer_entries"] <= 0:
         raise ValueError("buffer_manager.max_buffer_entries must be > 0")
+
+    if DEVICE_CONFIG["buffer_manager"]["max_fallback_size_kb"] < 10:
+        raise ValueError("buffer_manager.max_fallback_size_kb must be >= 10 (KB)")
 
     if DEVICE_CONFIG["event_logger"]["max_size"] <= 0:
         raise ValueError("event_logger.max_size must be > 0")
@@ -423,5 +444,27 @@ def validate_config():
 
     if sys_cfg["button_poll_ms"] <= 0:
         raise ValueError("system.button_poll_ms must be > 0")
+
+    if sys_cfg["watchdog_timeout_ms"] < 1000 or sys_cfg["watchdog_timeout_ms"] > 8388:
+        raise ValueError("system.watchdog_timeout_ms must be 1000-8388 (RP2040 hardware limit)")
+
+    if sys_cfg["watchdog_feed_interval_ms"] <= 0:
+        raise ValueError("system.watchdog_feed_interval_ms must be > 0")
+
+    if sys_cfg["watchdog_feed_interval_ms"] >= sys_cfg["watchdog_timeout_ms"]:
+        raise ValueError("system.watchdog_feed_interval_ms must be < watchdog_timeout_ms")
+
+    # Validate write queue configuration
+    if DEVICE_CONFIG["system"]["write_queue_max_size"] <= 0:
+        raise ValueError("system.write_queue_max_size must be > 0")
+
+    if DEVICE_CONFIG["system"]["queue_drain_interval_ms"] <= 0:
+        raise ValueError("system.queue_drain_interval_ms must be > 0")
+
+    if DEVICE_CONFIG["system"]["queue_batch_size"] <= 0:
+        raise ValueError("system.queue_batch_size must be > 0")
+
+    if DEVICE_CONFIG["system"]["sd_recovery_max_consecutive_failures"] <= 0:
+        raise ValueError("system.sd_recovery_max_consecutive_failures must be > 0")
 
     return True

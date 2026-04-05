@@ -15,6 +15,7 @@ import uasyncio as asyncio
 try:
     _ticks_ms = time.ticks_ms  # MicroPython
 except AttributeError:
+
     def _ticks_ms() -> int:  # CPython fallback
         return int(time.time() * 1000)
 
@@ -36,6 +37,7 @@ class DHTLogger:
     - time_provider: For timestamps and date-based rollover
     - buffer_manager: For all write operations (handles resilience)
     - logger: For event logging
+    - write_queue: Optional WriteQueueManager for async write batching
 
     Attributes:
         dht_sensor: DHT22 sensor instance
@@ -43,6 +45,7 @@ class DHTLogger:
         filename_base: CSV filename base
         time_provider: TimeProvider instance
         buffer_manager: BufferManager instance
+        write_queue: WriteQueueManager instance (optional for async writes)
         logger: EventLogger instance
         current_date: Current date (year, month, day) for rollover detection
         last_temperature: Cached temperature for thermostat queries
@@ -65,6 +68,7 @@ class DHTLogger:
         dht_error_threshold=10,
         retry_delay_s: float = 0.5,
         max_history: int = 120,
+        write_queue=None,
     ):
         """
         Initialize DHTLogger with dependency injection.
@@ -82,14 +86,14 @@ class DHTLogger:
             dht_error_threshold (int): Consecutive failures before error (default: 10)
             retry_delay_s (float): Delay between sensor read retries in seconds (default: 0.5)
             max_history (int): Maximum readings to keep for stats (default: 120)
+            write_queue: Optional WriteQueueManager for async write batching (default: None)
         """
         self.dht_sensor = dht.DHT22(machine.Pin(pin))
         self.interval = interval
-        self.filename_base = (
-            filename if filename.startswith("/sd/") else f"/sd/{filename}"
-        )
+        self.filename_base = filename if filename.startswith("/sd/") else f"/sd/{filename}"
         self.time_provider = time_provider
         self.buffer_manager = buffer_manager
+        self.write_queue = write_queue
         self.logger = logger
         self.max_retries = max_retries
         self.status_manager = status_manager
@@ -108,6 +112,9 @@ class DHTLogger:
         self._created_files = set()  # relpaths confirmed created this session
         # Bounded history for stats: list of (ticks_ms, temp, hum)
         self._readings_history = []
+        self._temp_stats = {"now": None, "hi": None, "lo": None, "avg": None, "count": 0}
+        self._hum_stats = {"now": None, "hi": None, "lo": None, "avg": None, "count": 0}
+        self._reset_stats()
 
         # Initialize filename with current date
         self._update_filename_for_date()
@@ -160,17 +167,13 @@ class DHTLogger:
         relpath = self._strip_sd_prefix(self.filename)
         # Fast path: already created this session (avoids unreliable FAT VFS check)
         if relpath in self._created_files:
-            self.logger.debug(
-                "DHTLogger", "file exists (created cache)", relpath=relpath
-            )
+            self.logger.debug("DHTLogger", "file exists (created cache)", relpath=relpath)
             return True
         exists = self.buffer_manager.has_data_for(relpath)
         if exists:
             # Cache the confirmed existence so a later SD outage won't re-trigger header creation
             self._created_files.add(relpath)
-        self.logger.debug(
-            "DHTLogger", "file exists check", relpath=relpath, found=exists
-        )
+        self.logger.debug("DHTLogger", "file exists check", relpath=relpath, found=exists)
         return exists
 
     def _resolve_path(self, file_path: str) -> str:
@@ -192,16 +195,12 @@ class DHTLogger:
         relpath = self._strip_sd_prefix(self.filename)
         self.logger.debug("DHTLogger", "creating CSV file", relpath=relpath)
         try:
-            wrote_to_primary = self.buffer_manager.write(
-                relpath, "Timestamp,Temperature,Humidity\n"
-            )
+            wrote_to_primary = self.buffer_manager.write(relpath, "Timestamp,Temperature,Humidity\n")
             self._created_files.add(relpath)
             if wrote_to_primary:
                 self.logger.debug("DHTLogger", f"Created CSV file: {self.filename}")
             else:
-                self.logger.debug(
-                    "DHTLogger", f"Created CSV header (fallback): {self.filename}"
-                )
+                self.logger.debug("DHTLogger", f"Created CSV header (fallback): {self.filename}")
         except Exception as e:
             self.logger.error("DHTLogger", f"Failed to create file: {e}")
             raise
@@ -241,9 +240,7 @@ class DHTLogger:
                         hum=hum,
                         attempt=attempt + 1,
                     )
-                    self.logger.warning(
-                        "DHTLogger", f"Reading out of range: {temp}°C, {hum}%"
-                    )
+                    self.logger.warning("DHTLogger", f"Reading out of range: {temp}°C, {hum}%")
             except Exception as e:
                 self.logger.debug(
                     "DHTLogger",
@@ -278,15 +275,11 @@ class DHTLogger:
             err_thresh=self._dht_error_threshold,
         )
         if self._consecutive_failures >= self._dht_error_threshold:
-            self.logger.debug(
-                "DHTLogger", f"Status: error (failures={self._consecutive_failures})"
-            )
+            self.logger.debug("DHTLogger", f"Status: error (failures={self._consecutive_failures})")
             self.status_manager.set_error("dht_dead", True)
             self.status_manager.set_warning("dht_intermittent", False)
         elif self._consecutive_failures >= self._dht_warn_threshold:
-            self.logger.debug(
-                "DHTLogger", f"Status: warning (failures={self._consecutive_failures})"
-            )
+            self.logger.debug("DHTLogger", f"Status: warning (failures={self._consecutive_failures})")
             self.status_manager.set_warning("dht_intermittent", True)
             self.status_manager.set_error("dht_dead", False)
         else:
@@ -310,16 +303,9 @@ class DHTLogger:
                     old_date=str(self.current_date),
                     new_date=str(current_date),
                 )
-                old_filename = self.filename
+
                 self._update_filename_for_date()
-
-                if not self._file_exists():
-                    self._create_file()
-
-                self.logger.info(
-                    "DHTLogger",
-                    f"Date changed - switched from {old_filename} to {self.filename}",
-                )
+                self._reset_stats()
                 return True
 
             self.logger.debug("DHTLogger", "Date rollover check: no change")
@@ -371,13 +357,13 @@ class DHTLogger:
                     if len(self._readings_history) > self._max_history:
                         self._readings_history.pop(0)
 
+                    self._update_stats(temp, hum)
+
                     timestamp = self.time_provider.now_timestamp()
                     relpath = self._strip_sd_prefix(self.filename)
                     row = f"{timestamp},{temp:.1f},{hum:.1f}\n"
 
-                    self.logger.debug(
-                        "DHTLogger", f"Writing row to {relpath}: {row.rstrip()}"
-                    )
+                    self.logger.debug("DHTLogger", f"Writing row to {relpath}: {row.rstrip()}")
 
                     # Ensure CSV file exists on SD (recreate header if
                     # init-time creation failed, e.g. SD timing issues).
@@ -391,10 +377,19 @@ class DHTLogger:
                             )
                             pass  # write() below will route to fallback
 
-                    # Write to storage via BufferManager
+                    # Write to storage via WriteQueue (async) or BufferManager (direct)
+                    # If write_queue available: enqueue non-blocking (~50µs), batch drain in background
+                    # Otherwise: write directly via buffer_manager (synchronous, may block 1-2s)
                     # BufferManager handles: primary → fallback → in-memory buffer
                     try:
-                        wrote_primary = self.buffer_manager.write(relpath, row)
+                        if self.write_queue is not None:
+                            # Async queue: non-blocking enqueue
+                            self.write_queue.enqueue_write(relpath, row)
+                            wrote_primary = True  # Assume write will succeed (queue handles fallback)
+                        else:
+                            # Synchronous write
+                            wrote_primary = self.buffer_manager.write(relpath, row)
+
                         self.logger.debug(
                             "DHTLogger",
                             "log iteration",
@@ -405,7 +400,7 @@ class DHTLogger:
                             read_failures=self.read_failures,
                             write_failures=self.write_failures,
                         )
-                        if not wrote_primary:
+                        if not wrote_primary and self.write_queue is None:
                             self.logger.warning(
                                 "DHTLogger",
                                 f"Write went to fallback (SD unavailable?) for {relpath}",
@@ -414,9 +409,7 @@ class DHTLogger:
                         self.logger.error("DHTLogger", f"Failed to write: {e}")
                         self.write_failures += 1
                 else:
-                    self.logger.warning(
-                        "DHTLogger", f"Sensor read failed (total: {self.read_failures})"
-                    )
+                    self.logger.warning("DHTLogger", f"Sensor read failed (total: {self.read_failures})")
 
                 self.logger.check_size()
                 await asyncio.sleep(self.interval)
@@ -426,9 +419,7 @@ class DHTLogger:
                 self.logger.warning("DHTLogger", "Log loop cancelled")
                 raise
             except Exception as e:
-                self.logger.debug(
-                    "DHTLogger", "unexpected error in log loop", error=str(e)
-                )
+                self.logger.debug("DHTLogger", "unexpected error in log loop", error=str(e))
                 self.logger.error("DHTLogger", f"Unexpected error: {e}")
                 await asyncio.sleep(1)
 
@@ -438,12 +429,12 @@ class DHTLogger:
             return path[4:]
         return path
 
-    def get_stats(self, window_s: int = 3600) -> dict:
+    def get_stats(self, window_s=None) -> dict:
         """
-        Return temperature/humidity statistics over the last ``window_s`` seconds.
+        Return temperature/humidity statistics.
 
-        Args:
-            window_s (int): Look-back window in seconds (default: 3600 = 1 hour)
+        When ``window_s`` is provided, stats are computed from in-memory
+        history entries that fall within the trailing time window.
 
         Returns:
             dict: {
@@ -458,38 +449,87 @@ class DHTLogger:
                 'count': int,
             }
         """
-        now_ms = _ticks_ms()
-        cutoff_ms = now_ms - window_s * 1000
-        # Filter history within window (handles ticks_ms wrap-around gracefully on host)
-        window = [(ts, t, h) for ts, t, h in self._readings_history if ts >= cutoff_ms]
+        if window_s is not None:
+            cutoff_ms = _ticks_ms() - max(int(window_s), 0) * 1000
+            window = [entry for entry in self._readings_history if entry[0] >= cutoff_ms]
 
-        if not window:
+            if window:
+                temps = [entry[1] for entry in window]
+                hums = [entry[2] for entry in window]
+                temp_now = self.last_temperature if self.last_temperature is not None else temps[-1]
+                hum_now = self.last_humidity if self.last_humidity is not None else hums[-1]
+                return {
+                    "temp_now": temp_now,
+                    "temp_hi": max(temps),
+                    "temp_lo": min(temps),
+                    "temp_avg": sum(temps) / len(temps),
+                    "hum_now": hum_now,
+                    "hum_hi": max(hums),
+                    "hum_lo": min(hums),
+                    "hum_avg": sum(hums) / len(hums),
+                    "count": len(window),
+                }
+
             return {
                 "temp_now": self.last_temperature,
-                "temp_hi": self.last_temperature,
-                "temp_lo": self.last_temperature,
-                "temp_avg": self.last_temperature,
+                "temp_hi": None,
+                "temp_lo": None,
+                "temp_avg": None,
                 "hum_now": self.last_humidity,
-                "hum_hi": self.last_humidity,
-                "hum_lo": self.last_humidity,
-                "hum_avg": self.last_humidity,
+                "hum_hi": None,
+                "hum_lo": None,
+                "hum_avg": None,
                 "count": 0,
             }
 
-        temps = [t for _, t, _ in window]
-        hums = [h for _, _, h in window]
         return {
-            "temp_now": self.last_temperature,
-            "temp_hi": max(temps),
-            "temp_lo": min(temps),
-            "temp_avg": sum(temps) / len(temps),
-            "hum_now": self.last_humidity,
-            "hum_hi": max(hums),
-            "hum_lo": min(hums),
-            "hum_avg": sum(hums) / len(hums),
-            "count": len(window),
+            "temp_now": self._temp_stats["now"],
+            "temp_hi": self._temp_stats["hi"],
+            "temp_lo": self._temp_stats["lo"],
+            "temp_avg": self._temp_stats["avg"],
+            "hum_now": self._hum_stats["now"],
+            "hum_hi": self._hum_stats["hi"],
+            "hum_lo": self._hum_stats["lo"],
+            "hum_avg": self._hum_stats["avg"],
+            "count": self._temp_stats["count"],
         }
 
     def clear_history(self) -> None:
         """Clear all in-memory reading history (used by OLED long-press action)."""
         self._readings_history.clear()
+
+    def _reset_stats(self):
+        self._temp_stats = {"now": None, "hi": None, "lo": None, "avg": None, "count": 0}
+        self._hum_stats = {"now": None, "hi": None, "lo": None, "avg": None, "count": 0}
+
+    def _update_stats(self, temp, hum):
+        # Update temperature stats
+        if self._temp_stats["hi"] is None or temp > self._temp_stats["hi"]:
+            self._temp_stats["hi"] = temp
+        if self._temp_stats["lo"] is None or temp < self._temp_stats["lo"]:
+            self._temp_stats["lo"] = temp
+
+        # Update humidity stats
+        if self._hum_stats["hi"] is None or hum > self._hum_stats["hi"]:
+            self._hum_stats["hi"] = hum
+        if self._hum_stats["lo"] is None or hum < self._hum_stats["lo"]:
+            self._hum_stats["lo"] = hum
+
+        # Update averages
+        if self._temp_stats["avg"] is None:
+            self._temp_stats["avg"] = temp
+        else:
+            # Simple moving average
+            count = self._temp_stats["count"]
+            self._temp_stats["avg"] = (self._temp_stats["avg"] * count + temp) / (count + 1)
+
+        if self._hum_stats["avg"] is None:
+            self._hum_stats["avg"] = hum
+        else:
+            count = self._hum_stats["count"]
+            self._hum_stats["avg"] = (self._hum_stats["avg"] * count + hum) / (count + 1)
+
+        self._temp_stats["count"] += 1
+        self._hum_stats["count"] += 1
+        self._temp_stats["now"] = temp
+        self._hum_stats["now"] = hum

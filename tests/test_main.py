@@ -69,13 +69,12 @@ class TestFeedWatchdog:
         mock_logger.warning.assert_called_once()
         assert "cancelled" in str(mock_logger.warning.call_args).lower()
 
-    async def test_feed_watchdog_error_logs_and_continues(self, monkeypatch):
-        """feed_watchdog() logs error on unexpected exception and continues."""
+    async def test_feed_watchdog_error_continues(self, monkeypatch):
+        """feed_watchdog() continues after unexpected exception (no logging to avoid blocking)."""
         import main as main_module
 
         mock_wdt = Mock()
         mock_wdt.feed.side_effect = [RuntimeError("WDT failure"), None, None]
-        mock_logger = Mock()
 
         iteration = 0
 
@@ -87,12 +86,12 @@ class TestFeedWatchdog:
 
         monkeypatch.setattr(main_module.asyncio, "sleep_ms", limited_sleep_ms)
 
+        # Should continue despite error (no crash)
         with pytest.raises(asyncio.CancelledError):
-            await main_module.feed_watchdog(mock_wdt, 1000, logger=mock_logger)
+            await main_module.feed_watchdog(mock_wdt, 1000)
 
-        # Should have logged error for the first feed failure
-        mock_logger.error.assert_called_once()
-        assert "WDT failure" in str(mock_logger.error.call_args)
+        # Verify it attempted to feed 3 times (first failed, next two succeeded)
+        assert mock_wdt.feed.call_count == 3
 
     async def test_feed_watchdog_no_logger(self, monkeypatch):
         """feed_watchdog() works without logger (no crash on error)."""

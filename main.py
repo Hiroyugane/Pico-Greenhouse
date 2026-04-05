@@ -70,9 +70,19 @@ async def feed_watchdog(wdt, interval_ms, logger=None):
                 logger.warning("Watchdog", "Feed task cancelled")
             raise
         except Exception as e:
-            if logger:
-                logger.error("Watchdog", f"Feed error: {e}")
+            # Don't log here - logging can block and cause watchdog timeout
             await asyncio.sleep_ms(1000)
+
+
+# Module-level WDT reference for feeding during long operations
+_wdt = None
+
+
+def feed_wdt():
+    """Feed the watchdog timer during long synchronous operations."""
+    global _wdt
+    if _wdt is not None:
+        _wdt.feed()
 
 
 async def main():
@@ -94,10 +104,12 @@ async def main():
 
     # Step 1b: Initialize watchdog timer (early, before any other hardware)
     # If the system freezes during init or runtime, the watchdog will reset it.
+    global _wdt
     system_config = DEVICE_CONFIG.get("system", {})
-    wdt_timeout_ms = system_config.get("watchdog_timeout_ms", 60000)
-    wdt_feed_interval_ms = system_config.get("watchdog_feed_interval_ms", 20000)
+    wdt_timeout_ms = system_config.get("watchdog_timeout_ms", 8000)
+    wdt_feed_interval_ms = system_config.get("watchdog_feed_interval_ms", 2000)
     wdt = WDT(timeout=wdt_timeout_ms)
+    _wdt = wdt  # Store for feed_wdt() helper
     print(f"[STARTUP] Watchdog enabled: timeout={wdt_timeout_ms}ms, feed_interval={wdt_feed_interval_ms}ms")
 
     # Step 2: Initialize hardware
@@ -107,12 +119,14 @@ async def main():
     if logger_config.get("log_level", "INFO") == "DEBUG":
         _dbg_cb = lambda msg: print(f"[DEBUG] {msg}")  # noqa: E731
 
+    wdt.feed()  # Feed before hardware init
     hardware = HardwareFactory(DEVICE_CONFIG, debug_callback=_dbg_cb)
     if not hardware.setup():
         print("[STARTUP ERROR] Critical hardware initialization failed (RTC)")
         hardware.print_status()
         return
 
+    wdt.feed()  # Feed after hardware init
     hardware.print_status()
 
     # Step 3: Create TimeProvider (wraps RTC)
@@ -145,6 +159,8 @@ async def main():
     # Reflect initial SD state
     status_manager.set_sd_status(hardware.is_sd_mounted())
 
+    wdt.feed()  # Feed before buffer/logger init
+
     # Step 4: Create BufferManager
     buffer_config = DEVICE_CONFIG.get("buffer_manager", {})
     buffer_manager = BufferManager(
@@ -169,6 +185,8 @@ async def main():
         debug_enabled=logger_config.get("debug_enabled", False),
         debug_to_file=logger_config.get("debug_to_file", False),
     )
+
+    wdt.feed()  # Feed after logger init
 
     logger.info("MAIN", "System startup")
     log_lvl = logger_config.get("log_level", "INFO")
@@ -221,6 +239,8 @@ async def main():
             retry_delay_s=dht_config.get("retry_delay_s", 0.5),
         )
 
+    wdt.feed()  # Feed after DHTLogger init
+
     # Step 7: Create relay controllers with dependency injection
     fan_configs = [
         (DEVICE_CONFIG["pins"]["relay_fan_1"], DEVICE_CONFIG.get("fan_1", {}), "Fan_1"),
@@ -243,6 +263,7 @@ async def main():
         )
         fans.append(fan)
     logger.info("MAIN", "Fan controllers initialized")
+    wdt.feed()  # Feed after fan controllers
     logger.debug(
         "MAIN",
         "Step 7a fans",
@@ -271,6 +292,8 @@ async def main():
         poll_s=light_config.get("poll_interval_s", 60),
     )
 
+    wdt.feed()  # Feed before buzzer (startup melody takes time)
+
     # Step 7c: Create buzzer controller
     buzzer_config = DEVICE_CONFIG.get("buzzer", {})
     buzzer = None
@@ -289,6 +312,7 @@ async def main():
                 },
             )
             await buzzer.startup()
+            wdt.feed()  # Feed after buzzer startup melody
             logger.debug(
                 "MAIN",
                 f"Buzzer GP{DEVICE_CONFIG['pins']['buzzer']}: patterns={list(buzzer.patterns.keys())}",
@@ -315,6 +339,7 @@ async def main():
     if status_led_config.get("post_enabled", True):
         post_step = status_led_config.get("post_step_ms", 150)
         await status_manager.run_post(step_ms=post_step, reminder_led=led_handler.led)
+        wdt.feed()  # Feed after POST
         print("[STARTUP] POST complete — all status LEDs verified")
 
     Service_config = DEVICE_CONFIG.get("Service_reminder", {})
@@ -329,6 +354,8 @@ async def main():
         auto_register_button=False,
         logger=logger,
     )
+
+    wdt.feed()  # Feed before OLED init (I2C scan + initial render can be slow)
 
     # Step 8b: Create OLED display controller
     display_config = DEVICE_CONFIG.get("display", {})
@@ -364,6 +391,7 @@ async def main():
                 menu_timeout_s=display_config.get("menu_timeout_s", 30),
                 display_timeout_s=display_config.get("display_timeout_s", 120),
             )
+            wdt.feed()  # Feed after OLED init
             logger.info("MAIN", f"OLED display initialized (on={oled.display_on})")
         except Exception as e:
             logger.warning("MAIN", f"OLED display init failed (non-critical): {e}")
@@ -430,6 +458,9 @@ async def main():
 
     while True:
         await asyncio.sleep(health_interval)
+
+        # Feed watchdog at start of health check (redundant with async task, but ensures feed during heavy I/O)
+        wdt.feed()
 
         # Heartbeat: toggle on-board LED to prove loop is alive
         status_manager.heartbeat_tick()

@@ -325,6 +325,18 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["system"]["watchdog_timeout_ms"] = original
 
+    def test_watchdog_timeout_exceeds_hw_limit_raises(self):
+        """system.watchdog_timeout_ms > 8388 raises ValueError (RP2040 limit)."""
+        import config
+
+        original = config.DEVICE_CONFIG["system"]["watchdog_timeout_ms"]
+        config.DEVICE_CONFIG["system"]["watchdog_timeout_ms"] = 9000
+        try:
+            with pytest.raises(ValueError, match="watchdog_timeout_ms"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["system"]["watchdog_timeout_ms"] = original
+
     def test_watchdog_feed_interval_zero_raises(self):
         """system.watchdog_feed_interval_ms = 0 raises ValueError."""
         import config
@@ -358,8 +370,8 @@ class TestValidateConfig:
 
         orig_feed = config.DEVICE_CONFIG["system"]["watchdog_feed_interval_ms"]
         orig_timeout = config.DEVICE_CONFIG["system"]["watchdog_timeout_ms"]
-        config.DEVICE_CONFIG["system"]["watchdog_timeout_ms"] = 60000
-        config.DEVICE_CONFIG["system"]["watchdog_feed_interval_ms"] = 20000
+        config.DEVICE_CONFIG["system"]["watchdog_timeout_ms"] = 8000
+        config.DEVICE_CONFIG["system"]["watchdog_feed_interval_ms"] = 2000
         try:
             assert config.validate_config() is True
         finally:

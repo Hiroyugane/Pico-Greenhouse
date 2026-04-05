@@ -203,8 +203,8 @@ DEVICE_CONFIG = {
         "sd_retry_delay_ms": 500,  # Delay between SD mount retries (ms)
         "rtc_sync_interval_s": 3600,  # RTC-to-Pico clock sync interval (seconds)
         "button_poll_ms": 50,  # Button ISR flag polling interval (ms)
-        "watchdog_timeout_ms": 60000,  # Watchdog timer timeout (ms); resets Pico if not fed
-        "watchdog_feed_interval_ms": 20000,  # Feed watchdog every N ms (must be < timeout)
+        "watchdog_timeout_ms": 8000,  # Watchdog timeout (ms); RP2040 max is ~8388ms
+        "watchdog_feed_interval_ms": 2000,  # Feed watchdog every N ms (must be < timeout)
     },
 }
 
@@ -432,8 +432,8 @@ def validate_config():
     if sys_cfg["button_poll_ms"] <= 0:
         raise ValueError("system.button_poll_ms must be > 0")
 
-    if sys_cfg["watchdog_timeout_ms"] < 1000:
-        raise ValueError("system.watchdog_timeout_ms must be >= 1000")
+    if sys_cfg["watchdog_timeout_ms"] < 1000 or sys_cfg["watchdog_timeout_ms"] > 8388:
+        raise ValueError("system.watchdog_timeout_ms must be 1000-8388 (RP2040 hardware limit)")
 
     if sys_cfg["watchdog_feed_interval_ms"] <= 0:
         raise ValueError("system.watchdog_feed_interval_ms must be > 0")

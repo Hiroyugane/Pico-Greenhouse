@@ -16,6 +16,14 @@ try:
 except ImportError:
     import asyncio
 
+try:
+    from typing import TYPE_CHECKING
+except ImportError:
+    TYPE_CHECKING = False
+
+if TYPE_CHECKING:
+    from lib.event_logger import EventLogger
+
 
 class WriteQueueManager:
     """
@@ -40,7 +48,7 @@ class WriteQueueManager:
     def __init__(
         self,
         buffer_manager,
-        logger,
+        logger: "EventLogger | None" = None,
         max_queue_size=500,
         drain_interval_ms=100,
         batch_size=5,
@@ -50,13 +58,13 @@ class WriteQueueManager:
 
         Args:
             buffer_manager: BufferManager instance for actual writes
-            logger: EventLogger instance for debug messages
+            logger: Optional EventLogger instance for debug messages
             max_queue_size (int): Max queue entries before overflow to fallback (default: 500)
             drain_interval_ms (int): Milliseconds between drain cycles (default: 100)
             batch_size (int): Max writes per drain cycle (default: 5)
         """
         self.buffer_manager = buffer_manager
-        self.logger = logger
+        self.logger: "EventLogger | None" = logger
         self._max_queue_size = max_queue_size
         self._drain_interval_ms = drain_interval_ms
         self._batch_size = batch_size
@@ -71,6 +79,10 @@ class WriteQueueManager:
         self._overflow_writes = 0
 
         self._log_debug("initialized", max_queue_size=max_queue_size, drain_interval_ms=drain_interval_ms)
+
+    def set_logger(self, logger: "EventLogger") -> None:
+        """Inject logger after initialization when needed by DI startup order."""
+        self.logger = logger
 
     def enqueue_write(self, relpath: str, data: str) -> bool:
         """

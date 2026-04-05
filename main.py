@@ -198,7 +198,7 @@ async def main():
     )
 
     # Update write_queue with logger reference (now available)
-    write_queue.logger = logger
+    write_queue.set_logger(logger)
 
     wdt.feed()  # Feed after logger init
 

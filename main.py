@@ -439,16 +439,9 @@ async def main():
     logger.debug("MAIN", "task spawned", task="feed_watchdog")
 
     # Spawn write queue drain task (async SD write batching)
-    drain_task = asyncio.create_task(write_queue.start_drain_task())
+    # Drain task is resilient and catches all exceptions internally (never dies)
+    asyncio.create_task(write_queue.start_drain_task())
     logger.debug("MAIN", "task spawned", task="write_queue.start_drain_task")
-
-    # Add exception handler to catch unhandled errors in drain task
-    def _drain_task_exception_handler(task):
-        exc = task.exception()
-        if exc is not None and not isinstance(exc, asyncio.CancelledError):
-            logger.error("MAIN", f"WriteQueue drain task crashed: {exc} | Queue size={write_queue.get_queue_size()}")
-
-    drain_task.add_done_callback(_drain_task_exception_handler)
 
     # Spawn fan cycle tasks
     for fan in fans:

@@ -334,6 +334,7 @@ class TestOLEDDisplayAdditionalCoverage:
                 logger=None,
             )
         assert display.display_on is True
+        assert isinstance(print_mock, Mock)
         assert print_mock.call_count >= 1
 
     def test_next_menu_wakes_display_if_inactive(self, oled_display):
@@ -354,6 +355,7 @@ class TestOLEDDisplayAdditionalCoverage:
         oled_display._oled.fill = Mock(side_effect=RuntimeError("fill failed"))
         with patch("builtins.print") as print_mock:
             oled_display.render()
+        assert isinstance(print_mock, Mock)
         print_mock.assert_called_once()
 
     async def test_refresh_loop_turns_off_display_after_timeout(self, oled_display):

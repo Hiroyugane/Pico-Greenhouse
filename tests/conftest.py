@@ -43,12 +43,8 @@ def _make_pin(*args, **kwargs):
         pin._call_history.append(("value", v))
 
     pin.value = MagicMock(side_effect=_value_fn)
-    pin.on = MagicMock(
-        side_effect=lambda: (_value_fn(1), pin._call_history.append(("on", 1)))[0]
-    )
-    pin.off = MagicMock(
-        side_effect=lambda: (_value_fn(0), pin._call_history.append(("off", 0)))[0]
-    )
+    pin.on = MagicMock(side_effect=lambda: (_value_fn(1), pin._call_history.append(("on", 1)))[0])
+    pin.off = MagicMock(side_effect=lambda: (_value_fn(0), pin._call_history.append(("off", 0)))[0])
     pin.irq = MagicMock()
     return pin
 
@@ -247,6 +243,20 @@ def mock_event_logger():
     return logger
 
 
+@pytest.fixture
+def write_queue_manager(buffer_manager, mock_event_logger):
+    """WriteQueueManager wired to real BufferManager and mock EventLogger."""
+    from lib.write_queue_manager import WriteQueueManager
+
+    return WriteQueueManager(
+        buffer_manager=buffer_manager,
+        logger=mock_event_logger,
+        max_queue_size=100,
+        drain_interval_ms=50,
+        batch_size=5,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Fixtures: DHT sensor
 # ---------------------------------------------------------------------------
@@ -426,8 +436,17 @@ def mock_reminder(time_provider):
 
 
 @pytest.fixture
-def oled_display(mock_i2c, time_provider, dht_logger, buffer_manager, mock_status_manager, mock_reminder,
-                 fan_controller, growlight_controller, mock_event_logger):
+def oled_display(
+    mock_i2c,
+    time_provider,
+    dht_logger,
+    buffer_manager,
+    mock_status_manager,
+    mock_reminder,
+    fan_controller,
+    growlight_controller,
+    mock_event_logger,
+):
     """OLEDDisplay with a mock I2C bus (display_on=True after init)."""
     from lib.oled_display import OLEDDisplay
 

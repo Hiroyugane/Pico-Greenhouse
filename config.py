@@ -126,14 +126,14 @@ DEVICE_CONFIG = {
     "buffer_manager": {
         "sd_mount_point": "/sd",
         "fallback_path": "/local/fallback.csv",
-        "max_buffer_entries": 200,  # Reduced from 1000 to limit RAM on Pico (264KB)
+        "max_buffer_entries": 150,  # Ring buffer cap (reduced from 200 to reduce RAM usage)
     },
     # Event Logger Configuration
     "event_logger": {
         "logfile": "/sd/system.log",
         "max_size": 1000000,  # Max log file size (bytes) before rotation
         "info_flush_threshold": 5,  # Flush after N info-level entries buffered
-        "warn_flush_threshold": 3,  # Flush after N warning-level entries buffered
+        "warn_flush_threshold": 1,  # Flush after N warning-level entries (1=immediate, like ERROR)
         "log_level": "INFO",  # Minimum severity: DEBUG, INFO, WARN, ERR
         "debug_enabled": True,  # Enable DEBUG messages to console (zero-cost when disabled)
         "debug_to_file": True,  # Also write DEBUG entries to SD log (caution: fills card)
@@ -205,6 +205,11 @@ DEVICE_CONFIG = {
         "button_poll_ms": 50,  # Button ISR flag polling interval (ms)
         "watchdog_timeout_ms": 8000,  # Watchdog timeout (ms); RP2040 max is ~8388ms
         "watchdog_feed_interval_ms": 2000,  # Feed watchdog every N ms (must be < timeout)
+        # Write Queue Configuration (async SD write batching)
+        "write_queue_max_size": 500,  # Max queue entries before overflow to fallback
+        "queue_drain_interval_ms": 100,  # Milliseconds between drain cycles
+        "queue_batch_size": 5,  # Max writes per drain cycle
+        "sd_recovery_max_consecutive_failures": 5,  # Max failures before giving up in recovery attempt
     },
 }
 
@@ -335,6 +340,10 @@ def validate_config():
             "button_poll_ms",
             "watchdog_timeout_ms",
             "watchdog_feed_interval_ms",
+            "write_queue_max_size",
+            "queue_drain_interval_ms",
+            "queue_batch_size",
+            "sd_recovery_max_consecutive_failures",
         ],
     }
 
@@ -440,5 +449,18 @@ def validate_config():
 
     if sys_cfg["watchdog_feed_interval_ms"] >= sys_cfg["watchdog_timeout_ms"]:
         raise ValueError("system.watchdog_feed_interval_ms must be < watchdog_timeout_ms")
+
+    # Validate write queue configuration
+    if DEVICE_CONFIG["system"]["write_queue_max_size"] <= 0:
+        raise ValueError("system.write_queue_max_size must be > 0")
+
+    if DEVICE_CONFIG["system"]["queue_drain_interval_ms"] <= 0:
+        raise ValueError("system.queue_drain_interval_ms must be > 0")
+
+    if DEVICE_CONFIG["system"]["queue_batch_size"] <= 0:
+        raise ValueError("system.queue_batch_size must be > 0")
+
+    if DEVICE_CONFIG["system"]["sd_recovery_max_consecutive_failures"] <= 0:
+        raise ValueError("system.sd_recovery_max_consecutive_failures must be > 0")
 
     return True

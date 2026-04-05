@@ -37,6 +37,7 @@ class DHTLogger:
     - time_provider: For timestamps and date-based rollover
     - buffer_manager: For all write operations (handles resilience)
     - logger: For event logging
+    - write_queue: Optional WriteQueueManager for async write batching
 
     Attributes:
         dht_sensor: DHT22 sensor instance
@@ -44,6 +45,7 @@ class DHTLogger:
         filename_base: CSV filename base
         time_provider: TimeProvider instance
         buffer_manager: BufferManager instance
+        write_queue: WriteQueueManager instance (optional for async writes)
         logger: EventLogger instance
         current_date: Current date (year, month, day) for rollover detection
         last_temperature: Cached temperature for thermostat queries
@@ -66,6 +68,7 @@ class DHTLogger:
         dht_error_threshold=10,
         retry_delay_s: float = 0.5,
         max_history: int = 120,
+        write_queue=None,
     ):
         """
         Initialize DHTLogger with dependency injection.
@@ -83,12 +86,14 @@ class DHTLogger:
             dht_error_threshold (int): Consecutive failures before error (default: 10)
             retry_delay_s (float): Delay between sensor read retries in seconds (default: 0.5)
             max_history (int): Maximum readings to keep for stats (default: 120)
+            write_queue: Optional WriteQueueManager for async write batching (default: None)
         """
         self.dht_sensor = dht.DHT22(machine.Pin(pin))
         self.interval = interval
         self.filename_base = filename if filename.startswith("/sd/") else f"/sd/{filename}"
         self.time_provider = time_provider
         self.buffer_manager = buffer_manager
+        self.write_queue = write_queue
         self.logger = logger
         self.max_retries = max_retries
         self.status_manager = status_manager
@@ -372,10 +377,19 @@ class DHTLogger:
                             )
                             pass  # write() below will route to fallback
 
-                    # Write to storage via BufferManager
+                    # Write to storage via WriteQueue (async) or BufferManager (direct)
+                    # If write_queue available: enqueue non-blocking (~50µs), batch drain in background
+                    # Otherwise: write directly via buffer_manager (synchronous, may block 1-2s)
                     # BufferManager handles: primary → fallback → in-memory buffer
                     try:
-                        wrote_primary = self.buffer_manager.write(relpath, row)
+                        if self.write_queue is not None:
+                            # Async queue: non-blocking enqueue
+                            self.write_queue.enqueue_write(relpath, row)
+                            wrote_primary = True  # Assume write will succeed (queue handles fallback)
+                        else:
+                            # Synchronous write
+                            wrote_primary = self.buffer_manager.write(relpath, row)
+
                         self.logger.debug(
                             "DHTLogger",
                             "log iteration",
@@ -386,7 +400,7 @@ class DHTLogger:
                             read_failures=self.read_failures,
                             write_failures=self.write_failures,
                         )
-                        if not wrote_primary:
+                        if not wrote_primary and self.write_queue is None:
                             self.logger.warning(
                                 "DHTLogger",
                                 f"Write went to fallback (SD unavailable?) for {relpath}",

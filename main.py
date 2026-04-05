@@ -47,6 +47,7 @@ from lib.oled_display import OLEDDisplay
 from lib.relay import FanController, GrowlightController
 from lib.status_manager import StatusManager
 from lib.time_provider import RTCTimeProvider
+from lib.write_queue_manager import WriteQueueManager
 
 
 async def feed_watchdog(wdt, interval_ms, logger=None):
@@ -69,7 +70,7 @@ async def feed_watchdog(wdt, interval_ms, logger=None):
             if logger:
                 logger.warning("Watchdog", "Feed task cancelled")
             raise
-        except Exception as e:
+        except Exception:
             # Don't log here - logging can block and cause watchdog timeout
             await asyncio.sleep_ms(1000)
 
@@ -169,7 +170,15 @@ async def main():
         max_buffer_entries=buffer_config.get("max_buffer_entries", 200),
         debug_callback=_dbg_cb,
     )
-
+    # Step 4b: Create WriteQueueManager (async SD write batching)
+    system_config = DEVICE_CONFIG.get("system", {})
+    write_queue = WriteQueueManager(
+        buffer_manager=buffer_manager,
+        logger=None,  # Inject logger later after EventLogger created
+        max_queue_size=system_config.get("write_queue_max_size", 500),
+        drain_interval_ms=system_config.get("queue_drain_interval_ms", 100),
+        batch_size=system_config.get("queue_batch_size", 5),
+    )
     # Step 5: Create EventLogger
     logger = EventLogger(
         time_provider,
@@ -184,7 +193,11 @@ async def main():
         log_level=logger_config.get("log_level", "INFO"),
         debug_enabled=logger_config.get("debug_enabled", False),
         debug_to_file=logger_config.get("debug_to_file", False),
+        write_queue=write_queue,
     )
+
+    # Update write_queue with logger reference (now available)
+    write_queue.logger = logger
 
     wdt.feed()  # Feed after logger init
 
@@ -224,6 +237,7 @@ async def main():
             dht_warn_threshold=status_led_config.get("dht_warn_threshold", 3),
             dht_error_threshold=status_led_config.get("dht_error_threshold", 10),
             retry_delay_s=dht_config.get("retry_delay_s", 0.5),
+            write_queue=write_queue,
         )
     except Exception as e:
         logger.error("MAIN", f"DHTLogger init failed: {e}")
@@ -237,6 +251,7 @@ async def main():
             filename=f"/sd/{files_config.get('dht_log_base', 'dht_log.csv')}",
             max_retries=dht_config.get("max_retries", 3),
             retry_delay_s=dht_config.get("retry_delay_s", 0.5),
+            write_queue=write_queue,
         )
 
     wdt.feed()  # Feed after DHTLogger init
@@ -421,6 +436,10 @@ async def main():
     # Spawn watchdog feed task first (highest priority for system stability)
     asyncio.create_task(feed_watchdog(wdt, wdt_feed_interval_ms, logger))
     logger.debug("MAIN", "task spawned", task="feed_watchdog")
+
+    # Spawn write queue drain task (async SD write batching)
+    asyncio.create_task(write_queue.start_drain_task())
+    logger.debug("MAIN", "task spawned", task="write_queue.start_drain_task")
 
     # Spawn fan cycle tasks
     for fan in fans:

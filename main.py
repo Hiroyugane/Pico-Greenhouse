@@ -34,6 +34,7 @@ if sys.implementation.name != "micropython":  # type: ignore[union-attr]
     sys.path.insert(0, host_shims_path)
 
 import uasyncio as asyncio
+from machine import WDT
 
 from config import DEVICE_CONFIG, validate_config
 from lib.buffer_manager import BufferManager
@@ -46,6 +47,32 @@ from lib.oled_display import OLEDDisplay
 from lib.relay import FanController, GrowlightController
 from lib.status_manager import StatusManager
 from lib.time_provider import RTCTimeProvider
+
+
+async def feed_watchdog(wdt, interval_ms, logger=None):
+    """
+    Async task that periodically feeds the watchdog timer.
+
+    If the uasyncio scheduler freezes, this task stops running and the
+    watchdog will reset the Pico after the configured timeout.
+
+    Args:
+        wdt: WDT instance to feed
+        interval_ms: Feed interval in milliseconds (must be < watchdog timeout)
+        logger: Optional EventLogger for debug output
+    """
+    while True:
+        try:
+            wdt.feed()
+            await asyncio.sleep_ms(interval_ms)
+        except asyncio.CancelledError:
+            if logger:
+                logger.warning("Watchdog", "Feed task cancelled")
+            raise
+        except Exception as e:
+            if logger:
+                logger.error("Watchdog", f"Feed error: {e}")
+            await asyncio.sleep_ms(1000)
 
 
 async def main():
@@ -65,6 +92,14 @@ async def main():
         print(f"[STARTUP ERROR] Config validation failed: {e}")
         return
 
+    # Step 1b: Initialize watchdog timer (early, before any other hardware)
+    # If the system freezes during init or runtime, the watchdog will reset it.
+    system_config = DEVICE_CONFIG.get("system", {})
+    wdt_timeout_ms = system_config.get("watchdog_timeout_ms", 60000)
+    wdt_feed_interval_ms = system_config.get("watchdog_feed_interval_ms", 20000)
+    wdt = WDT(timeout=wdt_timeout_ms)
+    print(f"[STARTUP] Watchdog enabled: timeout={wdt_timeout_ms}ms, feed_interval={wdt_feed_interval_ms}ms")
+
     # Step 2: Initialize hardware
     # Create debug callback for pre-logger modules (only active when DEBUG)
     logger_config = DEVICE_CONFIG.get("event_logger", {})
@@ -82,7 +117,6 @@ async def main():
 
     # Step 3: Create TimeProvider (wraps RTC)
     rtc = hardware.get_rtc()
-    system_config = DEVICE_CONFIG.get("system", {})
     time_provider = RTCTimeProvider(
         rtc,
         sync_interval_s=system_config.get("rtc_sync_interval_s", 3600),
@@ -355,6 +389,10 @@ async def main():
 
     # Step 9: Spawn all async tasks
     logger.info("MAIN", "Spawning async tasks...")
+
+    # Spawn watchdog feed task first (highest priority for system stability)
+    asyncio.create_task(feed_watchdog(wdt, wdt_feed_interval_ms, logger))
+    logger.debug("MAIN", "task spawned", task="feed_watchdog")
 
     # Spawn fan cycle tasks
     for fan in fans:

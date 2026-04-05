@@ -200,6 +200,10 @@ async def main():
         max_fallback_size_kb=buffer_config.get("max_fallback_size_kb", 50),
         debug_callback=_dbg_cb,
     )
+    # Start each run with a clean fallback file.
+    clear_fallback = getattr(buffer_manager, "clear_fallback_startup", None)
+    if callable(clear_fallback):
+        clear_fallback()
     # Step 4b: Create WriteQueueManager (async SD write batching)
     system_config = DEVICE_CONFIG.get("system", {})
     write_queue = WriteQueueManager(
@@ -519,6 +523,12 @@ async def main():
 
         # Heartbeat: toggle on-board LED to prove loop is alive
         status_manager.heartbeat_tick()
+
+        # Keep system.log bounded even when debug_to_file is enabled.
+        try:
+            logger.check_size()
+        except Exception as e:
+            logger.warning("MAIN", f"Log rotation check failed: {e}")
 
         # System memory check
         gc.collect()

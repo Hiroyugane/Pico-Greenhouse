@@ -114,6 +114,8 @@ class WriteQueueManager:
         Should be spawned as asyncio.create_task() in main.py Step 9.
 
         Catches asyncio.CancelledError separately for graceful shutdown.
+        ALL OTHER EXCEPTIONS are caught and logged; the task NEVER dies.
+        Individual write failures are logged but do not crash the drain loop.
 
         Example:
             >>> wq = WriteQueueManager(buffer_manager, logger)
@@ -123,15 +125,25 @@ class WriteQueueManager:
         self._log_debug("drain task started")
         try:
             while True:
-                await self._drain_batch()
-                await asyncio.sleep(self._drain_interval_ms / 1000.0)
+                try:
+                    await self._drain_batch()
+                except Exception as e:
+                    # Catch unexpected errors from _drain_batch() but keep loop running
+                    # _drain_batch already catches write errors, so this catches setup/await errors
+                    self._log_debug("drain batch error (will retry)", error=str(e))
+
+                try:
+                    await asyncio.sleep(self._drain_interval_ms / 1000.0)
+                except Exception as e:
+                    # Catch sleep errors (unlikely but fail-safe)
+                    self._log_debug("drain sleep error (will retry)", error=str(e))
+                    await asyncio.sleep(0.1)  # Backoff before retry
         except asyncio.CancelledError:
             self._log_debug("drain task cancelled; flushing remaining queue")
-            await self._flush_all()
-            self._running = False
-            raise
-        except Exception as e:
-            self._log_debug("drain task error", error=str(e))
+            try:
+                await self._flush_all()
+            except Exception as e:
+                self._log_debug("drain flush-all error on cancel", error=str(e))
             self._running = False
             raise
 

@@ -355,8 +355,8 @@ class TestValidateConfig:
 
         orig_feed = config.DEVICE_CONFIG["system"]["watchdog_feed_interval_ms"]
         orig_timeout = config.DEVICE_CONFIG["system"]["watchdog_timeout_ms"]
-        config.DEVICE_CONFIG["system"]["watchdog_timeout_ms"] = 10000
-        config.DEVICE_CONFIG["system"]["watchdog_feed_interval_ms"] = 10000
+        config.DEVICE_CONFIG["system"]["watchdog_timeout_ms"] = 5000
+        config.DEVICE_CONFIG["system"]["watchdog_feed_interval_ms"] = 5000
         try:
             with pytest.raises(ValueError, match="watchdog_feed_interval_ms must be < watchdog_timeout_ms"):
                 config.validate_config()

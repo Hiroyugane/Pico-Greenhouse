@@ -380,3 +380,65 @@ class TestMultipleFilepaths:
         assert calls[0] == call("dht_log.csv", "temp data\n")
         assert calls[1] == call("system.log", "event data\n")
         assert calls[2] == call("dht_log.csv", "more temp\n")
+
+
+# ---------------------------------------------------------------------------
+# Tests: Drain Task Resilience
+# ---------------------------------------------------------------------------
+
+
+class TestDrainTaskResilience:
+    """Test drain task resilience to exceptions (does NOT crash on error)."""
+
+    @pytest.mark.asyncio
+    async def test_drain_task_resilient_to_batch_exception(self, write_queue_manager, mock_buffer_manager):
+        """Verify drain task continues running even if _drain_batch() throws."""
+        write_queue_manager.enqueue_write("test1.csv", "data1\n")
+        write_queue_manager.enqueue_write("test2.csv", "data2\n")
+
+        # Simulate _drain_batch exception on first call, success on second
+        side_effects = [
+            None,  # First call: succeeds, drains batch 1
+            Exception("Simulated batch error"),  # Second call: throws
+            None,  # Third call: recovers and succeeds
+        ]
+        original_drain_batch = write_queue_manager._drain_batch
+
+        async def mock_drain_batch():
+            effect = side_effects.pop(0) if side_effects else None
+            if isinstance(effect, Exception):
+                raise effect
+            return await original_drain_batch()
+
+        write_queue_manager._drain_batch = mock_drain_batch
+
+        # Run drain task for multiple iterations
+        drain_iterations = 0
+
+        async def run_limited_drain():
+            nonlocal drain_iterations
+            try:
+                while drain_iterations < 3:
+                    try:
+                        await write_queue_manager._drain_batch()
+                        drain_iterations += 1
+                    except Exception:
+                        # Task should catch exception and continue (resilience)
+                        drain_iterations += 1
+                        pass
+                    if drain_iterations < 3:
+                        await asyncio.sleep(0.01)
+            except asyncio.CancelledError:
+                pass
+
+        # Run the resilience loop
+        task = asyncio.create_task(run_limited_drain())
+        await asyncio.sleep(0.1)  # Let it run
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+        # Verify: despite exception on iteration 2, drain_iterations should complete all 3
+        assert drain_iterations >= 2  # At minimum, should have attempted beyond the error

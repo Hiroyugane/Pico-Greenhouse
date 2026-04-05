@@ -442,7 +442,9 @@ class TestOLEDDisplayAdditionalCoverage:
                 oled_display._time_provider.now_timestamp = Mock(return_value="2026-04-05 12:34:56")
                 oled_display._render_system()
 
-        ram_rows = [call.args[0] for call in oled_display._row.call_args_list if call.args and isinstance(call.args[0], str)]
+        ram_rows = [
+            call.args[0] for call in oled_display._row.call_args_list if call.args and isinstance(call.args[0], str)
+        ]
         assert any(r.startswith("RAM: 25.0%") for r in ram_rows)
 
 

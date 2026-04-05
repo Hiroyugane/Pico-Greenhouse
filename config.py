@@ -136,8 +136,8 @@ DEVICE_CONFIG = {
         "info_flush_threshold": 5,  # Flush after N info-level entries buffered
         "warn_flush_threshold": 1,  # Flush after N warning-level entries (1=immediate, like ERROR)
         "log_level": "INFO",  # Minimum severity: DEBUG, INFO, WARN, ERR
-        "debug_enabled": True,  # Enable DEBUG messages to console (zero-cost when disabled)
-        "debug_to_file": True,  # Also write DEBUG entries to SD log (caution: fills card)
+        "debug_enabled": False,  # Enable DEBUG messages to console (zero-cost when disabled)
+        "debug_to_file": False,  # Also write DEBUG entries to SD log (caution: fills card)
         "debug_flush_threshold": 10,  # Flush after N debug entries buffered (when debug_to_file=True)
         "debug_max_size": 1000000,  # Rotation threshold when debug_to_file=True (lower: debug spam fills log faster)
     },

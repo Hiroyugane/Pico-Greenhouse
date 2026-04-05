@@ -127,6 +127,7 @@ DEVICE_CONFIG = {
         "sd_mount_point": "/sd",
         "fallback_path": "/local/fallback.csv",
         "max_buffer_entries": 150,  # Ring buffer cap (reduced from 200 to reduce RAM usage)
+        "max_fallback_size_kb": 50,  # Emergency fallback file size limit (KB); when exceeded, oldest entries are pruned to prevent /local/ filling up
     },
     # Event Logger Configuration
     "event_logger": {
@@ -282,7 +283,7 @@ def validate_config():
             "monitor_interval_s",
         ],
         "buzzer": ["enabled", "default_freq", "default_duty_pct"],
-        "buffer_manager": ["sd_mount_point", "fallback_path", "max_buffer_entries"],
+        "buffer_manager": ["sd_mount_point", "fallback_path", "max_buffer_entries", "max_fallback_size_kb"],
         "event_logger": [
             "logfile",
             "max_size",
@@ -376,6 +377,9 @@ def validate_config():
 
     if DEVICE_CONFIG["buffer_manager"]["max_buffer_entries"] <= 0:
         raise ValueError("buffer_manager.max_buffer_entries must be > 0")
+
+    if DEVICE_CONFIG["buffer_manager"]["max_fallback_size_kb"] < 10:
+        raise ValueError("buffer_manager.max_fallback_size_kb must be >= 10 (KB)")
 
     if DEVICE_CONFIG["event_logger"]["max_size"] <= 0:
         raise ValueError("event_logger.max_size must be > 0")

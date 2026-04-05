@@ -168,6 +168,7 @@ async def main():
         sd_mount_point=buffer_config.get("sd_mount_point", "/sd"),
         fallback_path=buffer_config.get("fallback_path", "/local/fallback.csv"),
         max_buffer_entries=buffer_config.get("max_buffer_entries", 200),
+        max_fallback_size_kb=buffer_config.get("max_fallback_size_kb", 50),
         debug_callback=_dbg_cb,
     )
     # Step 4b: Create WriteQueueManager (async SD write batching)

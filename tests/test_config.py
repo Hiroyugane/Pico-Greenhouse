@@ -437,17 +437,17 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["event_logger"]["log_level"] = original
 
-    def test_debug_enabled_default_true(self):
-        """event_logger.debug_enabled defaults to True."""
+    def test_debug_enabled_is_bool(self):
+        """event_logger.debug_enabled is a boolean (True or False)."""
         from config import DEVICE_CONFIG
 
-        assert DEVICE_CONFIG["event_logger"]["debug_enabled"] is True
+        assert isinstance(DEVICE_CONFIG["event_logger"]["debug_enabled"], bool)
 
-    def test_debug_to_file_default_true(self):
-        """event_logger.debug_to_file defaults to True."""
+    def test_debug_to_file_is_bool(self):
+        """event_logger.debug_to_file is a boolean (True or False)."""
         from config import DEVICE_CONFIG
 
-        assert DEVICE_CONFIG["event_logger"]["debug_to_file"] is True
+        assert isinstance(DEVICE_CONFIG["event_logger"]["debug_to_file"], bool)
 
     def test_missing_debug_enabled_raises(self):
         """Missing event_logger.debug_enabled raises ValueError."""

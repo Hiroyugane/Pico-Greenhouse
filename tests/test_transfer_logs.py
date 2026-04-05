@@ -3,7 +3,7 @@
 from pathlib import Path
 from unittest.mock import Mock
 
-import transfer_logs
+import prototypes.transfer_logs as transfer_logs
 
 
 class TestNormalizeSdPath:

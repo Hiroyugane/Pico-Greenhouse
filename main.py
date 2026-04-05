@@ -443,6 +443,11 @@ async def main():
     asyncio.create_task(write_queue.start_drain_task())
     logger.debug("MAIN", "task spawned", task="write_queue.start_drain_task")
 
+    # Spawn fallback pruning task (async file maintenance, decoupled from drain)
+    # Periodically trims fallback file when it exceeds max size limit
+    asyncio.create_task(buffer_manager.start_fallback_prune_task(check_interval=10))
+    logger.debug("MAIN", "task spawned", task="buffer_manager.start_fallback_prune_task")
+
     # Spawn fan cycle tasks
     for fan in fans:
         asyncio.create_task(fan.start_cycle())

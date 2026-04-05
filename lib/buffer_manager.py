@@ -456,9 +456,6 @@ class BufferManager:
                 f.write(f"{relpath}|{data}")  # Include relpath in fallback for migration
             self.writes_to_fallback += 1
 
-            # Emergency pruning: if fallback exceeds max size, delete oldest entries
-            self._emergency_prune_fallback()
-
             self._log_debug(
                 "write completed",
                 tier="fallback",
@@ -671,83 +668,99 @@ class BufferManager:
             self._log_debug(f"Migration failed: {e}")
             return 0
 
-    def _emergency_prune_fallback(self) -> None:
+    async def start_fallback_prune_task(self, check_interval=10) -> None:
         """
-        Emergency pruning of fallback file when it exceeds max size limit.
+        Async task to periodically prune fallback file when it exceeds max size limit.
 
-        When /local/ filesystem is nearly full, prevent disk exhaustion by
-        deleting oldest entries from fallback file. This prevents cascading
-        write failures that starve the event loop.
+        Runs in background, checking every check_interval seconds. When fallback
+        exceeds max size, removes oldest entries and keeps only newest entries.
 
-        Removes oldest entries (lines) first until file size is below 80% of max.
-        Logs warnings on each prune cycle.
+        This is decoupled from the drain task to prevent file I/O from blocking
+        the event loop during normal drain operations.
 
-        Called automatically after each fallback write.
+        Args:
+            check_interval (int): Seconds between pruning checks (default: 10)
         """
+        # Import asyncio here to allow the module to work in both MicroPython and CPython
         try:
-            max_bytes = self.max_fallback_size_kb * 1024
-            file_size = self._get_file_size(self.fallback_path)
+            import asyncio
+        except ImportError:
+            import uasyncio as asyncio
 
-            if file_size is None or file_size < max_bytes:
-                return  # Within limit, no pruning needed
-
-            # File exceeds max; read, trim oldest entries, rewrite
+        while True:
             try:
-                with open(self.fallback_path, "r") as f:
-                    lines = f.readlines()
-            except Exception:
-                return  # Can't read fallback, skip pruning
+                await asyncio.sleep(check_interval)
 
-            if not lines:
-                return
+                max_bytes = self.max_fallback_size_kb * 1024
+                file_size = self._get_file_size(self.fallback_path)
 
-            # Log warning: fallback is getting dangerously large
-            self._log_debug(
-                "fallback size warning",
-                current_bytes=file_size,
-                max_bytes=max_bytes,
-                line_count=len(lines),
-            )
-            if self._logger:
-                self._logger.warning(
-                    "BufferMgr",
-                    f"Fallback file size {file_size // 1024}KB exceeds {self.max_fallback_size_kb}KB; pruning oldest entries",
-                )
+                if file_size is None or file_size < max_bytes:
+                    continue  # Within limit, no pruning needed
 
-            # Remove oldest entries until file is below target (80% of max)
-            target_bytes = int(max_bytes * 0.8)
-            current_size = file_size
+                # File exceeds max; read, trim oldest entries, rewrite
+                try:
+                    with open(self.fallback_path, "r") as f:
+                        lines = f.readlines()
+                except Exception:
+                    continue  # Can't read fallback, skip this cycle
 
-            kept_lines = []
-            for line in reversed(lines):  # Start from newest
-                line_bytes = len(line.encode() if isinstance(line, str) else line)
-                if current_size - line_bytes > target_bytes:
-                    current_size -= line_bytes
-                else:
-                    kept_lines.append(line)
+                if not lines:
+                    continue
 
-            # Rewrite fallback with only kept (newest) entries
-            try:
-                with open(self.fallback_path, "w") as f:
-                    for line in reversed(kept_lines):
-                        f.write(line)
-
-                pruned_count = len(lines) - len(kept_lines)
+                # Log warning: fallback is getting dangerously large
                 self._log_debug(
-                    "fallback pruned",
-                    removed_lines=pruned_count,
-                    kept_lines=len(kept_lines),
-                    new_size=current_size,
+                    "fallback size warning",
+                    current_bytes=file_size,
+                    max_bytes=max_bytes,
+                    line_count=len(lines),
                 )
                 if self._logger:
-                    self._logger.info(
+                    self._logger.warning(
                         "BufferMgr",
-                        f"Pruned {pruned_count} oldest entries from fallback ({len(kept_lines)} remaining)",
+                        f"Fallback file size {file_size // 1024}KB exceeds {self.max_fallback_size_kb}KB; pruning oldest entries",
                     )
+
+                # Remove oldest entries until file is below target (80% of max)
+                target_bytes = int(max_bytes * 0.8)
+                current_size = file_size
+
+                kept_lines = []
+                for line in reversed(lines):  # Start from newest
+                    line_bytes = len(line.encode() if isinstance(line, str) else line)
+                    if current_size - line_bytes > target_bytes:
+                        current_size -= line_bytes
+                    else:
+                        kept_lines.append(line)
+
+                # Rewrite fallback with only kept (newest) entries
+                try:
+                    with open(self.fallback_path, "w") as f:
+                        for line in reversed(kept_lines):
+                            f.write(line)
+
+                    pruned_count = len(lines) - len(kept_lines)
+                    self._log_debug(
+                        "fallback pruned",
+                        removed_lines=pruned_count,
+                        kept_lines=len(kept_lines),
+                        new_size=current_size,
+                    )
+                    if self._logger:
+                        self._logger.info(
+                            "BufferMgr",
+                            f"Pruned {pruned_count} oldest entries from fallback ({len(kept_lines)} remaining)",
+                        )
+                except Exception as e:
+                    self._log_debug("fallback prune write failed", error=str(e))
+            except asyncio.CancelledError:
+                if self._logger:
+                    self._logger.warning("BufferMgr", "Fallback prune task cancelled")
+                raise
             except Exception as e:
-                self._log_debug("fallback prune write failed", error=str(e))
-        except Exception as e:
-            # Silently fail pruning to avoid recursive exceptions
+                # Log error but continue looping to avoid task death
+                self._log_debug("fallback prune error", error=str(e))
+                if self._logger:
+                    self._logger.error("BufferMgr", f"Unexpected error in fallback prune task: {e}")
             self._log_debug("emergency prune error", error=str(e))
 
     def rename(self, old_relpath: str, new_relpath: str) -> bool:

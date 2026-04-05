@@ -1,5 +1,5 @@
 # Tests for main.py orchestration
-# Covers startup, task spawning, error paths, health-check loop
+# Covers startup, task spawning, error paths, health-check loop, watchdog
 
 import asyncio
 from unittest.mock import AsyncMock, Mock, patch
@@ -25,6 +25,95 @@ def _capture_create_task(created_tasks):
         return Mock()
 
     return _create_task
+
+
+@pytest.mark.asyncio
+class TestFeedWatchdog:
+    """Tests for feed_watchdog() async task."""
+
+    async def test_feed_watchdog_feeds_wdt(self, monkeypatch):
+        """feed_watchdog() calls wdt.feed() each iteration."""
+        import main as main_module
+
+        mock_wdt = Mock()
+        feed_count = 0
+
+        async def limited_sleep_ms(ms):
+            nonlocal feed_count
+            feed_count += 1
+            if feed_count >= 3:
+                raise asyncio.CancelledError()
+
+        monkeypatch.setattr(main_module.asyncio, "sleep_ms", limited_sleep_ms)
+
+        with pytest.raises(asyncio.CancelledError):
+            await main_module.feed_watchdog(mock_wdt, 1000)
+
+        assert mock_wdt.feed.call_count == 3
+
+    async def test_feed_watchdog_cancelled_logs_warning(self, monkeypatch):
+        """feed_watchdog() logs warning on CancelledError."""
+        import main as main_module
+
+        mock_wdt = Mock()
+        mock_logger = Mock()
+
+        async def raise_cancelled(ms):
+            raise asyncio.CancelledError()
+
+        monkeypatch.setattr(main_module.asyncio, "sleep_ms", raise_cancelled)
+
+        with pytest.raises(asyncio.CancelledError):
+            await main_module.feed_watchdog(mock_wdt, 1000, logger=mock_logger)
+
+        mock_logger.warning.assert_called_once()
+        assert "cancelled" in str(mock_logger.warning.call_args).lower()
+
+    async def test_feed_watchdog_error_logs_and_continues(self, monkeypatch):
+        """feed_watchdog() logs error on unexpected exception and continues."""
+        import main as main_module
+
+        mock_wdt = Mock()
+        mock_wdt.feed.side_effect = [RuntimeError("WDT failure"), None, None]
+        mock_logger = Mock()
+
+        iteration = 0
+
+        async def limited_sleep_ms(ms):
+            nonlocal iteration
+            iteration += 1
+            if iteration >= 3:
+                raise asyncio.CancelledError()
+
+        monkeypatch.setattr(main_module.asyncio, "sleep_ms", limited_sleep_ms)
+
+        with pytest.raises(asyncio.CancelledError):
+            await main_module.feed_watchdog(mock_wdt, 1000, logger=mock_logger)
+
+        # Should have logged error for the first feed failure
+        mock_logger.error.assert_called_once()
+        assert "WDT failure" in str(mock_logger.error.call_args)
+
+    async def test_feed_watchdog_no_logger(self, monkeypatch):
+        """feed_watchdog() works without logger (no crash on error)."""
+        import main as main_module
+
+        mock_wdt = Mock()
+        mock_wdt.feed.side_effect = RuntimeError("WDT failure")
+
+        iteration = 0
+
+        async def limited_sleep_ms(ms):
+            nonlocal iteration
+            iteration += 1
+            if iteration >= 2:
+                raise asyncio.CancelledError()
+
+        monkeypatch.setattr(main_module.asyncio, "sleep_ms", limited_sleep_ms)
+
+        # Should not crash even with error and no logger
+        with pytest.raises(asyncio.CancelledError):
+            await main_module.feed_watchdog(mock_wdt, 1000, logger=None)
 
 
 @pytest.mark.asyncio

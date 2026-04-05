@@ -90,6 +90,20 @@ def _make_pwm(*args, **kwargs):
 
 _machine_mock.PWM = MagicMock(side_effect=_make_pwm)
 
+
+# --- WDT (Watchdog Timer) mock ---
+class _MockWDT:
+    """Mock WDT for testing."""
+
+    def __init__(self, timeout=5000):
+        self.timeout = timeout
+
+    def feed(self):
+        pass
+
+
+_machine_mock.WDT = _MockWDT
+
 # --- dht module ---
 _dht_mock = MagicMock()
 

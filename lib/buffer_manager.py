@@ -455,10 +455,10 @@ class BufferManager:
             with open(self.fallback_path, "a") as f:
                 f.write(f"{relpath}|{data}")  # Include relpath in fallback for migration
             self.writes_to_fallback += 1
-            
+
             # Emergency pruning: if fallback exceeds max size, delete oldest entries
             self._emergency_prune_fallback()
-            
+
             self._log_debug(
                 "write completed",
                 tier="fallback",
@@ -711,7 +711,7 @@ class BufferManager:
             if self._logger:
                 self._logger.warning(
                     "BufferMgr",
-                    f"Fallback file size {file_size//1024}KB exceeds {self.max_fallback_size_kb}KB; pruning oldest entries",
+                    f"Fallback file size {file_size // 1024}KB exceeds {self.max_fallback_size_kb}KB; pruning oldest entries",
                 )
 
             # Remove oldest entries until file is below target (80% of max)

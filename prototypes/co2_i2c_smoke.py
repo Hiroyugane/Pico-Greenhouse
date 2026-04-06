@@ -7,57 +7,91 @@ I2C_SDA = 0
 I2C_SCL = 1
 I2C_FREQ = 400000
 
-CO2_UART_ID = 1
+CO2_UART_ID = 0
 CO2_UART_TX = 16
 CO2_UART_RX = 17
 CO2_UART_BAUD = 9600
 CO2_QUERY = b"\xfe\x44\x00\x08\x02\x9f\x25"
 
 UART_TIMEOUT_MS = 500
-ITERATIONS = 3
-REPORT_PATH = "/local/co2_i2c_smoke.json"
+POLL_SECONDS = 5
+RTC_ADDR = 0x68
+DS3231_REG_CTRL = 0x0E
+DS3231_REG_STATUS = 0x0F
+DS3231_REG_TEMP = 0x11
+DS3231_CTRL_CONV = 0x20
+DS3231_STATUS_BSY = 0x04
 
 
 def _query_co2(uart):
+    uart.flush()
     uart.write(CO2_QUERY)
     deadline = time.ticks_add(time.ticks_ms(), UART_TIMEOUT_MS)
     while time.ticks_diff(deadline, time.ticks_ms()) > 0:
         if uart.any():
-            data = uart.read()
-            if data:
+            data = uart.read(7)
+            if data and len(data) >= 5:
                 return data
         time.sleep_ms(20)
     return None
 
 
-def _json_escape(text):
-    return text.replace("\\", "\\\\").replace('"', '\\"')
+def _bcd_to_dec(value):
+    return (value >> 4) * 10 + (value & 0x0F)
 
 
-def _write_report(i2c_ok, uart_ok, addresses, uart_bytes, errors):
-    # Keep this self-contained: write JSON text directly without json/ujson module.
-    addr_txt = ",".join(str(v) for v in addresses)
-    uart_txt = ",".join(str(v) for v in uart_bytes)
-    err_txt = ",".join('"{}"'.format(_json_escape(e)) for e in errors)
-    payload = (
-        "{"
-        '"i2c_ok":' + ("true" if i2c_ok else "false") + ","
-        '"uart_ok":' + ("true" if uart_ok else "false") + ","
-        '"simultaneous_ok":' + ("true" if (i2c_ok and uart_ok) else "false") + ","
-        '"i2c_addrs":[' + addr_txt + "],"
-        '"uart_bytes":[' + uart_txt + "],"
-        '"iterations":' + str(ITERATIONS) + ","
-        '"errors":[' + err_txt + "]"
-        "}"
-    )
+def _read_ds3231_temp_c(i2c):
+    # Trigger a fresh temperature conversion so 5s polling is meaningful.
+    ctrl = i2c.readfrom_mem(RTC_ADDR, DS3231_REG_CTRL, 1)[0]
+    i2c.writeto_mem(RTC_ADDR, DS3231_REG_CTRL, bytes([ctrl | DS3231_CTRL_CONV]))
+
+    deadline = time.ticks_add(time.ticks_ms(), 250)
+    while time.ticks_diff(deadline, time.ticks_ms()) > 0:
+        status = i2c.readfrom_mem(RTC_ADDR, DS3231_REG_STATUS, 1)[0]
+        if (status & DS3231_STATUS_BSY) == 0:
+            break
+        time.sleep_ms(10)
+
+    temp_raw = i2c.readfrom_mem(RTC_ADDR, DS3231_REG_TEMP, 2)
+    msb = temp_raw[0]
+    if msb & 0x80:
+        msb -= 256
+    frac = (temp_raw[1] >> 6) * 0.25
+    return msb + frac
+
+
+def _read_rtc(i2c):
     try:
-        with open(REPORT_PATH, "w") as handle:
-            handle.write(payload)
-        return REPORT_PATH
-    except OSError:
-        with open("co2_i2c_smoke.json", "w") as handle:
-            handle.write(payload)
-        return "co2_i2c_smoke.json"
+        raw = i2c.readfrom_mem(RTC_ADDR, 0x00, 7)
+        sec = _bcd_to_dec(raw[0] & 0x7F)
+        minute = _bcd_to_dec(raw[1] & 0x7F)
+        hour = _bcd_to_dec(raw[2] & 0x3F)
+        day = _bcd_to_dec(raw[4] & 0x3F)
+        month = _bcd_to_dec(raw[5] & 0x1F)
+        year = 2000 + _bcd_to_dec(raw[6])
+
+        temp_c = _read_ds3231_temp_c(i2c)
+
+        timestamp = "{:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}".format(
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            sec,
+        )
+        return timestamp, temp_c, None
+    except Exception as exc:
+        return None, None, str(exc)
+
+
+def _parse_co2_ppm(payload):
+    # Match the known-good extraction from prototypes/co2-test.py.
+    if payload and len(payload) >= 5:
+        high = payload[3]
+        low = payload[4]
+        return high * 256 + low
+    return None
 
 
 def main():
@@ -72,36 +106,39 @@ def main():
         baudrate=CO2_UART_BAUD,
         tx=machine.Pin(CO2_UART_TX),
         rx=machine.Pin(CO2_UART_RX),
+        timeout=UART_TIMEOUT_MS,
     )
+    uart.init(CO2_UART_BAUD, bits=8, parity=None, stop=1)
+    uart.flush()
+    time.sleep(1)
 
-    i2c_ok = True
-    uart_ok = True
-    last_addrs = []
-    last_uart = b""
-    errors = []
+    try:
+        addrs = i2c.scan()
+    except Exception:
+        addrs = []
 
-    for _ in range(ITERATIONS):
-        try:
-            last_addrs = i2c.scan()
-        except Exception as exc:
-            errors.append("i2c: {}".format(exc))
-            i2c_ok = False
+    print("I2C devices:", addrs)
+    print("Polling RTC (0x68) + CO2 every {}s. Press Ctrl+C to stop.".format(POLL_SECONDS))
 
-        try:
-            response = _query_co2(uart)
-            if response:
-                last_uart = response
-            else:
-                errors.append("uart: timeout")
-                uart_ok = False
-        except Exception as exc:
-            errors.append("uart: {}".format(exc))
-            uart_ok = False
+    while True:
+        timestamp, rtc_temp_c, rtc_error = _read_rtc(i2c)
 
-    print("I2C:", "OK" if i2c_ok else "FAIL", last_addrs)
-    print("UART:", "OK" if uart_ok else "FAIL", list(last_uart))
-    print("SIMULTANEOUS:", "OK" if (i2c_ok and uart_ok) else "FAIL")
-    print("REPORT:", _write_report(i2c_ok, uart_ok, last_addrs, list(last_uart), errors))
+        co2_payload = _query_co2(uart)
+        co2_ppm = _parse_co2_ppm(co2_payload)
+        co2_raw = list(co2_payload or b"")
+
+        if rtc_error is None:
+            rtc_part = "RTC={} temp={:.2f}C".format(timestamp, rtc_temp_c)
+        else:
+            rtc_part = "RTC=ERROR({})".format(rtc_error)
+
+        if co2_ppm is not None:
+            co2_part = "CO2={}ppm raw={}".format(co2_ppm, co2_raw)
+        else:
+            co2_part = "CO2=ERROR(timeout/invalid) raw={}".format(co2_raw)
+
+        print("{} | {}".format(rtc_part, co2_part))
+        time.sleep(POLL_SECONDS)
 
 
 if __name__ == "__main__":

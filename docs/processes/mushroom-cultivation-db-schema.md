@@ -20,6 +20,7 @@ This schema tracks 7 sequential cultivation processes with full traceability fro
 ## Universal Table Columns
 
 **All process/inspection tables include**:
+
 - `id`: Primary key (auto-increment integer)
 - `datetime_created` / `datetime_started`: When the process began
 - `comments`: Text field for deviations, experiments, notes (e.g., "tested new breathing hole design", "unusual color on day 3")
@@ -51,6 +52,7 @@ Core inventory of all input materials used across processes.
 | comments | TEXT | Optional | Batch notes, quality observations |
 
 **Design Notes**:
+
 - **Two-stage workflow**: Stage 1 (Ordering): Create record with `delivery_date = NULL`. Stage 2 (Receiving): Verify delivery and populate `delivery_date`, update `amount_remaining` only after verification
 - `amount_remaining` is calculated to track available inventory
 - `storage_location` supports future testing of optimal conditions
@@ -80,6 +82,7 @@ Grain soaking process (typically barley). One soakrun produces n spawnbags.
 | picture_path | VARCHAR(500) | Optional | Photo of grain state at completion |
 
 **Design Notes**:
+
 - All timestamps in ISO-8601 format (YYYY-MM-DD HH:MM:SS)
 - Only the highest manually observed temperature is tracked (`water_temp_max`) to keep logging workload low
 - Comma-delimited datetimes chosen for simplicity (not normalized further to reduce tables)
@@ -114,6 +117,7 @@ Grain spawn bags created from a soakrun. Filled, sterilized, then inoculated sep
 | picture_path | VARCHAR(500) | Optional | Photo at inoculation or issue |
 
 **Design Notes**:
+
 - `datetime_created` ≠ `datetime_sterilized` to support pre-sterilization storage
 - `datetime_inoculated` nullable because sterilized bags can be stored before inoculation
 - Binary marking uses bits 1-4 for 16 bags max (user confirmed never > 16)
@@ -141,6 +145,7 @@ Weekly health checks of spawn bags (one record per inspection). Tracks colonizat
 | picture_path | VARCHAR(500) | Optional | Photo of contamination or growth |
 
 **Design Notes**:
+
 - One record per week (or per check)
 - `days_since_inoculation` supports calculations (e.g., "is this bag slow at day 35?")
 - Auto-discard flag: if `days_since_inoculation >= 56` (8 weeks) AND `colonization_percent < 100`, worker is notified at next inspection
@@ -171,6 +176,7 @@ Bulk substrate prepared via sterilization (coco coir + perlite + vermiculite + g
 | comments | TEXT | Optional | E.g., "coco coir appeared dry", "water boil time extended 5 min" |
 
 **Design Notes**:
+
 - Bulk is **always used immediately** after cooling; no shelf-life
 - Separate columns per material type for traceability (failures can be linked to material batch)
 - No `status` field; bulk is either being prepared, ready, or consumed
@@ -194,6 +200,7 @@ Result of combining one spawnbag + one bulk → multiple fruiting blocks. One re
 | picture_path | VARCHAR(500) | Optional | Photo of mixing or block setup |
 
 **Design Notes**:
+
 - One bulk + one spawnbag → n fruiting blocks (1:many relationship to fruiting_blocks)
 - `fk_material_container_id` links to the container material order (for cost tracking)
 - No separate materials tracking for prep (isopropanol, gloves); estimated at 50 mL iso + gloves per process
@@ -220,6 +227,7 @@ Physical blocks created from mixed_substrates. One record per filled container i
 | picture_path | VARCHAR(500) | Optional | Photo of colonization or contamination |
 
 **Design Notes**:
+
 - Represents one filled container (2L typical capacity)
 - Status transitions: `colonizing` → `ready_to_fruit` → `fruiting` → `disposed`
 - Auto-dispose flag: if `status = colonizing` AND `days_since_created >= 56`, worker notified at inspection
@@ -246,6 +254,7 @@ Weekly health checks of colonizing/fruiting blocks. Similar structure to spawnba
 | picture_path | VARCHAR(500) | Optional | Photo of contamination or growth |
 
 **Design Notes**:
+
 - Same structure as spawnbag_inspections for consistency
 - Auto-discard: if `status = colonizing` AND `days_since_creation >= 56` AND `colonization_percent < 100`
 - Once `colonization_percent = 100` & no contamination, `fruiting_block.status` → `ready_to_fruit` and `datetime_colonization_complete` set
@@ -269,6 +278,7 @@ Actual harvest events. One block generates up to 2 flushes.
 | picture_path | VARCHAR(500) | Optional | Photo of harvest or yield |
 
 **Design Notes**:
+
 - One block → max 2 records (flush 1 & 2)
 - `datetime_moved_to_chamber` is when fruiting begins; flushes typically 1 week apart
 - Auto-dispose: if `flush_number = 2` recorded, fruiting_block marked as `disposed`
@@ -298,6 +308,7 @@ Nutrient jars inoculated with species + growth tracking.
 | picture_path | VARCHAR(500) | Optional | Photo if contamination suspected |
 
 **Design Notes**:
+
 - Inoculation volume: 10 mL per spawnbag
 - Fridge storage extends viability to ~1 year
 - `amount_remaining_ml` tracks how much is left for inoculations
@@ -322,6 +333,7 @@ Weekly monitoring of LC growth (inoculation %).
 | comments | TEXT | Optional | "Magnetic stir running smoothly", "color appears off" |
 
 **Design Notes**:
+
 - One inspection per week (roughly)
 - Progression tracked: 0% → 25% → 50% → 100%
 - Auto-ready: when `colonization_percent = 100`, LC marked complete & `datetime_ready_for_use` set
@@ -355,6 +367,7 @@ materials ──┐
 ## Key Traceability Examples
 
 ### Example 1: Trace a contaminated spawnbag to root cause
+
 ```sql
 -- Find all spawnbags contaminated in past 7 days linked to specific barley supplier
 SELECT sb.id, sb.qr_code, sb.datetime_inoculated, sbi.contamination_type,
@@ -369,6 +382,7 @@ WHERE sbi.contamination_visible = TRUE
 ```
 
 ### Example 2: Calculate EBIT per week for a liquid culture species
+
 ```sql
 -- Total yield (g) per LC species in past 4 weeks / weeks elapsed
 SELECT lc.species,
@@ -386,6 +400,7 @@ ORDER BY grams_per_week DESC;
 ```
 
 ### Example 3: Find blocks ready for discard (8 weeks without full colonization)
+
 ```sql
 -- Identify fruiting blocks stuck in colonization
 SELECT fb.id, fb.qr_code, fb.datetime_created,

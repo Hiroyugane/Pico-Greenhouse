@@ -9,9 +9,11 @@
 ## What Was Delivered
 
 ### 1. **Mushroom Cultivation Database Schema**
+
 📄 [mushroom-cultivation-db-schema.md](mushroom-cultivation-db-schema.md)
 
 Comprehensive specification of all 11 tables with:
+
 - Field definitions (type, constraints, notes)
 - Design rationale for each table
 - Examples of traceability queries
@@ -19,12 +21,14 @@ Comprehensive specification of all 11 tables with:
 - Implementation notes (photo storage, indexing, backups)
 
 **Key Process Flow**:
+
 - Materials → LC (parallel with Soaking)
 - Soaking + LC → Grain Spawn (sequential)
 - Materials → Bulk Spawn (independent/parallel process)
 - Grain Spawn + Bulk Spawn → Substrate Mixing → Fruiting Blocks → Fruiting
 
 **Tables**:
+
 1. `materials` — All input materials + vendor tracking
 2. `soakruns` — Grain soaking process
 3. `spawnbags` — Grain spawn bags (filled, sterilized, inoculated with LC)
@@ -40,9 +44,11 @@ Comprehensive specification of all 11 tables with:
 ---
 
 ### 2. **Process Flowcharts (Mermaid Diagrams)**
+
 📄 [mushroom-cultivation-process-flows.md](mushroom-cultivation-process-flows.md)
 
 10 detailed flowcharts covering:
+
 1. Overall high-level process flow
 2. Material ordering
 3. Liquid culture creation
@@ -59,6 +65,7 @@ Each diagram shows **decision points, data entry points, and table relationships
 ---
 
 ### 3. **Integration Review & Validation**
+
 📄 [database-process-integration-review.md](database-process-integration-review.md)
 
 - ✅ Process-by-process coverage analysis (all 7 processes fully supported)
@@ -74,6 +81,7 @@ Each diagram shows **decision points, data entry points, and table relationships
 ## Key Design Decisions Made
 
 ### 1. **Separate Inspection Tables**
+
 - ✅ `spawnbag_inspections` (1:many relationship to spawnbags)
 - ✅ `fruiting_block_inspections` (1:many relationship to fruiting_blocks)
 - ✅ `lc_growth_inspections` (1:many relationship to liquid_cultures)
@@ -81,6 +89,7 @@ Each diagram shows **decision points, data entry points, and table relationships
 **Why**: Preserves complete history of weekly checks without losing audit trail or updating master record.
 
 ### 2. **Auto-Discard Flagging (Not Storage)**
+
 - Discard rules **calculated at inspection time**, not stored
 - Rules:
   - Spawnbag @ 8 weeks: if colonization_% < 100 → flag for discard
@@ -90,6 +99,7 @@ Each diagram shows **decision points, data entry points, and table relationships
 **Why**: Reduces data redundancy; worker makes final disposal decision; supports edge cases (late colonizers).
 
 ### 3. **Fruiting Block Intermediate Table**
+
 - `mixed_substrates` records: 1 bulk + 1 spawnbag → n fruiting blocks
 - `fruiting_blocks` records: individual filled containers in colonization/fruiting
 - `fruiting` records: actual harvest events (up to 2 per block)
@@ -97,23 +107,27 @@ Each diagram shows **decision points, data entry points, and table relationships
 **Why**: Normalizes 1:many relationships; tracks block lineage and independent colonization status.
 
 ### 4. **Comments Column in All Process Tables**
+
 - Every process table has `comments` field
 - Enables documentation of deviations & experiments (e.g., "tested new breathing hole design")
 - Supports future optimization analysis
 
 ### 5. **Comma-Delimited Datetimes (Soakruns)**
+
 - `datetimes_stirs`, `datetimes_water_changes` stored as comma-separated ISO strings
 - Example: `"2026-04-18T14:30, 2026-04-19T09:15"`
 
 **Why**: User's preference for simplicity; can be parsed for analysis; trades off normalization for convenience.
 
 ### 6. **Storage Location Tracking**
+
 - `materials.storage_location` enum: fridge, shelf_dry, drawer, freezer
 - Supports future testing to optimize storage conditions for spawn/substrate/LC
 
 **Why**: Enables data-driven decisions on best storage practices.
 
 ### 7. **Photo Paths for Contamination**
+
 - `picture_path` VARCHAR(500) in all process & inspection tables
 - Strategy: **Start with local filesystem** (relative paths like `photos/fruiting_block_123_contamination.jpg`)
 - Future: Can extend to cloud storage/sync
@@ -121,6 +135,7 @@ Each diagram shows **decision points, data entry points, and table relationships
 **Why**: Extensible for future smartphone app integration; enables visual failure analysis.
 
 ### 8. **Two-Stage Material Ordering**
+
 - **Stage 1 (Ordering)**: Record material details (vendor, quantity, price); create DB record with `delivery_date = NULL`
 - **Stage 2 (Receiving)**: Verify delivery (item, quantity, condition); populate `delivery_date` only after confirmation
 - Issues/discrepancies documented in `comments`
@@ -128,6 +143,7 @@ Each diagram shows **decision points, data entry points, and table relationships
 **Why**: Separates order intent from actual receipt; enables inventory accuracy and damage tracking; supports future automation.
 
 ### 9. **QR Code Strategy (Manual vs App)**
+
 - **Manual Process**: Record unique ID manually on printed QR label; store string in DB
 - **App Process** (future): Scan pre-printed QR codes (encoded with ID + table name as safety feature)
 - Safety feature: QR codes contain table context (e.g., "SPAWNBAG:42") to prevent mislabeling
@@ -141,6 +157,7 @@ Each diagram shows **decision points, data entry points, and table relationships
 **Question**: "Trace a contaminated mushroom harvest back to material sources"
 
 **Data Flow**:
+
 ```
 fruiting (harvest: 2026-04-15, weight_harvested=1.2kg)
   ↓ fk_fruiting_block_id
@@ -167,6 +184,7 @@ mixed_substrates (mixed on 2026-04-01, spawnbag_15 + bulk_8)
 **Primary Metric**: Grams of produce per week per LC species (cost-adjusted in future)
 
 **SQL Example**:
+
 ```sql
 SELECT
   lc.species,
@@ -185,6 +203,7 @@ ORDER BY grams_per_week DESC;
 ```
 
 **Future Enhancements**:
+
 - Add cost-per-gram (materials cost / yield)
 - Track contamination rate by species
 - Calculate colonization time variance
@@ -195,18 +214,22 @@ ORDER BY grams_per_week DESC;
 ## Minor Gaps & Recommendations
 
 ### 1. ⚠️ Physical Store Article Numbers
+
 **Issue**: No field for physical store article #
 **Recommendation**: Add optional `article_number` to materials table if restocking becomes automated
 **Decision**: Keep as-is (5 vendors, manual process)
 
 ### 2. ⚠️ Sterilization Equipment Tracking
+
 **Issue**: No record of which pressure cooker used (affects consistency if scaling)
 **Recommendation**: Add optional `equipment_id` field if equipment varies
 **Decision**: Document variations in `comments` for now
 
 ### 3. ⚠️ Photo Storage Strategy (Decided)
+
 **Issue**: `picture_path` assumes file system; no backend specified
 **Decision**: **Start with local filesystem** (Option A)
+
 - Store relative paths: `photos/fruiting_block_123_contamination.jpg`
 - Implement manual/scheduled sync to cloud later
 - Future: Smartphone app can auto-sync when online
@@ -216,61 +239,78 @@ ORDER BY grams_per_week DESC;
 ## Implementation Roadmap
 
 ### Phase 1: Foundation (Weeks 1-2)
+
 1. Create SQLite DDL from schema specification
 2. Write data validation scripts (material amounts, date ranges, etc.)
 3. Create manual data entry tools (spreadsheet → database import)
 4. Set up local photo directory structure
 
 ### Phase 2: API Layer (Weeks 3-4)
+
 5. Build CRUD REST endpoints (Python FastAPI or Flask)
-6. Implement inspection logic (auto-flag at 8-week threshold)
-7. Create KPI query functions (EBIT/week, contamination rates, etc.)
+2. Implement inspection logic (auto-flag at 8-week threshold)
+3. Create KPI query functions (EBIT/week, contamination rates, etc.)
 
 ### Phase 3: Reporting & Analysis (Weeks 5-6)
+
 8. Build reporting dashboard queries
-9. Create failure analysis export scripts
-10. Design CI/continuous improvement workflow
+2. Create failure analysis export scripts
+3. Design CI/continuous improvement workflow
 
 ### Phase 4: Mobile App (Weeks 7+)
+
 11. Prototype smartphone app (React Native or Flutter)
-12. Implement offline-capable inspection entry
-13. Add photo capture & local storage
-14. Design sync strategy for cloud backup
+2. Implement offline-capable inspection entry
+3. Add photo capture & local storage
+4. Design sync strategy for cloud backup
 
 ---
 
 ## Answers to Your Original Questions
 
 ### Q: "What should be in the mixed_substrates table?"
+
 **A**: ✅ Complete schema defined:
+
 ```
 id, datetime_mixed, fk_spawnbag_id, fk_bulk_id,
 fk_material_container_id, num_fruiting_blocks_created, comments, picture_path
 ```
+
 The "to do" note can be removed—nothing is missing.
 
 ### Q: "Should fruiting_blocks be separate from fruiting?"
+
 **A**: ✅ Yes, and fully normalized:
+
 - `fruiting_blocks` = containers in colonization/fruiting stage (status tracking)
 - `fruiting` = harvest events (up to 2 per block)
 
 ### Q: "How should inspections be tracked?"
+
 **A**: ✅ Separate inspection tables with full history:
+
 - `spawnbag_inspections` (weekly checks with colonization %, moisture, contamination)
 - `fruiting_block_inspections` (same structure)
 - `lc_growth_inspections` (colonization % over time)
 
 ### Q: "Can I trace a harvest back to the original materials?"
+
 **A**: ✅ Yes, fully traceable:
+
 - Harvest → Fruiting block → Mixed substrate → (Spawnbag + Bulk) → All materials + vendors
 
 ### Q: "How do I calculate EBIT/week?"
+
 **A**: ✅ Query provided:
+
 - `SUM(weight_harvested) / 4 weeks` per LC species
 - Future: Add material cost deductions for cost-adjusted metric
 
 ### Q: "Should I delete failed records?"
+
 **A**: ✅ No, keep all records (audit trail):
+
 - Use `status` enum (active/complete/failed/discarded)
 - Filter in queries, don't delete
 - Enables root-cause analysis of failures
@@ -292,13 +332,15 @@ The "to do" note can be removed—nothing is missing.
 
 ## Next Steps
 
-### For You:
+### For You
+
 1. Review the 3 generated documents
 2. Provide feedback on any missing fields or processes
 3. Decide on photo storage strategy (recommend: start local)
 4. Confirm implementation timeline
 
-### For Development:
+### For Development
+
 1. Convert schema to SQLite DDL
 2. Create database initialization script
 3. Build API layer for CRUD operations
@@ -318,6 +360,7 @@ The database and processes are now documented to a level where you can:
 - ✅ Track continuous improvement metrics (EBIT/week per species)
 
 **What would you like to focus on next?**
+
 - SQL schema implementation?
 - API design?
 - Mobile app prototype?

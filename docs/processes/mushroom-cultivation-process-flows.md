@@ -31,12 +31,14 @@ graph LR
 All processes that create trackable items (Liquid Cultures, Spawnbags, Fruiting Blocks, etc.) require unique QR code assignment. The approach differs by workflow:
 
 ### Manual Process (Current)
+
 - **Step 1**: Create the record in database, generate unique ID
 - **Step 2**: Manually record the ID on the physical QR code label (print or write)
 - **Step 3**: Attach label to container
 - **Database**: Store printed QR code string in table
 
 ### Smartphone App Process (Future)
+
 - **Step 1**: Create the record in database, generate unique ID
 - **Step 2**: Pre-printed QR codes exist (encoded with ID + table name as safety feature)
 - **Step 3**: Worker scans the pre-printed QR code with phone
@@ -47,6 +49,16 @@ All processes that create trackable items (Liquid Cultures, Spawnbags, Fruiting 
 ---
 
 ## 2. Material Ordering Process (Two Stages)
+
+### Step Requirements: Material Ordering
+
+| Step | Operational requirement | Required data captured |
+| ------ | -------------------------- | ------------------------ |
+| Stage 1.1: Decide purchase channel | Worker chooses online shop or physical store | `material_type`, `vendor` |
+| Stage 1.2: Record order details | Record order before receiving goods | `order_date`, `measuring_unit`, `amount_ordered`, `price_total`, `order_link` (online) or article number in `comments` (physical) |
+| Stage 1.3: Create pending material record | Save as in-transit item | `delivery_date = NULL` |
+| Stage 2.1: Verify delivery | Check item, quantity, condition | `comments` for discrepancies/issues |
+| Stage 2.2: Confirm inventory | Mark material as received and usable | `delivery_date`, `amount_remaining`, `storage_location` |
 
 ### Stage 1: Order Placement & Recording
 
@@ -104,6 +116,17 @@ graph TD
 
 ## 3. Liquid Culture Creation Process
 
+### Step Requirements: Liquid Culture
+
+| Step | Operational requirement | Required data captured |
+| ------ | -------------------------- | ------------------------ |
+| Step 1: Prepare nutrient solution | Mix ingredients and jar setup | Process notes in `comments` |
+| Step 2: Sterilize and cool | Sterilize at 90 min @ 11 psi, cool to room temp | Process notes in `comments` |
+| Step 3: Inoculate source | Use existing LC or spore print source | `datetime_inoculated`, `species`, `fk_source_liquid_culture_id` or `spore_print_source_location` |
+| Step 4: Initialize inventory | Track usable LC volume | `amount_ml`, `amount_remaining_ml`, `status = active` |
+| Step 5: Weekly monitoring | Record growth progression over time | `lc_growth_inspections.datetime_checked`, `colonization_percent`, `appearance`, `comments` |
+| Step 6: Completion or discard | Week-6 rule and readiness state | `status`, `datetime_ready_for_use`, `sterility_check_passed` |
+
 ```mermaid
 graph TD
     Start["Start: Create Liquid Culture<br/>(nutrient solution + species)"] --> Mix["Mix nutrient ingredients<br/>(malt, dextrose, gypsum, yeast, etc.)"]
@@ -149,17 +172,25 @@ graph TD
 
 ## 4. Soaking Process
 
+### Step Requirements: Soaking
+
+| Step | Operational requirement | Required data captured |
+| ------ | -------------------------- | ------------------------ |
+| Step 1: Start soakrun | Measure dry grain and start process | `datetime_started`, `fk_material_grain_id`, `weight_dry_grain` |
+| Step 2: Soak management | Track manual stirs and water changes | `datetimes_stirs`, `datetimes_water_changes` |
+| Step 3: Optional boil step | If applied, capture highest temperature reached when heat is turned off | `boil_applied`, `water_temp_max` |
+| Step 4: Optional additives | Record any added materials and amounts | `additives_applied`, `comments` |
+| Step 5: Finish soakrun | Record completion and germination sign | `datetime_finished`, `signs_of_germination` |
+
 ```mermaid
 graph TD
     Start["Start: Soak Grain<br/>(typically barley, 6 kg target)"] --> Measure["Measure dry grain weight<br/>Record in soakruns table"]
 
     Measure --> Insert1["INSERT INTO soakruns:<br/>datetime_started,<br/>fk_material_grain_id,<br/>weight_dry_grain"]
 
-    Insert1 --> Fill["Fill container with water<br/>Set initial temperature"]
+    Insert1 --> Fill["Fill container with water<br/>Use worker-selected soak temperature"]
 
-    Fill --> Record1["Record water_temp_initial"]
-
-    Record1 --> Stir1["Stir grain immediately (2 min)<br/>Record datetime_stirs if tracked"]
+    Fill --> Stir1["Stir grain immediately (2 min)<br/>Record datetime_stirs if tracked"]
 
     Stir1 --> Drain1["Drain water"]
 
@@ -183,7 +214,7 @@ graph TD
 
     MixOpt --> FinalCheck{Germination signs<br/>observed?}
 
-    FinalCheck -->|Yes| UpdateFinal["UPDATE soakruns:<br/>signs_of_germination = TRUE<br/>water_temp_final"]
+    FinalCheck -->|Yes| UpdateFinal["UPDATE soakruns:<br/>signs_of_germination = TRUE"]
     FinalCheck -->|No| UpdateFinal
 
     UpdateFinal --> End["✅ End: Soaked Grain Ready<br/>For Spawnbag Process"]
@@ -197,6 +228,17 @@ graph TD
 ---
 
 ## 5. Grain Spawn Process (Spawnbag Creation & Inoculation)
+
+### Step Requirements: Grain Spawn
+
+| Step | Operational requirement | Required data captured |
+| ------ | -------------------------- | ------------------------ |
+| Step 1: Fill and identify bags | Record weight and binary order marking | `datetime_created`, `fk_soakrun_id`, `weight_filled`, `bag_number`, `binary_marking_pattern` |
+| Step 2: Sterilize bags | Capture sterilization parameters and completion time | `sterilization_duration_min`, `sterilization_psi`, `datetime_sterilized`, `cooling_method` |
+| Step 3: Attach trackable identity | Assign and store physical QR label | `qr_code` |
+| Step 4: Inoculate with LC | Link bag to liquid culture and start timer | `datetime_inoculated`, `fk_liquid_culture_id` |
+| Step 5: Update LC stock | Subtract inoculation volume | `liquid_cultures.amount_remaining_ml` |
+| Step 6: Weekly health checks | Track growth, moisture, contamination history | `spawnbag_inspections.datetime_checked`, `colonization_percent`, `moisture_level`, `contamination_visible`, `status`, `comments` |
 
 ```mermaid
 graph TD
@@ -232,7 +274,7 @@ graph TD
 
     Draw --> Inoculate["Inject into spawnbag<br/>via injection port"]
 
-    Inoculate --> Insert2["INSERT INTO spawnbags:<br/>datetime_inoculated (NOW),<br/>fk_liquid_culture_id"]
+    Inoculate --> Insert2["UPDATE spawnbags:<br/>datetime_inoculated = NOW(),<br/>fk_liquid_culture_id = ?"]
 
     Insert2 --> Update_LC["UPDATE liquid_cultures:<br/>amount_remaining_ml -= 10"]
 
@@ -245,7 +287,6 @@ graph TD
     Inspect --> Decision{Check Results}
 
     Decision -->|Contaminated| Discard["❌ DISCARD<br/>UPDATE spawnbag_inspections.status = 'contaminated'"]
-    Decision -->|Contaminated| Discard["❌ DISCARD<br/>UPDATE spawnbag_inspections.status = ''"]
     Decision -->|Slow growth @8 weeks| Discard
     Decision -->|Progressing well| WeeklyCheck
     Decision -->|100% Colonized| Complete["✅ 100 Colonized<br/>spawnbag_inspections.status = 'complete'<br/>Ready for Substrate Mixing"]
@@ -262,6 +303,15 @@ graph TD
 ---
 
 ## 6. Bulk Spawn Process
+
+### Step Requirements: Bulk Spawn
+
+| Step | Operational requirement | Required data captured |
+| ------ | -------------------------- | ------------------------ |
+| Step 1: Measure inputs | Measure all bulk components with real amounts | `fk_material_coco_coir_id`, `amount_coco_coir`, `fk_material_perlite_id`, `amount_perlite`, `fk_material_vermiculite_id`, `amount_vermiculite`, `fk_material_gypsum_id`, `amount_gypsum` |
+| Step 2: Prepare water | Measure and boil process water | `water_volume` |
+| Step 3: Pasteurize and cool | Pour boiling water and cool to safe mix temp | `datetime_created`, `datetime_cooled_below_25c` |
+| Step 4: Finalize bulk batch | Store resulting batch metrics | `final_weight`, `comments` |
 
 **Note**: This is a **parallel, independent process**. Does NOT depend on Liquid Culture or Grain Spawn.
 It runs in parallel and only combines with Grain Spawn during Substrate Mixing.
@@ -299,6 +349,16 @@ graph TD
 ---
 
 ## 7. Substrate Mixing Process (Create Fruiting Blocks)
+
+### Step Requirements: Substrate Mixing
+
+| Step | Operational requirement | Required data captured |
+| ------ | -------------------------- | ------------------------ |
+| Step 1: Select source batches | Use one fully colonized spawnbag and one cooled bulk | `fk_spawnbag_id`, `fk_bulk_id`, `datetime_mixed` |
+| Step 2: Prepare containers | Clean, sanitize, and prepare filter holes | `fk_material_container_id`, deviations in `comments` |
+| Step 3: Fill fruiting blocks | Track each block as its own unit | `fruiting_blocks.datetime_created`, `fk_mixed_substrate_id`, `weight_at_creation`, `target_weight`, `qr_code`, `status` |
+| Step 4: Record block count | Persist total blocks produced by this mix | `num_fruiting_blocks_created` |
+| Step 5: Weekly colonization checks | Track moisture, growth, contamination over time | `fruiting_block_inspections.datetime_checked`, `colonization_percent`, `moisture_level`, `contamination_visible`, `status`, `comments` |
 
 **Note**: This process combines the outputs of TWO independent parallel processes:
 
@@ -361,6 +421,16 @@ graph TD
 ---
 
 ## 8. Fruiting Process (Harvest)
+
+### Step Requirements: Fruiting
+
+| Step | Operational requirement | Required data captured |
+| ------ | -------------------------- | ------------------------ |
+| Step 1: Move block to chamber | Register fruiting start and position | `datetime_moved_to_chamber`, `fk_fruiting_block_id`, `chamber_location` |
+| Step 2: Record flush 1 | Save first harvest timing and yield | `flush_number = 1`, `datetime_flush_occurred`, `weight_harvested` |
+| Step 3: Record flush 2 or dispose | Save second flush if present, then dispose | `flush_number = 2`, `datetime_flush_occurred`, `weight_harvested`, `fruiting_blocks.status = disposed` |
+| Step 4: Track timeout outcomes | If flush exceeds 4 weeks, discard and document | `comments`, `fruiting_blocks.disposal_reason` |
+| Step 5: KPI reporting | Aggregate harvest outcomes for CI | harvest query outputs (grams/week, failures) |
 
 ```mermaid
 graph TD

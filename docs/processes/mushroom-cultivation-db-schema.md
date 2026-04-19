@@ -70,9 +70,7 @@ Grain soaking process (typically barley). One soakrun produces n spawnbags.
 | datetime_finished | DATETIME | NOT NULL | When water drained (20-30h after start) |
 | fk_material_grain_id | INT | FK → materials | Links to spawn_grain order |
 | weight_dry_grain | DECIMAL(8,3) | NOT NULL | Pre-soak weight (kg) |
-| water_temp_initial | DECIMAL(5,2) | NOT NULL | Starting water temp (°C) |
 | water_temp_max | DECIMAL(5,2) | NOT NULL | Highest reached (when heat off) |
-| water_temp_final | DECIMAL(5,2) | NOT NULL | Temp after cooling/before bagging (°C) |
 | datetimes_water_changes | TEXT | Optional | Comma-delimited ISO timestamps (e.g., "2026-04-18T14:30, 2026-04-19T09:15") |
 | datetimes_stirs | TEXT | Optional | Comma-delimited ISO timestamps of manual mixing |
 | boil_applied | BOOLEAN | DEFAULT FALSE | Whether hot-water cooking step used |
@@ -83,6 +81,7 @@ Grain soaking process (typically barley). One soakrun produces n spawnbags.
 
 **Design Notes**:
 - All timestamps in ISO-8601 format (YYYY-MM-DD HH:MM:SS)
+- Only the highest manually observed temperature is tracked (`water_temp_max`) to keep logging workload low
 - Comma-delimited datetimes chosen for simplicity (not normalized further to reduce tables)
 - Weight variance (absorption rate) calculated post-analysis: `(final_weight - dry_weight) / dry_weight`
 - Boil/additives optional flags support experimentation

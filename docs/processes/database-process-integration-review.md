@@ -19,19 +19,13 @@ The refined database schema comprehensively covers all 7 cultivation processes w
 **Database Support**: `materials` table
 **Coverage**: Complete (Two-stage workflow)
 
-| Requirement | Schema Field | Status |
-|-------------|--------------|--------|
-| Stage 1 - Order placement & recording | `order_date`, `order_link`/`article_number` | ✅ |
-| Stage 2 - Delivery date | `delivery_date` (initially NULL, populated on receipt) | ✅ |
-| Vendor name | `vendor` | ✅ |
-| Quantity ordered | `amount_ordered` | ✅ |
-| Receipt verification | `comments` (issues/discrepancies noted here) | ✅ |
-| Quantity used tracking | `amount_used`, `amount_remaining` | ✅ |
-| Storage location | `storage_location` | ✅ |
-| Price tracking | `price_total` | ✅ |
-| URL for online orders | `order_link` | ✅ |
-| Vendor quality assessment | Implied (via process failures) | ✅ Future |
-| Article # for physical | Not captured | ⚠️ Minor gap |
+| Process Step | Requirement | Schema Field | Status |
+| ------------- | ------------- | -------------- | -------- |
+| Stage 1.1: Create order | Record vendor + order metadata | `vendor`, `order_date`, `material_type`, `measuring_unit`, `amount_ordered`, `price_total`, `order_link` | ✅ |
+| Stage 1.2: Mark pending delivery | Keep material pending until received | `delivery_date` (NULL until receipt) | ✅ |
+| Stage 2.1: Verify delivery | Record mismatches/damage/issues | `comments` | ✅ |
+| Stage 2.2: Receive into stock | Confirm available quantity and storage | `amount_used`, `amount_remaining`, `storage_location`, `delivery_date` | ✅ |
+| Stage 2.3: Physical-store article number | Capture article ID for physical stores | Not captured | ⚠️ Minor gap |
 
 **Design**: Two-stage workflow — Stage 1 creates record with `delivery_date = NULL`, Stage 2 verifies and populates `delivery_date` only after confirmation.
 **Decision**: Keep as-is (5 vendors, manual process; low overhead).
@@ -43,20 +37,14 @@ The refined database schema comprehensively covers all 7 cultivation processes w
 **Database Support**: `liquid_cultures` + `lc_growth_inspections`
 **Coverage**: Complete
 
-| Requirement | Schema Field | Status |
-|-------------|--------------|--------|
-| Species | `species` | ✅ |
-| Inoculation date | `datetime_inoculated` | ✅ |
-| Inoculation source (existing LC) | `fk_source_liquid_culture_id` | ✅ |
-| Inoculation source (spore print) | `spore_print_source_location` | ✅ |
-| Total volume | `amount_ml` | ✅ |
-| Volume remaining | `amount_remaining_ml` | ✅ |
-| Storage location (fridge) | `storage_location` | ✅ |
-| Weekly growth checks | `lc_growth_inspections` table | ✅ |
-| Colonization % tracking | `colonization_percent` in inspections | ✅ |
-| Sterility check before use | `sterility_check_passed` | ✅ |
-| Status (active/complete/failed) | `status` enum | ✅ |
-| 6-week discard threshold | Auto-calculated at inspection | ✅ |
+| Process Step | Requirement | Schema Field | Status |
+| ------------- | ------------- | -------------- | -------- |
+| Step 1: Inoculate LC jar | Capture species and inoculation datetime | `species`, `datetime_inoculated` | ✅ |
+| Step 2: Capture source lineage | Existing LC or spore-print origin | `fk_source_liquid_culture_id`, `spore_print_source_location` | ✅ |
+| Step 3: Initialize LC inventory | Track available LC volume | `amount_ml`, `amount_remaining_ml`, `storage_location` | ✅ |
+| Step 4: Weekly monitoring | Persist growth progression history | `lc_growth_inspections` (`datetime_checked`, `colonization_percent`, `appearance`) | ✅ |
+| Step 5: Readiness and sterility gate | Require sterility check before use | `status`, `datetime_ready_for_use`, `sterility_check_passed` | ✅ |
+| Step 6: Week-6 discard rule | Flag stagnant cultures at inspections | Auto-calculated at inspection | ✅ |
 
 **Result**: ✅ Fully covered. All requirements captured.
 
@@ -67,19 +55,14 @@ The refined database schema comprehensively covers all 7 cultivation processes w
 **Database Support**: `soakruns` table
 **Coverage**: Complete
 
-| Requirement | Schema Field | Status |
-|-------------|--------------|--------|
-| Link to grain material batch | `fk_material_grain_id` | ✅ |
-| Start/end datetimes | `datetime_started`, `datetime_finished` | ✅ |
-| Dry grain weight | `weight_dry_grain` | ✅ |
-| Water temperatures (initial, max, final) | `water_temp_initial`, `water_temp_max`, `water_temp_final` | ✅ |
-| Water change datetimes | `datetimes_water_changes` (comma-delimited) | ✅ |
-| Stir datetimes | `datetimes_stirs` (comma-delimited) | ✅ |
-| Optional boiling | `boil_applied` boolean | ✅ |
-| Additives (e.g., gypsum) | `additives_applied` text | ✅ |
-| Germination observation | `signs_of_germination` boolean | ✅ |
-| Comments/deviations | `comments` | ✅ |
-| Photo documentation | `picture_path` | ✅ |
+| Process Step | Requirement | Schema Field | Status |
+| ------------- | ------------- | -------------- | -------- |
+| Step 1: Start soakrun | Link grain source and dry weight | `fk_material_grain_id`, `datetime_started`, `weight_dry_grain` | ✅ |
+| Step 2: Track soak events | Persist stir and water-change timestamps | `datetimes_stirs`, `datetimes_water_changes` | ✅ |
+| Step 3: Optional boil | Record whether boil happened and max temp reached | `boil_applied`, `water_temp_max` | ✅ |
+| Step 4: Optional additives | Record additive notes and amounts | `additives_applied`, `comments` | ✅ |
+| Step 5: Finish soakrun | Record completion and germination sign | `datetime_finished`, `signs_of_germination` | ✅ |
+| Step 6: Visual traceability | Keep optional photo record | `picture_path` | ✅ |
 
 **Result**: ✅ Fully covered. Comma-delimited strings chosen for simplicity.
 
@@ -90,25 +73,14 @@ The refined database schema comprehensively covers all 7 cultivation processes w
 **Database Support**: `spawnbags` + `spawnbag_inspections`
 **Coverage**: Complete
 
-| Requirement | Schema Field | Status |
-|-------------|--------------|--------|
-| Link to soakrun | `fk_soakrun_id` | ✅ |
-| Filled weight | `weight_filled` | ✅ |
-| Bag numbering (1-16) | `bag_number` | ✅ |
-| Binary marking pattern | `binary_marking_pattern` | ✅ |
-| QR code | `qr_code` | ✅ |
-| Sterilization date | `datetime_sterilized` | ✅ |
-| Sterilization parameters | `sterilization_duration_min`, `sterilization_psi` | ✅ |
-| Cooling method | `cooling_method` enum | ✅ |
-| Inoculation date | `datetime_inoculated` | ✅ |
-| LC reference | `fk_liquid_culture_id` | ✅ |
-| Weekly colonization checks | `spawnbag_inspections` table | ✅ |
-| Colonization % | `colonization_percent` (0-100) | ✅ |
-| Moisture level tracking | `moisture_level` enum (dry/good/wet) | ✅ |
-| Contamination detection | `contamination_visible`, `contamination_type` | ✅ |
-| Status (healthy/contaminated/complete) | `status` enum | ✅ |
-| 8-week discard threshold | Auto-calculated at inspection | ✅ |
-| Comments/deviations | `comments` | ✅ |
+| Process Step | Requirement | Schema Field | Status |
+| ------------- | ------------- | -------------- | -------- |
+| Step 1: Create bag records | Link soakrun and capture bag identity/weight | `fk_soakrun_id`, `weight_filled`, `bag_number`, `binary_marking_pattern`, `qr_code` | ✅ |
+| Step 2: Sterilize bags | Capture pressure/time and cooling mode | `datetime_sterilized`, `sterilization_duration_min`, `sterilization_psi`, `cooling_method` | ✅ |
+| Step 3: Inoculate bags | Link LC and start inoculation timer | `datetime_inoculated`, `fk_liquid_culture_id` | ✅ |
+| Step 4: Weekly inspections | Track colonization/moisture/contamination over time | `spawnbag_inspections` (`datetime_checked`, `colonization_percent`, `moisture_level`, `contamination_visible`, `contamination_type`, `status`) | ✅ |
+| Step 5: Disposal logic | Enforce 8-week slow-growth discard rule | Auto-calculated at inspection | ✅ |
+| Step 6: Deviations and photos | Keep human observations and images | `comments`, `picture_path` | ✅ |
 
 **Result**: ✅ Fully covered. Inspection history preserved.
 
@@ -119,21 +91,12 @@ The refined database schema comprehensively covers all 7 cultivation processes w
 **Database Support**: `bulks` table
 **Coverage**: Complete
 
-| Requirement | Schema Field | Status |
-|-------------|--------------|--------|
-| Creation datetime | `datetime_created` | ✅ |
-| Coco coir amount | `amount_coco_coir` (variable) | ✅ |
-| Coco coir material link | `fk_material_coco_coir_id` | ✅ |
-| Perlite amount | `amount_perlite` (variable) | ✅ |
-| Perlite material link | `fk_material_perlite_id` | ✅ |
-| Vermiculite amount | `amount_vermiculite` (variable) | ✅ |
-| Vermiculite material link | `fk_material_vermiculite_id` | ✅ |
-| Gypsum amount | `amount_gypsum` (variable) | ✅ |
-| Gypsum material link | `fk_material_gypsum_id` | ✅ |
-| Water volume | `water_volume` (variable) | ✅ |
-| Cooling completion (≤25°C) | `datetime_cooled_below_25c` | ✅ |
-| Final weight | `final_weight` | ✅ |
-| Comments/deviations | `comments` | ✅ |
+| Process Step | Requirement | Schema Field | Status |
+| ------------- | ------------- | -------------- | -------- |
+| Step 1: Measure components | Capture real amounts and source materials | `fk_material_coco_coir_id`, `amount_coco_coir`, `fk_material_perlite_id`, `amount_perlite`, `fk_material_vermiculite_id`, `amount_vermiculite`, `fk_material_gypsum_id`, `amount_gypsum` | ✅ |
+| Step 2: Add process water | Record water volume used | `water_volume` | ✅ |
+| Step 3: Pasteurize and cool | Track creation and cool-below-25C milestone | `datetime_created`, `datetime_cooled_below_25c` | ✅ |
+| Step 4: Finalize batch | Store total output and notes | `final_weight`, `comments` | ✅ |
 
 **Result**: ✅ Fully covered. No shelf-life tracking (not needed—instant use).
 
@@ -144,26 +107,15 @@ The refined database schema comprehensively covers all 7 cultivation processes w
 **Database Support**: `mixed_substrates` + `fruiting_blocks` + `fruiting_block_inspections`
 **Coverage**: Complete
 
-| Requirement | Schema Field | Status |
-|-------------|--------------|--------|
-| Mixing datetime | `datetime_mixed` | ✅ |
-| Spawnbag reference | `fk_spawnbag_id` | ✅ |
-| Bulk reference | `fk_bulk_id` | ✅ |
-| Container material link | `fk_material_container_id` | ✅ |
-| Number of blocks created | `num_fruiting_blocks_created` | ✅ |
-| Individual block creation | `fruiting_blocks` table | ✅ |
-| Block weight at fill | `weight_at_creation` | ✅ |
-| Target weight | `target_weight` | ✅ |
-| Block QR code | `qr_code` | ✅ |
-| Weekly colonization checks | `fruiting_block_inspections` table | ✅ |
-| Colonization % tracking | `colonization_percent` | ✅ |
-| Moisture level | `moisture_level` enum | ✅ |
-| Contamination detection | `contamination_visible`, `contamination_type` | ✅ |
-| Status tracking | `status` enum (colonizing/ready/disposed) | ✅ |
-| Colonization completion date | `datetime_colonization_complete` | ✅ |
-| 8-week discard threshold | Auto-calculated at inspection | ✅ |
-| Comments/deviations | `comments` | ✅ |
-| Contamination photos | `picture_path` | ✅ |
+| Process Step | Requirement | Schema Field | Status |
+| ------------- | ------------- | -------------- | -------- |
+| Step 1: Create mix batch | Link one spawnbag with one bulk | `datetime_mixed`, `fk_spawnbag_id`, `fk_bulk_id` | ✅ |
+| Step 2: Track container lineage | Link container source material | `fk_material_container_id` | ✅ |
+| Step 3: Create fruiting blocks | Persist each block as individual tracked unit | `fruiting_blocks` (`datetime_created`, `weight_at_creation`, `target_weight`, `qr_code`, `status`) | ✅ |
+| Step 4: Persist output count | Save how many blocks were produced | `num_fruiting_blocks_created` | ✅ |
+| Step 5: Weekly inspections | Track growth/moisture/contamination history | `fruiting_block_inspections` (`datetime_checked`, `colonization_percent`, `moisture_level`, `contamination_visible`, `contamination_type`, `status`) | ✅ |
+| Step 6: Completion/discard | Capture readiness and 8-week slow-growth logic | `datetime_colonization_complete`, auto-calculated discard threshold | ✅ |
+| Step 7: Observability | Keep notes and photo evidence | `comments`, `picture_path` | ✅ |
 
 **Result**: ✅ Fully covered. Split into mixed_substrates (1 bulk+spawn) and fruiting_blocks (individual containers) as agreed.
 
@@ -174,18 +126,13 @@ The refined database schema comprehensively covers all 7 cultivation processes w
 **Database Support**: `fruiting` table
 **Coverage**: Complete
 
-| Requirement | Schema Field | Status |
-|-------------|--------------|--------|
-| Block reference | `fk_fruiting_block_id` | ✅ |
-| Move-to-chamber datetime | `datetime_moved_to_chamber` | ✅ |
-| Chamber location | `chamber_location` | ✅ |
-| Flush number (1 or 2) | `flush_number` | ✅ |
-| Flush harvest datetime | `datetime_flush_occurred` | ✅ |
-| Weight harvested | `weight_harvested` (kg) | ✅ |
-| 4-week discard per flush | Auto-calculated at harvest time | ✅ |
-| 2-flush maximum | `flush_number` constraint | ✅ |
-| Comments/deviations | `comments` | ✅ |
-| Harvest photos | `picture_path` | ✅ |
+| Process Step | Requirement | Schema Field | Status |
+| ------------- | ------------- | -------------- | -------- |
+| Step 1: Enter chamber | Register fruiting start and location | `fk_fruiting_block_id`, `datetime_moved_to_chamber`, `chamber_location` | ✅ |
+| Step 2: Record flush 1 harvest | Track first flush event and yield | `flush_number = 1`, `datetime_flush_occurred`, `weight_harvested` | ✅ |
+| Step 3: Record flush 2 harvest | Track second flush then dispose block | `flush_number = 2`, `datetime_flush_occurred`, `weight_harvested` | ✅ |
+| Step 4: Timeout handling | Apply 4-week per-flush discard rule | Auto-calculated at harvest time | ✅ |
+| Step 5: Outcome documentation | Save notes and harvest photos | `comments`, `picture_path` | ✅ |
 
 **Result**: ✅ Fully covered. 4-week timeout per flush (resets after flush 1).
 
@@ -197,7 +144,7 @@ The refined database schema comprehensively covers all 7 cultivation processes w
 
 **Scenario**: "Trace mushroom harvest back to original materials"
 
-```
+```text
 fruiting (harvest record)
   ↓ fk_fruiting_block_id
 fruiting_blocks (container)
@@ -300,7 +247,7 @@ ORDER BY grams_per_week DESC;
 ## Integration Validation Checklist
 
 | Requirement | Status | Notes |
-|-------------|--------|-------|
+| ------------- | -------- | ------- |
 | All processes link to materials | ✅ Yes | Every process references material orders |
 | Inspection tables maintain history | ✅ Yes | Separate tables for spawnbag, fruiting_block, LC inspections |
 | Auto-discard at 8 weeks | ✅ Yes | Calculated at inspection time, flagged for worker |

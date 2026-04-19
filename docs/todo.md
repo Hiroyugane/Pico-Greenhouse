@@ -17,3 +17,4 @@
 - [ ] OTA update mechanism (update files on sd-card)
 - [ ] Device-side integration tests (run on Pico via Thonny)
 - [ ] Performance benchmarks (startup time, memory usage, 24h soak test)
+- [ ] MCP4725 to control Viparspectra Growlight

@@ -12,7 +12,7 @@ This is a **Phase 3 sub-prompt** for the agent pipeline (`docs/prompts/pipeline.
 
 ## Context
 
-You are working on the Pi Greenhouse project — a MicroPython system on a Raspberry Pi Pico. Sensor data is logged to CSV files via `BufferManager` (SD → fallback → RAM). The existing `DHTLogger` is the reference implementation for sensor modules.
+You are working on the Pi Greenhouse project — a MicroPython system on a Raspberry Pi Pico. Sensor data is logged to CSV files via `BufferManager` (SD → fallback → RAM). The existing `TempHumidityLogger` is the reference implementation for sensor modules.
 
 ## Task
 
@@ -162,7 +162,7 @@ In Step 9: `asyncio.create_task({var_name}.log_loop())`
 ## Verification checklist
 
 - [ ] Config section with defaults + `validate_config()` updated
-- [ ] Logger class follows DHTLogger patterns (DI, retry, async loop)
+- [ ] Logger class follows TempHumidityLogger patterns (DI, retry, async loop)
 - [ ] CSV uses ISO-8601 timestamps, date-based rollover, header row
 - [ ] Writes via `buffer_manager.write(relpath, data)` — relative paths only
 - [ ] Host shim added (if needed for MicroPython-only driver)

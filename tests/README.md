@@ -20,7 +20,7 @@ pytest tests/ --cov=lib --cov=config --cov-report=term-missing
 | `test_buffer_manager.py` | `lib/buffer_manager.py` | Primary/fallback/in-memory writes, flush, migration, rename, metrics |
 | `test_event_logger.py` | `lib/event_logger.py` | INFO/WARN/ERR logging, flush thresholds, log rotation, timestamps |
 | `test_relay.py` | `lib/relay.py` | RelayController toggle/state, FanController thermostat+schedule, GrowlightController dawn/sunset |
-| `test_dht_logger.py` | `lib/dht_logger.py` | Sensor read/retry/range, date rollover, CSV creation, async log loop |
+| `test_temp_humidity_logger.py` | `lib/temp_humidity_logger.py` | SHT31 read/retry/range, date rollover, CSV creation, async log loop |
 | `test_led_button.py` | `lib/led_button.py` | LED on/off/blink, button debounce, ServiceReminder persistence+monitor |
 | `test_hardware_factory.py` | `lib/hardware_factory.py` | RTC/SPI/SD init, pin setup, refresh, error accumulation |
 | `test_sd_integration.py` | `lib/sd_integration.py` | mount_sd host/device, is_mounted checks |
@@ -30,7 +30,7 @@ pytest tests/ --cov=lib --cov=config --cov-report=term-missing
 ## Configuration
 
 - **`pyproject.toml`** at project root configures pytest (`asyncio_mode = "auto"`) and coverage (`fail_under = 88`).
-- **`conftest.py`** patches `sys.modules` for `machine`, `dht`, `micropython`, `uasyncio` using structured `MagicMock` objects with realistic Pin constants (`OUT`, `IN`, `PULL_UP`, `IRQ_FALLING`).
+- **`conftest.py`** patches `sys.modules` for `machine`, `micropython`, `uasyncio` using structured `MagicMock` objects with realistic Pin constants (`OUT`, `IN`, `PULL_UP`, `IRQ_FALLING`).
 - **Fixtures** provide pre-wired instances: `time_provider`, `buffer_manager(tmp_path)`, `event_logger`, `fan_controller`, `growlight_controller`, `led_handler`, etc.
 - **Async tests** use `pytest-asyncio` auto mode — just write `async def test_*()` methods.
 
@@ -43,7 +43,7 @@ tests/
 ├── test_buffer_manager.py   # BufferManager with tmp_path filesystem isolation
 ├── test_event_logger.py     # EventLogger flush/rotation/error paths
 ├── test_relay.py            # RelayController, FanController, GrowlightController
-├── test_dht_logger.py       # DHTLogger sensor, rollover, log_loop
+├── test_temp_humidity_logger.py  # TempHumidityLogger sensor, rollover, log_loop
 ├── test_led_button.py       # LED, LEDButtonHandler, ServiceReminder
 ├── test_hardware_factory.py # HardwareFactory setup/init/refresh
 ├── test_sd_integration.py   # SD mount/is_mounted
@@ -76,7 +76,7 @@ open htmlcov/index.html
 3. Create TimeProvider (wraps RTC for consistent timestamps)
 4. Create BufferManager (SD + fallback resilience)
 5. Create EventLogger (system event tracking with persistence)
-6. Create DHTLogger (temperature/humidity sensor)
+6. Create TempHumidityLogger (SHT31 on shared I2C0)
 7. Create relay controllers: FanController × 2, GrowlightController
 8. Create LED/button handler and ServiceReminder task
 9. Spawn all async tasks (fan cycles, growlight scheduler, sensor logging, reminder monitoring)
@@ -124,7 +124,7 @@ def test_mock_was_called(self, mock_rtc):
 
 ## Known Limitations
 
-1. **Async Tests**: ServiceReminder, DHTLogger, and FanController have async methods not fully tested (would need pytest-asyncio fixtures)
+1. **Async Tests**: ServiceReminder, TempHumidityLogger, and FanController have async methods not fully tested (would need pytest-asyncio fixtures)
 2. **File I/O**: File operations are partially mocked; real SD behavior may differ
 3. **MicroPython Specifics**: Some MicroPython-only features (e.g., memory constraints, interrupt handlers) aren't tested
 4. **GPIO Interrupts**: Button interrupt handlers are mocked; real debouncing untested

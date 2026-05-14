@@ -3,12 +3,12 @@
 
 ## Overview
 
-**Pi Greenhouse** is a MicroPython-based automated greenhouse control system running on Raspberry Pi Pico. It monitors temperature and humidity via a DHT22 sensor, logs timestamped data to SD card with automatic fallback storage, and controls two fan relays (schedule + thermostat) and a grow light relay (dawn/sunset scheduling). All components use dependency injection and run as concurrent `uasyncio` tasks.
+**Pi Greenhouse** is a MicroPython-based automated greenhouse control system running on Raspberry Pi Pico. It monitors temperature and humidity via a Sensirion SHT31-D sensor on the shared I2C0 bus, logs timestamped data to SD card with automatic fallback storage, and controls two fan relays (schedule + thermostat) and a grow light relay (dawn/sunset scheduling). All components use dependency injection and run as concurrent `uasyncio` tasks.
 
 ## Key Features
 
-- **Real-time Environmental Monitoring** — DHT22 sensor reads temperature and humidity every 30 seconds (configurable)
-- **Date-based CSV Logging** — Readings stored as `/sd/dht_log_YYYY-MM-DD.csv` with automatic daily rollover
+- **Real-time Environmental Monitoring** — SHT31-D I2C sensor reads temperature and humidity every 30 seconds (configurable); CRC-validated transport
+- **Date-based CSV Logging** — Readings stored as `/sd/th_log_YYYY-MM-DD.csv` with automatic daily rollover
 - **Tiered Storage** — `BufferManager` writes to SD card, falls back to `/local/fallback.csv`, and buffers in RAM; migrates fallback data when SD becomes available
 - **Dual Fan Control** — Two independent `FanController` relays with time-based cycling *and* thermostat override (temperature threshold + hysteresis)
 - **Scheduled Grow Lights** — `GrowlightController` with configurable dawn/sunset times and optional auto-calculation from sunrise/sunset data
@@ -28,7 +28,7 @@ The system follows a **dependency-injection, factory-based** design:
 3. `RTCTimeProvider` — Wraps the DS3231 RTC; all modules receive timestamps through this provider (no direct RTC calls).
 4. `BufferManager` — Centralized write layer: SD → fallback CSV → in-memory buffer. Handles migration and flush.
 5. `EventLogger` — System log with severity levels, buffered flush through `BufferManager`, and size-based rotation.
-6. `DHTLogger` — Sensor reads with retry logic, date-based CSV rollover, LED blink feedback, and cached `last_temperature` for fan thermostat.
+6. `TempHumidityLogger` — SHT31-D reads with retry logic, date-based CSV rollover, LED blink feedback, and cached `last_temperature` for fan thermostat.
 7. `FanController` / `GrowlightController` — Composition over `RelayController` base; relay GPIO is inverted (HIGH = off, LOW = on).
 8. `LEDButtonHandler` + `ServiceReminder` — Debounced button interrupts with short/long press discrimination and persistent timestamp storage.
 
@@ -38,7 +38,7 @@ All long-running logic runs as `uasyncio` tasks with `await asyncio.sleep()` (no
 
 | Component | GPIO Pin | Purpose |
 | --- | --- | --- |
-| DHT22 Sensor | GP15 | Temperature / humidity measurement |
+| SHT31-D Sensor | GP0/GP1 (I2C0, addr 0x44) | Temperature / humidity measurement (shares bus with RTC + OLED + DAC) |
 | DS3231 RTC | GP0/GP1 (I2C0) | Real-time clock for timestamps |
 | SD Card Module | GP10–GP13 (SPI1) | Data persistence |
 | Relay — Fan 1 | GP16 | Primary fan (HIGH=off, LOW=on) |
@@ -75,7 +75,7 @@ python main.py  # Run in Thonny on-device
 
 ### 3. Run on Windows (Host Simulation)
 
-The project includes host shims (`host_shims/`) that simulate GPIO, SPI, I2C, DHT, and filesystem calls so you can run the full system on a standard Python 3 install.
+The project includes host shims (`host_shims/`) that simulate GPIO, SPI, I2C, the SHT31 sensor, and filesystem calls so you can run the full system on a standard Python 3 install.
 
 ```bash
 pip install -r requirements.txt   # one-time
@@ -102,25 +102,25 @@ See [tests/README.md](tests/README.md) for details on the test structure and Mic
 
 On the Pico, unplug the device and check the SD card:
 
-- `/sd/dht_log_YYYY-MM-DD.csv` — Temperature / humidity readings (one file per day)
+- `/sd/th_log_YYYY-MM-DD.csv` — Temperature / humidity readings (one file per day)
 - `/sd/system.log` — Event log with timestamps
 
 ## Configuration
 
 All tunable parameters live in `DEVICE_CONFIG` inside [config.py](config.py). The `validate_config()` function checks for required keys and value ranges at startup.
 
-### DHTLogger
+### TempHumidityLogger
 
 ```python
-DHTLogger(
-    pin=15,                   # DHT22 data pin
-    time_provider=...,        # RTCTimeProvider instance
-    buffer_manager=...,       # BufferManager instance
-    logger=...,               # EventLogger instance
-    interval=30,              # seconds between readings (config: dht_logger.interval_s)
-    filename='dht_log',       # base name → dht_log_YYYY-MM-DD.csv
-    max_retries=3,            # sensor read retries before giving up
-    status_led_pin=4,         # LED for blink feedback
+TempHumidityLogger(
+    sensor=SHT31(i2c, address=0x44),  # any object with measure()/temperature()/humidity()
+    time_provider=...,                # RTCTimeProvider instance
+    buffer_manager=...,               # BufferManager instance
+    logger=...,                       # EventLogger instance
+    interval=30,                      # seconds between readings (config: temp_humidity_logger.interval_s)
+    filename='th_log',                # base name → th_log_YYYY-MM-DD.csv
+    max_retries=3,                    # sensor read retries before giving up
+    status_manager=...,               # StatusManager instance for LED feedback
 )
 ```
 
@@ -130,7 +130,7 @@ DHTLogger(
 FanController(
     pin=16,                   # relay GPIO (inverted: HIGH=off, LOW=on)
     time_provider=...,
-    dht_logger=...,           # reads cached last_temperature
+    th_logger=...,            # reads cached last_temperature
     logger=...,
     interval_s=600,           # cycle interval — Fan 1: 600 s, Fan 2: 500 s
     on_time_s=20,             # relay ON duration per cycle
@@ -181,14 +181,15 @@ Git-codebase/
 ├── requirements.txt             # Python / host dependencies
 ├── pyproject.toml               # pytest + coverage configuration
 ├── host_shims/                  # Windows / CPython compatibility shims
-│   ├── dht.py                   #   DHT22 simulation (random readings)
+│   ├── sht31.py                 #   SHT31 simulation (probe-calibrated readings)
 │   ├── machine.py               #   Pin, SPI, I2C with console logging
 │   ├── micropython.py           #   const() stub
 │   ├── os.py                    #   mount / umount / ilistdir / VFS stubs
 │   └── uasyncio.py              #   Maps to asyncio
 ├── lib/                         # Core library modules
 │   ├── buffer_manager.py        #   Tiered storage: SD → fallback → RAM
-│   ├── dht_logger.py            #   DHT22 logger with DI + date rollover
+│   ├── sht31.py                 #   SHT31-D I2C driver with CRC-validated reads
+│   ├── temp_humidity_logger.py  #   Temp/humidity logger with DI + date rollover
 │   ├── ds3231.py                #   Primary RTC driver (8 time format modes)
 │   ├── ds2321_gen.py            #   Alternative DS3231 driver (Peter Hinch)
 │   ├── event_logger.py          #   System logger with severity + rotation
@@ -204,7 +205,7 @@ Git-codebase/
 │   ├── README.md                #   Testing guide
 │   ├── test_buffer_manager.py
 │   ├── test_config.py
-│   ├── test_dht_logger.py
+│   ├── test_temp_humidity_logger.py
 │   ├── test_event_logger.py
 │   ├── test_hardware_factory.py
 │   ├── test_led_button.py
@@ -226,11 +227,11 @@ Timestamp,Temperature,Humidity
 2026-01-29 14:36:12,22.6,65.1
 ```
 
-Files are named `dht_log_YYYY-MM-DD.csv` and roll over at midnight.
+Files are named `th_log_YYYY-MM-DD.csv` and roll over at midnight.
 
 ## LED Status Codes
 
-### DHT Read Feedback (GP4)
+### SHT31 Read Feedback (Activity LED on GP4)
 
 | Pattern | Meaning |
 | --- | --- |
@@ -257,7 +258,7 @@ Blinks with the configured pattern (default: `[2000, 2000, 2000, 2000]` ms) when
 | --- | --- |
 | No timestamp data | Run `rtc_set_time.py` first to sync the DS3231 RTC |
 | SD card not mounting | Verify GP10–GP13 wiring; check SPI baudrate in config |
-| Sensor read failures | Check DHT22 wiring on GP15; `max_retries` defaults to 3 |
+| Sensor read failures | Check SHT31 wiring on I2C0 (GP0/GP1, addr 0x44); `max_retries` defaults to 3 |
 | Relay not switching | Confirm inverted GPIO logic (HIGH = off, LOW = on) |
 | Data missing after SD removal | Check `/local/fallback.csv`; `BufferManager` migrates entries when SD returns |
 | System log growing large | `EventLogger` auto-rotates at 50 KB; old logs renamed with timestamp |
@@ -266,7 +267,6 @@ Blinks with the configured pattern (default: `[2000, 2000, 2000, 2000]` ms) when
 ## Planned Enhancements
 
 - **Sensor Upgrades**
-  - Replace DHT22 with SHT31-D for improved accuracy
   - CO2-based exhaust fan automation (SenseAir S8 UART pins reserved)
 
 - **User Interface**

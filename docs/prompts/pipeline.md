@@ -122,7 +122,7 @@ Attach `#file:.github/copilot-instructions.md` and `#file:docs/conventions.md` f
 2. Implement steps in the approved order, marking each complete as you go.
 3. Reference the relevant sub-prompt for code templates and patterns:
    - Controllers: `#file:docs/prompts/new-controller.md` (RelayController subclass, Pattern 1 async loop, `get_state()`)
-   - Sensors: `#file:docs/prompts/new-sensor.md` (DHTLogger-style class, retry Pattern 2, CSV rollover)
+   - Sensors: `#file:docs/prompts/new-sensor.md` (TempHumidityLogger-style class, retry Pattern 2, CSV rollover)
    - Bug fixes: `#file:docs/prompts/bug-fix.md` (minimal fix, regression test)
    - Refactors: `#file:docs/prompts/refactor-module.md` (preserve DI contracts, backward-compatible constructors)
 4. Follow project conventions (`#file:docs/conventions.md`):

@@ -12,12 +12,12 @@ The Pi Greenhouse generates two types of log files on the SD card:
 
    ```text
    [2026-03-01 14:23:45] [INFO] [MAIN] System startup
-   [2026-03-01 14:23:46] [WARN] [DHTLogger] Sensor read attempt 1/3 failed: timeout
+   [2026-03-01 14:23:46] [WARN] [TempHumidityLogger] Sensor read attempt 1/3 failed: timeout
    [2026-03-01 14:23:47] [ERR] [FanController] Failed to turn ON: pin error
    [2026-03-01 14:23:48] [DEBUG] [FanController] cycle tick | temp=23.5 state=ON elapsed_s=45
    ```
 
-2. **DHT data log** (`/sd/dht_log_YYYY-MM-DD.csv`) — Sensor data:
+2. **DHT data log** (`/sd/th_log_YYYY-MM-DD.csv`) — Sensor data:
 
    ```csv
    timestamp,temperature,humidity
@@ -41,7 +41,7 @@ Analyze the attached log files and identify:
 | Symptom | Likely cause |
 | --------- | ------------- |
 | `SD card mount failed after retries` | SD card loose, dirty contacts, or dead card |
-| `Sensor read attempt N/3 failed: timeout` | DHT22 wiring issue or sensor failure |
+| `Sensor read attempt N/3 failed: timeout` | SHT31 wiring or I2C bus contention |
 | `Failed to turn ON/OFF: pin error` | Relay wiring or GPIO conflict |
 | `RTC time appears invalid` | RTC battery dead or first-time setup needed |
 | `Buffer has N entries (SD may be unavailable)` | SD card removed or failing; data buffered in RAM |
@@ -53,7 +53,7 @@ Analyze the attached log files and identify:
 | Tag | Module | What it controls |
 | ----- | -------- | ----------------- |
 | `MAIN` | `main.py` | System orchestration, health checks |
-| `DHTLogger` | `lib/dht_logger.py` | Temperature/humidity sensor |
+| `TempHumidityLogger` | `lib/temp_humidity_logger.py` | Temperature/humidity sensor |
 | `FanController` | `lib/relay.py` | Fan relay cycling |
 | `GrowlightController` | `lib/relay.py` | Grow light scheduling |
 | `BufferMgr` | `lib/buffer_manager.py` | SD/fallback storage |

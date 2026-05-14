@@ -140,7 +140,7 @@ class TestEdgeCases:
 | `mock_event_logger` | `Mock` | Lightweight mock with `.info/.warning/.error/.debug` |
 | `mock_status_manager` | `Mock` | Mock StatusManager |
 | `mock_rtc` | `Mock` | Mock DS3231 RTC |
-| `dht_logger` | `DHTLogger` | Real instance with mocked sensor |
+| `th_logger` | `TempHumidityLogger` | Real instance with mocked sensor |
 | `fan_controller` | `FanController` | Wired with mocks |
 | `growlight_controller` | `GrowlightController` | Wired with mocks |
 | `buzzer_controller` | `BuzzerController` | Wired with mocks |

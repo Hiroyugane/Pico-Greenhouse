@@ -5,6 +5,57 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-15 · DHT22 → SHT31-D migration
+
+**Branch:** `main`
+**Why hardware-only:** I2C addressing on the shared bus, CRC behaviour
+on a real sensor, accuracy vs. the prior DHT22, and downstream
+consumers (fan thermostat, heater thermostat, OLED stats, status LEDs)
+all depend on `TempHumidityLogger.last_temperature` and can only be
+confirmed by watching readings on real hardware.
+**Pre-flight:** Replace the DHT22 module on T/H_CON with a SHT31-D
+breakout. Wire VCC = 3V3, GND, SDA = GP0, SCL = GP1, ADDR = GND
+(0x44). Confirm the existing I2C pull-ups (R1/R2) are populated.
+GP15 is now unused — leave the old DHT22 data wire disconnected.
+Flash latest `main.py` after pulling the rename.
+
+### Bus / addressing
+
+- [ ] `prototypes/i2c_scan.py` (or equivalent REPL scan) lists `0x44`
+      alongside `0x68` (RTC), `0x3C` (OLED), and `0x60` (MCP4725).
+- [ ] If the SHT31 ADDR pin is wired to VCC, set
+      `DEVICE_CONFIG["sht31"]["i2c_address"] = 0x45` and re-verify the
+      scan shows the new address.
+
+### Boot + steady state
+
+- [ ] On cold boot, `system.log` shows
+      `TempHumidityLogger Initialized: /sd/th_log_YYYY-MM-DD.csv`
+      and no I2C / CRC errors during the first minute.
+- [ ] `/sd/th_log_YYYY-MM-DD.csv` exists with a
+      `Timestamp,Temperature,Humidity` header and gains a row every
+      `temp_humidity_logger.interval_s` (default 30 s).
+- [ ] Temperature and humidity readings on the OLED `temp` / `humidity`
+      pages look plausible for the room (within ±1 °C / ±3 %RH of a
+      reference thermometer).
+- [ ] Activity LED (GP4) blinks once per successful read.
+
+### Failure modes
+
+- [ ] Unplug the SHT31 SDA line for 10 s — `system.log` records
+      `TempHumidityLogger` warnings, the warning LED comes solid after
+      `status_leds.th_warn_threshold` consecutive failures, then the
+      error LED comes solid after `th_error_threshold`.
+- [ ] Reconnect — both LEDs clear and CSV logging resumes within one
+      cycle. Old `dht_log_*.csv` files remain untouched.
+- [ ] Heater + fan thermostats follow the SHT31 temperature: warming a
+      hot-air gun toward the sensor pushes `fan_1` / `fan_2` past
+      `max_temp` and the heater past `day_min_temp` as expected.
+
+### Notes (post-test)
+
+> Fill in.
+
 ## 2026-05-14 · Phase 4 — Soil moisture (GP28 ADC)
 
 **Branch:** `main`

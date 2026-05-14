@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Pi Greenhouse — a MicroPython environmental control system for the Raspberry Pi Pico (DHT22 sensing, two-fan relay control with thermostat override, scheduled grow light, SD logging with fallback). Same source runs on the Pico under MicroPython and on Windows/CPython for development via shims in [host_shims/](host_shims/).
+Pi Greenhouse — a MicroPython environmental control system for the Raspberry Pi Pico (SHT31-D sensing on shared I2C0, two-fan relay control with thermostat override, scheduled grow light, SD logging with fallback). Same source runs on the Pico under MicroPython and on Windows/CPython for development via shims in [host_shims/](host_shims/).
 
 ## Common commands
 
@@ -26,17 +26,17 @@ On-device (via Thonny on the Pico): run [rtc_set_time.py](rtc_set_time.py) once 
 
 ## Architecture — what's not obvious from the file tree
 
-**Same code, two runtimes.** [main.py:29-34](main.py#L29-L34) detects `sys.implementation.name != "micropython"` and prepends [host_shims/](host_shims/) to `sys.path`. The shims provide `machine`, `dht`, `micropython`, `os`, `framebuf`, and a `uasyncio` that aliases standard `asyncio`. Anything new that imports MicroPython-only APIs needs a corresponding shim, or it will only work on-device.
+**Same code, two runtimes.** [main.py:29-34](main.py#L29-L34) detects `sys.implementation.name != "micropython"` and prepends [host_shims/](host_shims/) to `sys.path`. The shims provide `machine`, `micropython`, `os`, `framebuf`, an `sht31` simulator that mirrors [lib/sht31.py](lib/sht31.py), and a `uasyncio` that aliases standard `asyncio`. Anything new that imports MicroPython-only APIs needs a corresponding shim, or it will only work on-device.
 
-**Tests never import shims.** [tests/conftest.py](tests/conftest.py) replaces `sys.modules["machine"|"dht"|"micropython"|"uasyncio"]` with `MagicMock`-based stubs **before** any `lib/` import, and monkey-patches `asyncio.sleep_ms` / `time.sleep_ms` / `time.ticks_ms` so MicroPython idioms work under CPython pytest. Importing `lib.*` at module top-level in a test file will bypass these patches — always import inside the test or fixture (the existing fixtures do this).
+**Tests never import shims.** [tests/conftest.py](tests/conftest.py) replaces `sys.modules["machine"|"micropython"|"uasyncio"]` with `MagicMock`-based stubs **before** any `lib/` import, and monkey-patches `asyncio.sleep_ms` / `time.sleep_ms` / `time.ticks_ms` so MicroPython idioms work under CPython pytest. Importing `lib.*` at module top-level in a test file will bypass these patches — always import inside the test or fixture (the existing fixtures do this).
 
 **DI + factory, no globals.** [main.py](main.py) is the only place that wires components. Order matters and is enforced by [lib/hardware_factory.py](lib/hardware_factory.py): RTC (critical) → SPI/SD → GPIO. All timestamps flow through a single `RTCTimeProvider` ([lib/time_provider.py](lib/time_provider.py)); no module calls the RTC directly.
 
-**Tiered writes go through one chokepoint.** All persistent writes (`DHTLogger`, `EventLogger`) call into [lib/buffer_manager.py](lib/buffer_manager.py), which tries SD → `/local/fallback.csv` → in-memory ring buffer, and migrates fallback rows back to SD when the card returns. SD hot-swap recovery is driven by the main loop polling `is_mounted()`; do not bypass `BufferManager` with direct file I/O. Async drainage is coordinated by [lib/write_queue_manager.py](lib/write_queue_manager.py).
+**Tiered writes go through one chokepoint.** All persistent writes (`TempHumidityLogger`, `EventLogger`) call into [lib/buffer_manager.py](lib/buffer_manager.py), which tries SD → `/local/fallback.csv` → in-memory ring buffer, and migrates fallback rows back to SD when the card returns. SD hot-swap recovery is driven by the main loop polling `is_mounted()`; do not bypass `BufferManager` with direct file I/O. Async drainage is coordinated by [lib/write_queue_manager.py](lib/write_queue_manager.py).
 
 **Relays are inverted.** All relay GPIOs are active-low (HIGH=off, LOW=on). [lib/relay.py](lib/relay.py) `RelayController(invert=True, ...)` handles this; downstream code uses `on()`/`off()` semantically. Don't write raw `pin.value(1)` for "on".
 
-**Fan thermostat reads from `DHTLogger`.** `FanController` does not own a sensor — it reads `dht_logger.last_temperature` cached on the logger. A fan running in tests therefore needs a `mock_dht_logger` (or the real one) wired in, even if you only care about the schedule path.
+**Fan thermostat reads from `TempHumidityLogger`.** `FanController` does not own a sensor — it reads `th_logger.last_temperature` cached on the logger. A fan running in tests therefore needs a `mock_th_logger` (or the real one) wired in, even if you only care about the schedule path.
 
 **Configuration is one dict, validated at boot.** [config.py](config.py) `DEVICE_CONFIG` holds every pin / interval / threshold; `validate_config()` runs at startup and is the only check. New config keys must be added to both the dict and the validator, and to [tests/test_config.py](tests/test_config.py).
 

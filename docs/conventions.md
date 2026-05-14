@@ -22,9 +22,9 @@ This document captures the project's coding conventions, decision rationale, and
 | Functions / methods | `snake_case` | `read_sensor()`, `start_cycle()`, `get_state()` |
 | Variables / params | `snake_case` | `time_provider`, `max_retries`, `poll_interval_s` |
 | Constants | `UPPER_SNAKE` | `DEVICE_CONFIG`, `FAKE_LOCALTIME` |
-| Files / modules | `snake_case` | `buffer_manager.py`, `dht_logger.py` |
-| Config section names | `snake_case` | `fan_1`, `dht_logger`, `event_logger` |
-| Logger module tags | Class name string | `"FanController"`, `"DHTLogger"`, `"BufferMgr"` |
+| Files / modules | `snake_case` | `buffer_manager.py`, `temp_humidity_logger.py` |
+| Config section names | `snake_case` | `fan_1`, `temp_humidity_logger`, `event_logger` |
+| Logger module tags | Class name string | `"FanController"`, `"TempHumidityLogger"`, `"BufferMgr"` |
 
 **Legacy exception**: `Service_reminder` config key uses mixed case. Do not rename it (would break on-device config files), but use `snake_case` for all new keys.
 
@@ -111,7 +111,7 @@ Component init with optional dependency?
 
 - Timestamps: ISO-8601 `YYYY-MM-DD HH:MM:SS` from `TimeProvider.now_timestamp()`.
 - Header row written on file creation (first write to a new date-based file).
-- Date-based rollover: `dht_log_YYYY-MM-DD.csv`.
+- Date-based rollover: `th_log_YYYY-MM-DD.csv`.
 - Always use `BufferManager.write(relpath, data)` with relative paths.
 
 ## Commit message format
@@ -134,7 +134,7 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 | `ci` | CI/CD pipeline changes |
 | `chore` | Build process, dependency updates |
 
-Scope matches the module: `relay`, `buffer`, `logger`, `dht`, `config`, `main`, `ci`.
+Scope matches the module: `relay`, `buffer`, `logger`, `sht31`, `temp_humidity`, `config`, `main`, `ci`.
 
 ## Test conventions
 
@@ -153,7 +153,8 @@ main.py                            # 9-step DI orchestrator
 lib/
   buffer_manager.py                # Tiered storage (SD → fallback → RAM)
   buzzer.py                        # PWM buzzer controller
-  dht_logger.py                    # DHT22 sensor reader + CSV writer
+  sht31.py                         # SHT31-D I2C driver (CRC-validated)
+  temp_humidity_logger.py          # SHT31 logger + CSV writer (date rollover)
   event_logger.py                  # System logger (DEBUG/INFO/WARN/ERR)
   hardware_factory.py              # Hardware init (RTC, SPI, SD, GPIO)
   led_button.py                    # LED + button + ServiceReminder

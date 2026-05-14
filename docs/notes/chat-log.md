@@ -5,6 +5,45 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-15 · DHT22 → SHT31 sensor migration
+
+### decision · Replace DHT22 with SHT31-D on shared I2C0, no fallback path
+
+The one-wire DHT22 on GP15 is replaced by a Sensirion SHT31-D on the
+shared I2C0 bus (RTC + OLED + DAC). New driver is `lib/sht31.py`
+(CRC-validated single-shot high-repeatability, addresses 0x44 / 0x45).
+GP15 becomes free for future use. The user explicitly waived a DHT21
+fallback path — no dual-sensor support, no probe wrapper. Existing
+`/sd/dht_log_*.csv` files stay on disk but new logs use `th_log_*.csv`.
+
+### decision · Rename DHTLogger → TempHumidityLogger and inject sensor
+
+`lib/dht_logger.py` becomes `lib/temp_humidity_logger.py` with class
+`TempHumidityLogger`. The sensor is now constructor-injected (any
+object with `measure() / temperature() / humidity()`) instead of
+being built from a GPIO pin inside `__init__`. Downstream consumers
+that previously took `dht_logger=` now take `th_logger=`
+(FanController, HeaterController, OLEDDisplay). Status-manager keys
+follow the rename: `dht_intermittent` → `th_intermittent`,
+`dht_dead` → `th_dead`.
+
+### decision · CSV columns unchanged, filename renamed to th_log
+
+CSV header stays `Timestamp,Temperature,Humidity` so downstream
+dashboards / readers keep working. Filename basename moves from
+`dht_log` to `th_log` to match the rename-everywhere choice. Old
+`dht_log_*.csv` files are not migrated; they sit alongside the new
+files until the operator archives them manually.
+
+### note · Probe data carries over, fail-rate revised
+
+`PROBE.dht` becomes `PROBE.sht31` in `host_shims/_probe_data.py`.
+Temperature/humidity distributions inherit the legacy DHT22 probe
+data (same greenhouse) but the simulated fail rate drops from 2% to
+0.5% and `min_interval_s` drops to 0.05 s to reflect I2C reliability
+and a 16 ms high-repeatability conversion time. `hw_probe.py` now
+runs `probe_sht31_endurance` in place of the old DHT22 bucket.
+
 ## 2026-05-14 · Phase 4 — Soil moisture (GP28 ADC)
 
 ### decision · SoilLogger mirrors CO2Logger / DHTLogger shape

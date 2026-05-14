@@ -5,6 +5,74 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-14 · PCB gap plan — phases 0, 2, 1 implemented
+
+### decision · Ordered phase 2 (heater) before phase 1 (DAC dimming)
+
+Followed the plan's recommended order (section 7) rather than the
+section-numbered order: phase 0 I2C scan → phase 2 heater → phase 1
+DAC dimming. Heater is the smallest scope with the biggest immediate
+field value, and it's independent of the I2C probe. Phase 1 depends
+on the MCP4725 address being confirmed but proceeds with the
+tentative `0x60` default per
+[`2026-05-14-pcb-codebase-gap-plan.md`](2026-05-14-pcb-codebase-gap-plan.md).
+
+### deviation · MCP4725 driver vendored under The Unlicense, not Apache-2.0
+
+The plan listed `wayoda/micropython-mcp4725` as Apache-2.0; the
+upstream LICENSE file actually says The Unlicense (public domain
+dedication). Even more permissive than expected, so vendoring is
+safe. The vendored copy at [`lib/mcp4725.py`](../../lib/mcp4725.py)
+is a minimal adaptation (default address `0x60`, fast-write only —
+the `read()` and `config()` paths were dropped as unused).
+
+### decision · Heater is active-HIGH, NOT routed through `RelayController`
+
+`HeaterController` in [`lib/heater.py`](../../lib/heater.py) talks
+directly to `machine.Pin` with `value(1)` = on, `value(0)` = off.
+Reusing `RelayController(invert=True)` would have implied "drive
+LOW to activate", which is wrong for the MOSFET gate on GP3.
+Sharing the relay base class also would have hidden the polarity
+difference behind a flag — the explicit pin-level driver makes the
+gate logic visible at the call site.
+
+### decision · Heater day/night window inherits growlight schedule
+
+Per locked design (plan section 4.1), the heater day window is
+`growlight.dawn_*` + `heater.day_offset_min`, and the night window
+is `growlight.sunset_*` + `heater.night_offset_min`. With both
+offsets at 0 (the defaults) the heater follows the lamp 1:1. The
+window computation lives in [`main.py`](../../main.py) so
+`HeaterController` stays unaware of the growlight schedule — it
+just gets `day_start_*` / `night_start_*` numbers via DI.
+
+### decision · Dimming layer baked into `GrowlightController`, not a wrapper
+
+`set_level(pct)` was added to `GrowlightController` directly rather
+than introducing a `DimmableGrowlight` wrapper. The controller
+already owns the relay; the DAC is a second device on the same
+on/off boundary, so co-locating brightness with the master switch
+is the smallest readable surface. DAC injection is optional —
+passing `dac=None` keeps the relay-only legacy path so the unit
+tests that don't care about brightness still work unchanged.
+
+### decision · DAC write fires before relay close on rising edges
+
+`set_level()` writes the DAC value first, then closes the relay.
+This prevents a brief full-brightness flash when the DAC was sitting
+at a stale high value from a previous session. The reverse on
+falling edges is fine — the relay opens, then DAC goes to 0 — the
+op-amp output collapses with the load.
+
+### note · OLED pages and ramp scheduler deferred
+
+Per scope agreed at the start of this session: phases 0, 2, and 1
+land the controllers and the static-default brightness, but the
+OLED menu pages for CO2 / Soil / Heater / Dim and the dawn/sunset
+ramp scheduler are deferred to a later phase. The dimming layer
+already supports arbitrary `set_level()` calls; a future ramp task
+just needs to schedule those calls over `ramp_duration_s`.
+
 ## 2026-05-14 · Configurability rule
 
 ### decision · Added `.claude/rules/ecc/common/configurability.md` as a load-bearing rule

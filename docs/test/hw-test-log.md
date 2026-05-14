@@ -5,6 +5,56 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-14 · Phase 0/1/2 — heater + grow-light dimming
+
+**Branch:** `main`
+**Why hardware-only:** Active-HIGH MOSFET drive, MCP4725 I2C ACK at the
+assumed address (0x60 vs 0x61), op-amp output range, and the dimming
+fade behavior cannot be exercised by `pytest`. Heater fail-safe
+on stale DHT reads also needs eyes-on confirmation.
+**Pre-flight:** Flash latest `main.py`. Confirm growlight is wired
+through REL_CON pin 4 → GL_CON, MCP4725 sits on the shared I2C0 bus,
+heater wiring goes GP3 → R6 → IRLZ44N gate → HE_CON drain.
+
+### Phase 0 · MCP4725 address probe
+
+- [ ] Run `prototypes/i2c_scan.py` via Thonny on a clean boot.
+      Expected scan results: `0x3C` (OLED), one of `0x60`/`0x61`
+      (MCP4725), `0x68` (DS3231). Anything else gets noted below.
+- [ ] If the MCP4725 reports at `0x61` instead of `0x60`, update
+      `growlight.dac_i2c_address` in [config.py](../../config.py)
+      and re-flash.
+
+### Phase 2 · Heater (GP3 active-HIGH)
+
+- [ ] Boot Pico with T/H_CON warm (room temp). Gate sits LOW
+      (multimeter on R6 gate side ≈ 0 V). No spurious activation
+      before the first DHT cycle completes.
+- [ ] Apply ice pack to T/H_CON until DHT logs temperature below
+      `heater.day_min_temp - hysteresis` (default 21.5 °C during the
+      day window) → gate goes HIGH within one `heater.poll_interval_s`
+      cycle (30 s). HE_CON drain should switch.
+- [ ] Warm sensor back above setpoint → gate returns LOW.
+- [ ] Unplug T/H_CON during a heating cycle. After
+      `heater.max_stale_reads` (default 3) consecutive failed reads,
+      gate falls LOW (fail-safe). EventLogger shows a `WARN` line.
+- [ ] At night window (after 20:00 by default), setpoint drops to
+      `night_min_temp` (16 °C). Confirm heater behavior follows.
+
+### Phase 1 · Grow-light dimming (MCP4725 → op-amp → GL_CON)
+
+- [ ] At boot, GL_CON measures 0 V (relay open, DAC at 0).
+- [ ] During the day window, GL_CON tracks `default_level_pct` (80%).
+      Op-amp output should sit around 80% of the buffer's swing.
+- [ ] Force-set level 0 / 25 / 50 / 100 from the REPL:
+      `growlight.set_level(50)`. Measure GL_CON; expected DAC raw
+      output is 0 V / ~0.825 V / ~1.65 V / ~3.30 V (clamped to
+      `max_level_pct=91` so 100% reads ~3.00 V at the DAC pin).
+- [ ] At schedule dawn the lamp comes on at default level. At sunset
+      it goes off (relay opens, DAC returns to 0).
+- [ ] Pull I2C0 SDA briefly during a level change. Logger captures the
+      DAC write error, controller does not crash, system continues.
+
 ## 2026-05-14 · PCB pin remap connection test
 
 **Branch:** `main`

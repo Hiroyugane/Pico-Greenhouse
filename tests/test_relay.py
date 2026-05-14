@@ -473,6 +473,128 @@ class TestGrowlightController:
         assert state["sunset"] == "20:00"
 
 
+class TestGrowlightDimming:
+    """Tests for GrowlightController DAC dimming layer."""
+
+    @pytest.fixture
+    def mock_dac(self):
+        dac = Mock()
+        dac.write = Mock(return_value=True)
+        return dac
+
+    @pytest.fixture
+    def dimmable(self, time_provider, mock_event_logger, mock_dac):
+        from lib.relay import GrowlightController
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            return GrowlightController(
+                pin=17,
+                time_provider=time_provider,
+                logger=mock_event_logger,
+                dawn_hour=6,
+                dawn_minute=0,
+                sunset_hour=20,
+                sunset_minute=0,
+                dac=mock_dac,
+                default_level_pct=80,
+                max_level_pct=91,
+                min_level_pct=0,
+                name="DimLight",
+            )
+
+    def test_init_current_level_is_zero(self, dimmable):
+        assert dimmable.current_level_pct == 0
+
+    def test_set_level_zero_turns_relay_off_and_writes_dac_zero(self, dimmable, mock_dac):
+        dimmable.set_level(0)
+        assert dimmable.is_on() is False
+        mock_dac.write.assert_called_with(0)
+        assert dimmable.current_level_pct == 0
+
+    def test_set_level_50_turns_relay_on_and_writes_dac_midscale(self, dimmable, mock_dac):
+        dimmable.set_level(50)
+        assert dimmable.is_on() is True
+        # 50% of 4095 ≈ 2047
+        value = mock_dac.write.call_args.args[0]
+        assert 2040 <= value <= 2055
+        assert dimmable.current_level_pct == 50
+
+    def test_set_level_100_clamps_to_max(self, dimmable, mock_dac):
+        """Above max_level_pct clamps to max (91% in this test)."""
+        dimmable.set_level(100)
+        # 91% of 4095 ≈ 3726
+        value = mock_dac.write.call_args.args[0]
+        # Allow ±5 LSB rounding tolerance
+        assert 3720 <= value <= 3735
+        assert dimmable.current_level_pct == 91
+
+    def test_set_level_below_min_snaps_to_zero(self, time_provider, mock_event_logger, mock_dac):
+        """When min_level_pct is configured, values below it snap to 0 (relay off)."""
+        from lib.relay import GrowlightController
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            gl = GrowlightController(
+                pin=17,
+                time_provider=time_provider,
+                logger=mock_event_logger,
+                dawn_hour=6,
+                dawn_minute=0,
+                sunset_hour=20,
+                sunset_minute=0,
+                dac=mock_dac,
+                default_level_pct=80,
+                max_level_pct=91,
+                min_level_pct=10,
+                name="DimLight",
+            )
+        gl.set_level(5)
+        assert gl.is_on() is False
+        assert gl.current_level_pct == 0
+
+    def test_turn_on_uses_default_level(self, dimmable, mock_dac):
+        """turn_on() applies default_level_pct via the DAC."""
+        dimmable.turn_on()
+        assert dimmable.is_on() is True
+        assert dimmable.current_level_pct == 80
+        value = mock_dac.write.call_args.args[0]
+        # 80% of 4095 ≈ 3276
+        assert 3270 <= value <= 3285
+
+    def test_turn_off_writes_dac_zero(self, dimmable, mock_dac):
+        dimmable.turn_on()
+        mock_dac.write.reset_mock()
+        dimmable.turn_off()
+        mock_dac.write.assert_called_with(0)
+        assert dimmable.is_on() is False
+        assert dimmable.current_level_pct == 0
+
+    def test_no_dac_falls_back_to_relay_only(self, time_provider, mock_event_logger):
+        """If dac is None, controller still works (relay-only legacy mode)."""
+        from lib.relay import GrowlightController
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            gl = GrowlightController(
+                pin=17,
+                time_provider=time_provider,
+                logger=mock_event_logger,
+                dawn_hour=6,
+                dawn_minute=0,
+                sunset_hour=20,
+                sunset_minute=0,
+                name="LegacyLight",
+            )
+        gl.turn_on()
+        assert gl.is_on() is True
+        gl.turn_off()
+        assert gl.is_on() is False
+
+    def test_dac_failure_logs_but_does_not_raise(self, dimmable, mock_dac):
+        """A DAC bus error logs an error but does not propagate."""
+        mock_dac.write = Mock(side_effect=OSError("bus error"))
+        dimmable.set_level(50)
+        dimmable.logger.error.assert_called()
+
+
 class TestFanControllerHysteresisNoAction:
     """Tests for thermostat hysteresis no-action band."""
 

@@ -668,3 +668,8 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+
+# Local fork of everything-claude-code plugin, converted to Windows.
+# Survives plugin re-installs; not committed to repo.
+.claude/plugins-local/

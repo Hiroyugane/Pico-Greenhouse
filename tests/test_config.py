@@ -22,6 +22,7 @@ class TestConfigStructure:
             "growlight",
             "heater",
             "co2_logger",
+            "soil_logger",
             "Service_reminder",
             "buffer_manager",
             "event_logger",
@@ -320,6 +321,69 @@ class TestValidateConfig:
                 config.validate_config()
         finally:
             config.DEVICE_CONFIG["co2_logger"]["interval_s"] = original
+
+    def test_soil_logger_zero_interval_raises(self):
+        """soil_logger.interval_s = 0 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["soil_logger"]["interval_s"]
+        config.DEVICE_CONFIG["soil_logger"]["interval_s"] = 0
+        try:
+            with pytest.raises(ValueError, match="soil_logger.interval_s"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["soil_logger"]["interval_s"] = original
+
+    def test_soil_logger_dry_le_wet_raises(self):
+        """soil_logger.adc_dry_raw <= adc_wet_raw raises ValueError."""
+        import config
+
+        orig_dry = config.DEVICE_CONFIG["soil_logger"]["adc_dry_raw"]
+        orig_wet = config.DEVICE_CONFIG["soil_logger"]["adc_wet_raw"]
+        config.DEVICE_CONFIG["soil_logger"]["adc_dry_raw"] = 300
+        config.DEVICE_CONFIG["soil_logger"]["adc_wet_raw"] = 500
+        try:
+            with pytest.raises(ValueError, match="adc_dry_raw must be > adc_wet_raw"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["soil_logger"]["adc_dry_raw"] = orig_dry
+            config.DEVICE_CONFIG["soil_logger"]["adc_wet_raw"] = orig_wet
+
+    def test_soil_logger_dry_out_of_range_raises(self):
+        """soil_logger.adc_dry_raw outside 0-1023 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["soil_logger"]["adc_dry_raw"]
+        config.DEVICE_CONFIG["soil_logger"]["adc_dry_raw"] = 2000
+        try:
+            with pytest.raises(ValueError, match="adc_dry_raw"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["soil_logger"]["adc_dry_raw"] = original
+
+    def test_soil_logger_warn_pct_out_of_range_raises(self):
+        """soil_logger.warn_pct_below outside 0-100 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["soil_logger"]["warn_pct_below"]
+        config.DEVICE_CONFIG["soil_logger"]["warn_pct_below"] = 150
+        try:
+            with pytest.raises(ValueError, match="warn_pct_below"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["soil_logger"]["warn_pct_below"] = original
+
+    def test_soil_logger_missing_key_raises(self):
+        """Missing soil_logger.interval_s raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["soil_logger"]["interval_s"]
+        del config.DEVICE_CONFIG["soil_logger"]["interval_s"]
+        try:
+            with pytest.raises(ValueError, match="Missing config key"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["soil_logger"]["interval_s"] = original
 
     def test_growlight_dac_address_out_of_range_raises(self):
         """growlight.dac_i2c_address outside 7-bit I2C range raises ValueError."""

@@ -132,6 +132,23 @@ DEVICE_CONFIG = {
         "max_stale_reads": 3,  # Tolerate N consecutive DHT failures before failing OFF
         "poll_interval_s": 30,  # Thermostat check cadence (seconds)
     },
+    # Soil Moisture Logger Configuration (GP28 / ADC2, single-probe)
+    #
+    # Raw ADC range on the RP2040 is 0-65535 (read_u16) but the plan
+    # speaks in the conventional 0-1023 10-bit space. SoilLogger scales
+    # the read_u16 result down internally; the calibration constants are
+    # specified in 0-1023 space because that's what the REPL helper
+    # (print_raw) prints. Calibrate against actual sensor + soil pot:
+    # adc_dry_raw = raw value with probe in air / bone-dry soil,
+    # adc_wet_raw = raw value with probe in saturated soil. Wet must be
+    # < dry (lower raw = more conductive = more water).
+    "soil_logger": {
+        "interval_s": 60,  # Log cadence (seconds) — soil moves slowly
+        "adc_dry_raw": 850,  # Raw 10-bit reading for 0% moisture (in-air)
+        "adc_wet_raw": 350,  # Raw 10-bit reading for 100% moisture (saturated)
+        "warn_pct_below": 20,  # Trigger warning LED when soil < this %
+        "filename_base": "soil_log",  # Becomes /sd/soil_log_YYYY-MM-DD.csv
+    },
     # CO2 Sensor Logger Configuration (SenseAir S8 / equivalent on UART0)
     #
     # Poll/response framing matches the prototype in tests/co2log.py:
@@ -365,6 +382,13 @@ def validate_config():
             "override_fan",
             "filename_base",
         ],
+        "soil_logger": [
+            "interval_s",
+            "adc_dry_raw",
+            "adc_wet_raw",
+            "warn_pct_below",
+            "filename_base",
+        ],
         "growlight": [
             "dawn_hour",
             "dawn_minute",
@@ -547,6 +571,20 @@ def validate_config():
         raise ValueError("co2_logger.override_fan must be 'fan_1' or 'fan_2'")
     if not isinstance(co2_cfg["filename_base"], str) or not co2_cfg["filename_base"]:
         raise ValueError("co2_logger.filename_base must be a non-empty string")
+
+    soil_cfg = DEVICE_CONFIG["soil_logger"]
+    if soil_cfg["interval_s"] <= 0:
+        raise ValueError("soil_logger.interval_s must be > 0")
+    if not isinstance(soil_cfg["adc_dry_raw"], int) or not (0 <= soil_cfg["adc_dry_raw"] <= 1023):
+        raise ValueError("soil_logger.adc_dry_raw must be an int 0-1023")
+    if not isinstance(soil_cfg["adc_wet_raw"], int) or not (0 <= soil_cfg["adc_wet_raw"] <= 1023):
+        raise ValueError("soil_logger.adc_wet_raw must be an int 0-1023")
+    if soil_cfg["adc_dry_raw"] <= soil_cfg["adc_wet_raw"]:
+        raise ValueError("soil_logger.adc_dry_raw must be > adc_wet_raw")
+    if not (0 <= soil_cfg["warn_pct_below"] <= 100):
+        raise ValueError("soil_logger.warn_pct_below must be 0-100")
+    if not isinstance(soil_cfg["filename_base"], str) or not soil_cfg["filename_base"]:
+        raise ValueError("soil_logger.filename_base must be a non-empty string")
 
     dac_addr = DEVICE_CONFIG["growlight"]["dac_i2c_address"]
     if not isinstance(dac_addr, int) or not (0x08 <= dac_addr <= 0x77):

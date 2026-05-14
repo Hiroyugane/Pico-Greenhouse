@@ -21,6 +21,7 @@ class TestConfigStructure:
             "fan_2",
             "growlight",
             "heater",
+            "co2_logger",
             "Service_reminder",
             "buffer_manager",
             "event_logger",
@@ -268,6 +269,57 @@ class TestValidateConfig:
                 config.validate_config()
         finally:
             config.DEVICE_CONFIG["heater"]["day_min_temp"] = original
+
+    def test_co2_logger_zero_interval_raises(self):
+        """co2_logger.interval_s = 0 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["co2_logger"]["interval_s"]
+        config.DEVICE_CONFIG["co2_logger"]["interval_s"] = 0
+        try:
+            with pytest.raises(ValueError, match="co2_logger.interval_s"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["co2_logger"]["interval_s"] = original
+
+    def test_co2_logger_hysteresis_inverted_raises(self):
+        """co2_logger.override_ppm_on <= override_ppm_off raises ValueError."""
+        import config
+
+        orig_on = config.DEVICE_CONFIG["co2_logger"]["override_ppm_on"]
+        orig_off = config.DEVICE_CONFIG["co2_logger"]["override_ppm_off"]
+        config.DEVICE_CONFIG["co2_logger"]["override_ppm_on"] = 500
+        config.DEVICE_CONFIG["co2_logger"]["override_ppm_off"] = 600
+        try:
+            with pytest.raises(ValueError, match="override_ppm_on"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["co2_logger"]["override_ppm_on"] = orig_on
+            config.DEVICE_CONFIG["co2_logger"]["override_ppm_off"] = orig_off
+
+    def test_co2_logger_unknown_override_fan_raises(self):
+        """co2_logger.override_fan not in {fan_1, fan_2} raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["co2_logger"]["override_fan"]
+        config.DEVICE_CONFIG["co2_logger"]["override_fan"] = "fan_3"
+        try:
+            with pytest.raises(ValueError, match="override_fan"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["co2_logger"]["override_fan"] = original
+
+    def test_co2_logger_missing_key_raises(self):
+        """Missing co2_logger.interval_s raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["co2_logger"]["interval_s"]
+        del config.DEVICE_CONFIG["co2_logger"]["interval_s"]
+        try:
+            with pytest.raises(ValueError, match="Missing config key"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["co2_logger"]["interval_s"] = original
 
     def test_growlight_dac_address_out_of_range_raises(self):
         """growlight.dac_i2c_address outside 7-bit I2C range raises ValueError."""

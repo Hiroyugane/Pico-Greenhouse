@@ -132,6 +132,24 @@ DEVICE_CONFIG = {
         "max_stale_reads": 3,  # Tolerate N consecutive DHT failures before failing OFF
         "poll_interval_s": 30,  # Thermostat check cadence (seconds)
     },
+    # CO2 Sensor Logger Configuration (SenseAir S8 / equivalent on UART0)
+    #
+    # Poll/response framing matches the prototype in tests/co2log.py:
+    # 7-byte request 0xFE 0x44 0x00 0x08 0x02 0x9F 0x25 → 7-byte reply
+    # whose bytes 3-4 (0-indexed) encode ppm as high*256 + low.
+    # The override_fan key chooses which FanController gets force-on
+    # when ppm crosses override_ppm_on, until ppm drops below
+    # override_ppm_off. fan_2 has the higher max_temp by default so it
+    # is the bigger ventilator and the natural CO2 vent target.
+    "co2_logger": {
+        "interval_s": 30,  # Poll cadence (seconds)
+        "warmup_s": 30,  # Sensor warm-up window where read failures don't escalate
+        "max_retries": 3,  # UART read retries per poll
+        "override_ppm_on": 1000,  # Trip threshold (ppm)
+        "override_ppm_off": 800,  # Release threshold (ppm), must be < on
+        "override_fan": "fan_2",  # Which fan key to force-on (fan_1 or fan_2)
+        "filename_base": "co2_log",  # Becomes /sd/co2_log_YYYY-MM-DD.csv
+    },
     # Grow Light Configuration
     "growlight": {
         "dawn_hour": 7,  # Light ON at 7:00 AM
@@ -338,6 +356,15 @@ def validate_config():
             "max_stale_reads",
             "poll_interval_s",
         ],
+        "co2_logger": [
+            "interval_s",
+            "warmup_s",
+            "max_retries",
+            "override_ppm_on",
+            "override_ppm_off",
+            "override_fan",
+            "filename_base",
+        ],
         "growlight": [
             "dawn_hour",
             "dawn_minute",
@@ -504,6 +531,22 @@ def validate_config():
         raise ValueError("heater.max_stale_reads must be >= 0")
     if heater_cfg["day_min_temp"] < heater_cfg["night_min_temp"]:
         raise ValueError("heater.day_min_temp must be >= night_min_temp")
+
+    co2_cfg = DEVICE_CONFIG["co2_logger"]
+    if co2_cfg["interval_s"] <= 0:
+        raise ValueError("co2_logger.interval_s must be > 0")
+    if co2_cfg["warmup_s"] < 0:
+        raise ValueError("co2_logger.warmup_s must be >= 0")
+    if co2_cfg["max_retries"] < 1:
+        raise ValueError("co2_logger.max_retries must be >= 1")
+    if co2_cfg["override_ppm_on"] <= co2_cfg["override_ppm_off"]:
+        raise ValueError("co2_logger.override_ppm_on must be > override_ppm_off")
+    if co2_cfg["override_ppm_off"] < 0:
+        raise ValueError("co2_logger.override_ppm_off must be >= 0")
+    if co2_cfg["override_fan"] not in ("fan_1", "fan_2"):
+        raise ValueError("co2_logger.override_fan must be 'fan_1' or 'fan_2'")
+    if not isinstance(co2_cfg["filename_base"], str) or not co2_cfg["filename_base"]:
+        raise ValueError("co2_logger.filename_base must be a non-empty string")
 
     dac_addr = DEVICE_CONFIG["growlight"]["dac_i2c_address"]
     if not isinstance(dac_addr, int) or not (0x08 <= dac_addr <= 0x77):

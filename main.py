@@ -44,6 +44,7 @@ from lib.event_logger import EventLogger
 from lib.hardware_factory import HardwareFactory
 from lib.heater import HeaterController
 from lib.led_button import LEDButtonHandler, ServiceReminder
+from lib.mcp4725 import MCP4725
 from lib.oled_display import OLEDDisplay
 from lib.relay import FanController, GrowlightController
 from lib.status_manager import StatusManager
@@ -321,8 +322,17 @@ async def main():
         fan_names=str([f.name for f in fans]),
     )
 
-    # Step 7b: Create grow light controller
+    # Step 7b: Create grow light controller (relay master + MCP4725 dimming)
     light_config = DEVICE_CONFIG.get("growlight", {})
+    grow_dac = None
+    try:
+        grow_dac = MCP4725(
+            i2c=hardware.get_i2c(),
+            address=light_config.get("dac_i2c_address", 0x60),
+        )
+        logger.info("MAIN", f"MCP4725 grow-light DAC at 0x{light_config.get('dac_i2c_address', 0x60):02X}")
+    except Exception as e:
+        logger.warning("MAIN", f"MCP4725 init failed (falling back to relay-only growlight): {e}")
     growlight = GrowlightController(
         pin=DEVICE_CONFIG["pins"]["relay_growlight"],
         time_provider=time_provider,
@@ -332,6 +342,10 @@ async def main():
         sunset_hour=light_config.get("sunset_hour", 19),
         sunset_minute=light_config.get("sunset_minute", 0),
         poll_interval_s=light_config.get("poll_interval_s", 60),
+        dac=grow_dac,
+        default_level_pct=light_config.get("default_level_pct", 80),
+        max_level_pct=light_config.get("max_level_pct", 91),
+        min_level_pct=light_config.get("min_level_pct", 0),
         name="Growlight",
     )
     logger.debug(

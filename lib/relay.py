@@ -150,6 +150,12 @@ class FanController(RelayController):
         self.thermostat_active = False
         self.thermostat_on_count = 0
         self.last_schedule_state = None
+        # Optional callable(()->bool) consulted each cycle. When it returns
+        # True the fan is forced ON regardless of schedule; thermostat
+        # still wins for hardware protection. The CO2Logger uses this to
+        # vent when ppm crosses its override threshold.
+        self.external_override = None
+        self._override_active = False
 
         # Validate parameters
         if on_time_s <= 0 or interval_s <= 0:
@@ -262,8 +268,41 @@ class FanController(RelayController):
                             f"({current_temp:.1f}°C >= {self.max_temp - self.temp_hysteresis}°C, off-threshold)",
                         )
 
-                # Apply time-of-day schedule (only when thermostat inactive)
-                if not self.thermostat_active:
+                # External override (e.g. CO2Logger high-ppm vent).
+                # Sits below thermostat (which protects against overheat) but
+                # above the time-of-day schedule.
+                override_on = False
+                if self.external_override is not None:
+                    try:
+                        override_on = bool(self.external_override())
+                    except Exception as e:
+                        self.logger.error(
+                            "FanController",
+                            f"{self.name} external_override raised: {e}",
+                        )
+                        override_on = False
+
+                if not self.thermostat_active and override_on:
+                    if not self._override_active:
+                        self._override_active = True
+                        try:
+                            self.turn_on()
+                            self.logger.info("FanController", f"{self.name} EXTERNAL OVERRIDE ON")
+                        except Exception as e:
+                            self.logger.error(
+                                "FanController",
+                                f"{self.name} override failed to turn ON: {e}",
+                            )
+                    # Re-evaluate schedule next time the override clears
+                    self.last_schedule_state = None
+                elif self._override_active and not override_on:
+                    self._override_active = False
+                    self.logger.info("FanController", f"{self.name} EXTERNAL OVERRIDE RELEASE")
+                    # Let the schedule block below make the next relay call
+                    self.last_schedule_state = None
+
+                # Apply time-of-day schedule (only when thermostat AND override inactive)
+                if not self.thermostat_active and not (self._override_active and override_on):
                     if schedule_should_be_on != self.last_schedule_state:
                         self.logger.debug(
                             "FanController",

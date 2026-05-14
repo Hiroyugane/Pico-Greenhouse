@@ -44,7 +44,7 @@ class OLEDDisplay:
     Dependencies injected at construction:
     - i2c:              machine.I2C shared bus
     - time_provider:    RTCTimeProvider for current time
-    - dht_logger:       DHTLogger for temperature/humidity stats
+    - th_logger:       TempHumidityLogger for temperature/humidity stats
     - buffer_manager:   BufferManager for SD metrics
     - status_manager:   StatusManager for warnings/errors
     - reminder:         ServiceReminder for service status
@@ -69,7 +69,7 @@ class OLEDDisplay:
         self,
         i2c,
         time_provider,
-        dht_logger,
+        th_logger,
         buffer_manager,
         status_manager,
         reminder,
@@ -90,7 +90,7 @@ class OLEDDisplay:
     ):
         self._i2c = i2c
         self._time_provider = time_provider
-        self._dht_logger = dht_logger
+        self._th_logger = th_logger
         self._buffer_manager = buffer_manager
         self._status_manager = status_manager
         self._reminder = reminder
@@ -203,8 +203,8 @@ class OLEDDisplay:
         if not self._display_active:
             self._turn_on_display()
         if menu in ("temp", "humidity"):
-            if self._dht_logger:
-                self._dht_logger.clear_history()
+            if self._th_logger:
+                self._th_logger.clear_history()
             if self._logger:
                 self._logger.info("OLEDDisplay", "Long press: cleared temp/hum history")
         elif menu == "service":
@@ -358,7 +358,7 @@ class OLEDDisplay:
     # ── Menu renderers ────────────────────────────────────────────────────
 
     def _render_temp(self) -> None:
-        stats = self._dht_logger.get_stats(self._stats_window_s) if self._dht_logger else {}
+        stats = self._th_logger.get_stats(self._stats_window_s) if self._th_logger else {}
         self._header("TEMPERATURE")
         self._row(f"Now: {self._fmt_f(stats.get('temp_now'))}C", 0)
         self._row(f"Hi:  {self._fmt_f(stats.get('temp_hi'))}C", 1)
@@ -369,7 +369,7 @@ class OLEDDisplay:
             self._oled.text("[HOLD]=clr", 68, 56, 1)
 
     def _render_humidity(self) -> None:
-        stats = self._dht_logger.get_stats(self._stats_window_s) if self._dht_logger else {}
+        stats = self._th_logger.get_stats(self._stats_window_s) if self._th_logger else {}
         self._header("HUMIDITY")
         self._row(f"Now: {self._fmt_f(stats.get('hum_now'))}%", 0)
         self._row(f"Hi:  {self._fmt_f(stats.get('hum_hi'))}%", 1)

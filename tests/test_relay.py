@@ -104,9 +104,9 @@ class TestFanController:
         assert fan_controller.thermostat_active is False
         assert fan_controller.thermostat_on_count == 0
 
-    def test_thermostat_activation(self, fan_controller, mock_dht_logger):
+    def test_thermostat_activation(self, fan_controller, mock_th_logger):
         """Thermostat activates when temp >= max_temp."""
-        mock_dht_logger.last_temperature = 24.5
+        mock_th_logger.last_temperature = 24.5
 
         async def run_once():
             with patch("asyncio.sleep", side_effect=RuntimeError("stop")):
@@ -120,10 +120,10 @@ class TestFanController:
         assert fan_controller.thermostat_active is True
         assert fan_controller.thermostat_on_count == 1
 
-    def test_thermostat_release_with_hysteresis(self, fan_controller, mock_dht_logger):
+    def test_thermostat_release_with_hysteresis(self, fan_controller, mock_th_logger):
         """Thermostat releases when temp < (max_temp - hysteresis)."""
         # First activate
-        mock_dht_logger.last_temperature = 25.0
+        mock_th_logger.last_temperature = 25.0
         fan_controller.thermostat_active = False
 
         async def activate():
@@ -138,7 +138,7 @@ class TestFanController:
         assert fan_controller.thermostat_active is True
 
         # Now release (below 24.0 - 1.0 = 23.0)
-        mock_dht_logger.last_temperature = 22.5
+        mock_th_logger.last_temperature = 22.5
 
         async def release():
             with patch("asyncio.sleep", side_effect=RuntimeError("stop")):
@@ -162,7 +162,7 @@ class TestFanController:
             fan = FanController(
                 pin=16,
                 time_provider=time_provider,
-                dht_logger=mock_dht,
+                th_logger=mock_dht,
                 logger=mock_event_logger,
                 interval_s=600,
                 on_time_s=20,
@@ -179,7 +179,7 @@ class TestFanController:
             asyncio.run(run_once())
         assert fan.thermostat_active is False
 
-    def test_on_time_clamping(self, time_provider, mock_dht_logger):
+    def test_on_time_clamping(self, time_provider, mock_th_logger):
         """on_time_s > interval_s gets clamped and warning logged."""
         mock_logger = Mock()
         from lib.relay import FanController
@@ -188,7 +188,7 @@ class TestFanController:
             fan = FanController(
                 pin=16,
                 time_provider=time_provider,
-                dht_logger=mock_dht_logger,
+                th_logger=mock_th_logger,
                 logger=mock_logger,
                 interval_s=10,
                 on_time_s=20,
@@ -208,7 +208,7 @@ class TestFanController:
             asyncio.run(run())
         assert fan_controller.is_on() is False
 
-    def test_start_cycle_unexpected_error_continues(self, fan_controller, mock_dht_logger):
+    def test_start_cycle_unexpected_error_continues(self, fan_controller, mock_th_logger):
         """Generic exception is logged, loop continues."""
         call_count = 0
 
@@ -229,7 +229,7 @@ class TestFanController:
         # The ValueError should have been caught and logged
         fan_controller.logger.error.assert_called()
 
-    def test_get_state_includes_thermostat(self, fan_controller, mock_dht_logger):
+    def test_get_state_includes_thermostat(self, fan_controller, mock_th_logger):
         """get_state() includes thermostat fields."""
         state = fan_controller.get_state()
         assert "thermostat_active" in state
@@ -238,9 +238,9 @@ class TestFanController:
         assert "current_temp" in state
         assert state["current_temp"] == 22.5
 
-    def test_schedule_state_change_logging(self, fan_controller, mock_dht_logger):
+    def test_schedule_state_change_logging(self, fan_controller, mock_th_logger):
         """Schedule transitions log SCHEDULE ON or SCHEDULE OFF."""
-        mock_dht_logger.last_temperature = None  # No thermostat
+        mock_th_logger.last_temperature = None  # No thermostat
 
         async def run_once():
             with patch("asyncio.sleep", side_effect=RuntimeError("stop")):
@@ -257,9 +257,9 @@ class TestFanController:
         schedule_logged = any("SCHEDULE" in c for c in calls)
         assert schedule_logged
 
-    def test_thermostat_turn_on_error(self, fan_controller, mock_dht_logger):
+    def test_thermostat_turn_on_error(self, fan_controller, mock_th_logger):
         """When turn_on() raises during thermostat activation, error is logged."""
-        mock_dht_logger.last_temperature = 25.0  # Above max_temp=24.0
+        mock_th_logger.last_temperature = 25.0  # Above max_temp=24.0
         fan_controller.pin.value = Mock(side_effect=OSError("pin fault"))
 
         async def run():
@@ -276,7 +276,7 @@ class TestFanController:
         error_calls = [str(c) for c in fan_controller.logger.error.call_args_list]
         assert any("failed to turn ON" in c for c in error_calls)
 
-    def test_thermostat_deactivation_routes_relay_to_schedule_block(self, fan_controller, mock_dht_logger):
+    def test_thermostat_deactivation_routes_relay_to_schedule_block(self, fan_controller, mock_th_logger):
         """Thermostat deactivation resets last_schedule_state; the schedule block
         makes the single relay call (no extra turn_off in the thermostat block)."""
         # Activate thermostat; schedule window is OFF (pos_in_cycle outside on_time)
@@ -284,7 +284,7 @@ class TestFanController:
         fan_controller.thermostat_on_count = 1
         fan_controller.last_schedule_state = False  # schedule was off before thermostat took over
         # Temperature below hysteresis threshold: 24.0 - 1.0 = 23.0
-        mock_dht_logger.last_temperature = 22.5
+        mock_th_logger.last_temperature = 22.5
 
         pin_calls_before = fan_controller.pin.value.call_count
 
@@ -308,9 +308,9 @@ class TestFanController:
         real_errors = [str(c) for c in fan_controller.logger.error.call_args_list if "stop" not in str(c)]
         assert real_errors == []
 
-    def test_schedule_transition_error(self, fan_controller, mock_dht_logger):
+    def test_schedule_transition_error(self, fan_controller, mock_th_logger):
         """When turn_on/turn_off raises during schedule transition, error is logged."""
-        mock_dht_logger.last_temperature = None  # No thermostat
+        mock_th_logger.last_temperature = None  # No thermostat
         fan_controller.last_schedule_state = None  # Force state change
         fan_controller.pin.value = Mock(side_effect=OSError("pin fault"))
 
@@ -327,7 +327,7 @@ class TestFanController:
         error_calls = [str(c) for c in fan_controller.logger.error.call_args_list]
         assert any("failed to update" in c for c in error_calls)
 
-    def test_invalid_timing_logged(self, time_provider, mock_dht_logger):
+    def test_invalid_timing_logged(self, time_provider, mock_th_logger):
         """on_time <= 0 or interval <= 0 logs error."""
         mock_logger = Mock()
         from lib.relay import FanController
@@ -336,7 +336,7 @@ class TestFanController:
             FanController(
                 pin=16,
                 time_provider=time_provider,
-                dht_logger=mock_dht_logger,
+                th_logger=mock_th_logger,
                 logger=mock_logger,
                 interval_s=0,
                 on_time_s=0,
@@ -362,27 +362,27 @@ class TestFanExternalOverride:
         """external_override defaults to None (no hook attached)."""
         assert fan_controller.external_override is None
 
-    def test_override_callable_true_forces_on(self, fan_controller, mock_dht_logger):
+    def test_override_callable_true_forces_on(self, fan_controller, mock_th_logger):
         """A callable returning True overrides schedule and turns the fan ON."""
-        mock_dht_logger.last_temperature = 20.0  # well below max_temp
+        mock_th_logger.last_temperature = 20.0  # well below max_temp
         fan_controller.external_override = lambda: True
         # Force schedule "off" baseline so we can see the override flip the relay on
         fan_controller.last_schedule_state = False
         self._run_once(fan_controller)
         assert fan_controller.is_on() is True
 
-    def test_override_callable_false_does_not_force(self, fan_controller, mock_dht_logger):
+    def test_override_callable_false_does_not_force(self, fan_controller, mock_th_logger):
         """A callable returning False is a no-op; schedule/thermostat decide."""
-        mock_dht_logger.last_temperature = 20.0
+        mock_th_logger.last_temperature = 20.0
         fan_controller.external_override = lambda: False
         # Inside schedule-off window, no thermostat trigger → fan stays off
         fan_controller.last_schedule_state = False
         self._run_once(fan_controller)
         assert fan_controller.is_on() is False
 
-    def test_override_release_returns_control(self, fan_controller, mock_dht_logger):
+    def test_override_release_returns_control(self, fan_controller, mock_th_logger):
         """When the override flips False after being True, fan returns to schedule control."""
-        mock_dht_logger.last_temperature = 20.0
+        mock_th_logger.last_temperature = 20.0
         flag = {"v": True}
         fan_controller.external_override = lambda: flag["v"]
         fan_controller.last_schedule_state = False
@@ -393,26 +393,26 @@ class TestFanExternalOverride:
         self._run_once(fan_controller)
         assert fan_controller.is_on() is False
 
-    def test_override_outranks_schedule_off(self, fan_controller, mock_dht_logger):
+    def test_override_outranks_schedule_off(self, fan_controller, mock_th_logger):
         """Override wins even if the schedule says off."""
-        mock_dht_logger.last_temperature = 20.0
+        mock_th_logger.last_temperature = 20.0
         fan_controller.external_override = lambda: True
         fan_controller.last_schedule_state = False
         self._run_once(fan_controller)
         assert fan_controller.is_on() is True
 
-    def test_thermostat_still_outranks_override_release(self, fan_controller, mock_dht_logger):
+    def test_thermostat_still_outranks_override_release(self, fan_controller, mock_th_logger):
         """If override clears but thermostat is hot, fan stays on for the thermostat."""
         # Thermostat fires at >= 24.0
-        mock_dht_logger.last_temperature = 25.0
+        mock_th_logger.last_temperature = 25.0
         fan_controller.external_override = lambda: False
         self._run_once(fan_controller)
         assert fan_controller.thermostat_active is True
         assert fan_controller.is_on() is True
 
-    def test_override_exception_falls_back_to_schedule(self, fan_controller, mock_dht_logger):
+    def test_override_exception_falls_back_to_schedule(self, fan_controller, mock_th_logger):
         """If the override callable raises, the controller logs and behaves as if False."""
-        mock_dht_logger.last_temperature = 20.0
+        mock_th_logger.last_temperature = 20.0
         fan_controller.external_override = Mock(side_effect=RuntimeError("bad hook"))
         fan_controller.last_schedule_state = False
         self._run_once(fan_controller)
@@ -687,7 +687,7 @@ class TestFanControllerHysteresisNoAction:
             fan = FanController(
                 pin=16,
                 time_provider=time_provider,
-                dht_logger=mock_dht,
+                th_logger=mock_dht,
                 logger=mock_event_logger,
                 interval_s=600,
                 on_time_s=20,

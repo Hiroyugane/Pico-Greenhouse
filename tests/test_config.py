@@ -16,7 +16,8 @@ class TestConfigStructure:
             "pins",
             "spi",
             "files",
-            "dht_logger",
+            "sht31",
+            "temp_humidity_logger",
             "fan_1",
             "fan_2",
             "growlight",
@@ -66,25 +67,37 @@ class TestValidateConfig:
         """Missing sub-key raises ValueError."""
         import config
 
-        original = config.DEVICE_CONFIG["pins"].get("dht22")
-        del config.DEVICE_CONFIG["pins"]["dht22"]
+        original = config.DEVICE_CONFIG["pins"].get("buzzer")
+        del config.DEVICE_CONFIG["pins"]["buzzer"]
         try:
             with pytest.raises(ValueError, match="Missing config key"):
                 config.validate_config()
         finally:
-            config.DEVICE_CONFIG["pins"]["dht22"] = original
+            config.DEVICE_CONFIG["pins"]["buzzer"] = original
 
-    def test_negative_dht_interval_raises(self):
-        """Negative dht_logger.interval_s raises ValueError."""
+    def test_negative_th_interval_raises(self):
+        """Negative temp_humidity_logger.interval_s raises ValueError."""
         import config
 
-        original = config.DEVICE_CONFIG["dht_logger"]["interval_s"]
-        config.DEVICE_CONFIG["dht_logger"]["interval_s"] = -1
+        original = config.DEVICE_CONFIG["temp_humidity_logger"]["interval_s"]
+        config.DEVICE_CONFIG["temp_humidity_logger"]["interval_s"] = -1
         try:
             with pytest.raises(ValueError):
                 config.validate_config()
         finally:
-            config.DEVICE_CONFIG["dht_logger"]["interval_s"] = original
+            config.DEVICE_CONFIG["temp_humidity_logger"]["interval_s"] = original
+
+    def test_invalid_sht31_address_raises(self):
+        """sht31.i2c_address outside {0x44, 0x45} raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["sht31"]["i2c_address"]
+        config.DEVICE_CONFIG["sht31"]["i2c_address"] = 0x50
+        try:
+            with pytest.raises(ValueError, match="sht31.i2c_address"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["sht31"]["i2c_address"] = original
 
     def test_zero_fan_timing_raises(self):
         """fan_1.on_time_s = 0 raises ValueError."""
@@ -173,16 +186,16 @@ class TestValidateConfig:
             config.DEVICE_CONFIG["event_logger"]["warn_flush_threshold"] = original
 
     def test_zero_retry_delay_raises(self):
-        """dht_logger.retry_delay_s = 0 raises ValueError."""
+        """temp_humidity_logger.retry_delay_s = 0 raises ValueError."""
         import config
 
-        original = config.DEVICE_CONFIG["dht_logger"]["retry_delay_s"]
-        config.DEVICE_CONFIG["dht_logger"]["retry_delay_s"] = 0
+        original = config.DEVICE_CONFIG["temp_humidity_logger"]["retry_delay_s"]
+        config.DEVICE_CONFIG["temp_humidity_logger"]["retry_delay_s"] = 0
         try:
             with pytest.raises(ValueError, match="retry_delay_s"):
                 config.validate_config()
         finally:
-            config.DEVICE_CONFIG["dht_logger"]["retry_delay_s"] = original
+            config.DEVICE_CONFIG["temp_humidity_logger"]["retry_delay_s"] = original
 
     def test_zero_fan1_poll_interval_raises(self):
         """fan_1.poll_interval_s = 0 raises ValueError."""

@@ -26,7 +26,7 @@ class TestOLEDDisplayInit:
         self,
         mock_i2c,
         time_provider,
-        dht_logger,
+        th_logger,
         buffer_manager,
         mock_status_manager,
         mock_reminder,
@@ -39,7 +39,7 @@ class TestOLEDDisplayInit:
         display = OLEDDisplay(
             i2c=mock_i2c,
             time_provider=time_provider,
-            dht_logger=dht_logger,
+            th_logger=th_logger,
             buffer_manager=buffer_manager,
             status_manager=mock_status_manager,
             reminder=mock_reminder,
@@ -102,18 +102,18 @@ class TestOLEDDisplayMenuCycling:
 
 class TestOLEDDisplayLongPressActions:
     def test_long_press_temp_clears_history(self, oled_display):
-        """Long press on temp menu should clear dht_logger reading history."""
-        oled_display._dht_logger._readings_history = [(1, 20.0, 50.0)]
+        """Long press on temp menu should clear th_logger reading history."""
+        oled_display._th_logger._readings_history = [(1, 20.0, 50.0)]
         oled_display.current_menu = MENUS.index("temp")
         oled_display.long_press_action()
-        assert oled_display._dht_logger._readings_history == []
+        assert oled_display._th_logger._readings_history == []
 
     def test_long_press_humidity_clears_history(self, oled_display):
-        """Long press on humidity menu should clear dht_logger reading history."""
-        oled_display._dht_logger._readings_history = [(1, 20.0, 50.0)]
+        """Long press on humidity menu should clear th_logger reading history."""
+        oled_display._th_logger._readings_history = [(1, 20.0, 50.0)]
         oled_display.current_menu = MENUS.index("humidity")
         oled_display.long_press_action()
-        assert oled_display._dht_logger._readings_history == []
+        assert oled_display._th_logger._readings_history == []
 
     def test_long_press_service_resets_reminder(self, oled_display, mock_reminder):
         """Long press on service menu should call reminder.reset()."""
@@ -144,7 +144,7 @@ class TestOLEDDisplayLongPressActions:
         self,
         mock_i2c,
         time_provider,
-        dht_logger,
+        th_logger,
         buffer_manager,
         mock_status_manager,
         mock_reminder,
@@ -156,7 +156,7 @@ class TestOLEDDisplayLongPressActions:
         display = OLEDDisplay(
             i2c=mock_i2c,
             time_provider=time_provider,
-            dht_logger=dht_logger,
+            th_logger=th_logger,
             buffer_manager=buffer_manager,
             status_manager=mock_status_manager,
             reminder=mock_reminder,
@@ -283,7 +283,7 @@ class TestOLEDDisplayAdditionalCoverage:
         self,
         mock_i2c,
         time_provider,
-        dht_logger,
+        th_logger,
         buffer_manager,
         mock_status_manager,
         mock_reminder,
@@ -294,7 +294,7 @@ class TestOLEDDisplayAdditionalCoverage:
         return OLEDDisplay(
             i2c=mock_i2c,
             time_provider=time_provider,
-            dht_logger=dht_logger,
+            th_logger=th_logger,
             buffer_manager=buffer_manager,
             status_manager=mock_status_manager,
             reminder=mock_reminder,
@@ -315,7 +315,7 @@ class TestOLEDDisplayAdditionalCoverage:
         self,
         mock_i2c,
         time_provider,
-        dht_logger,
+        th_logger,
         buffer_manager,
         mock_status_manager,
         mock_reminder,
@@ -326,7 +326,7 @@ class TestOLEDDisplayAdditionalCoverage:
             display = self._make_display(
                 mock_i2c,
                 time_provider,
-                dht_logger,
+                th_logger,
                 buffer_manager,
                 mock_status_manager,
                 mock_reminder,
@@ -505,57 +505,57 @@ class TestOLEDDisplayAdditionalCoverage:
 
 
 # ---------------------------------------------------------------------------
-# TestDHTLoggerStats  (unit tests for new stats methods)
+# TestTempHumidityLoggerStats  (unit tests for new stats methods)
 # ---------------------------------------------------------------------------
 
 
-class TestDHTLoggerStats:
-    def test_get_stats_empty_returns_current(self, dht_logger):
+class TestTempHumidityLoggerStats:
+    def test_get_stats_empty_returns_current(self, th_logger):
         """get_stats() with no history should return last_temperature/humidity."""
-        dht_logger.last_temperature = 22.0
-        dht_logger.last_humidity = 60.0
-        dht_logger._readings_history.clear()
-        stats = dht_logger.get_stats(3600)
+        th_logger.last_temperature = 22.0
+        th_logger.last_humidity = 60.0
+        th_logger._readings_history.clear()
+        stats = th_logger.get_stats(3600)
         assert stats["temp_now"] == 22.0
         assert stats["hum_now"] == 60.0
         assert stats["count"] == 0
 
-    def test_get_stats_with_history(self, dht_logger):
+    def test_get_stats_with_history(self, th_logger):
         """get_stats() should compute hi/lo/avg from history."""
         import time
 
         now_ms = int(time.time() * 1000)
-        dht_logger._readings_history = [
+        th_logger._readings_history = [
             (now_ms - 1000, 20.0, 50.0),
             (now_ms - 2000, 25.0, 70.0),
             (now_ms - 3000, 22.0, 60.0),
         ]
-        dht_logger.last_temperature = 22.0
-        dht_logger.last_humidity = 60.0
-        stats = dht_logger.get_stats(3600)
+        th_logger.last_temperature = 22.0
+        th_logger.last_humidity = 60.0
+        stats = th_logger.get_stats(3600)
         assert stats["temp_hi"] == 25.0
         assert stats["temp_lo"] == 20.0
         assert abs(stats["temp_avg"] - 22.333) < 0.01
         assert stats["count"] == 3
 
-    def test_get_stats_window_filters_old_entries(self, dht_logger):
+    def test_get_stats_window_filters_old_entries(self, th_logger):
         """get_stats() should ignore readings outside the window."""
         import time
 
         now_ms = int(time.time() * 1000)
-        dht_logger._readings_history = [
+        th_logger._readings_history = [
             (now_ms - 7200 * 1000, 99.0, 99.0),  # 2 hours ago — outside 1h window
             (now_ms - 1000, 22.0, 60.0),  # 1 second ago — inside
         ]
-        stats = dht_logger.get_stats(3600)
+        stats = th_logger.get_stats(3600)
         assert stats["count"] == 1
         assert stats["temp_hi"] == 22.0
 
-    def test_clear_history_empties_list(self, dht_logger):
+    def test_clear_history_empties_list(self, th_logger):
         """clear_history() should empty _readings_history."""
-        dht_logger._readings_history = [(1, 20.0, 50.0), (2, 21.0, 55.0)]
-        dht_logger.clear_history()
-        assert dht_logger._readings_history == []
+        th_logger._readings_history = [(1, 20.0, 50.0), (2, 21.0, 55.0)]
+        th_logger.clear_history()
+        assert th_logger._readings_history == []
 
 
 # ---------------------------------------------------------------------------

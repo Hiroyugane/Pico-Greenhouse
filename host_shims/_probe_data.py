@@ -9,7 +9,7 @@ Usage inside a shim::
 
     from host_shims._probe_data import PROBE
 
-    dht_fail_rate = PROBE.dht.fail_rate
+    sht31_fail_rate = PROBE.sht31.fail_rate
     sd_statvfs    = PROBE.sd.statvfs_tuple
     gpio_boot     = PROBE.gpio.boot_state
 """
@@ -62,7 +62,7 @@ class GPIODefaults:
         4: 0, 5: 0, 6: 0, 7: 0, 8: 0,  # LEDs
         9: 1, 14: 1,        # Buttons with PULL_UP
         10: 0, 11: 0, 12: 0, 13: 1,  # SPI (CS is pulled high)
-        15: 0,              # DHT22 data
+        15: 0,              # GP15 (formerly DHT22, now free)
         16: 1, 17: 1, 18: 1,  # Relays (pull HIGH = off)
         19: 0, 20: 0, 21: 0, 22: 0,  # Reserved
         25: 0,              # On-board LED
@@ -84,8 +84,14 @@ class I2CDefaults:
 
 
 @dataclass
-class DHTDefaults:
-    """DHT22 sensor behaviour model calibrated from probe data."""
+class SHT31Defaults:
+    """SHT31-D sensor behaviour model.
+
+    Temperature / humidity distributions are inherited from the legacy
+    DHT22 probe data (same physical greenhouse, same range). I2C error
+    rate is much lower than DHT22's one-wire failure rate; defaults
+    reflect Sensirion datasheet typical values.
+    """
 
     temp_mean: float = 23.0
     temp_stddev: float = 0.8
@@ -95,16 +101,11 @@ class DHTDefaults:
     humid_stddev: float = 3.0
     humid_min: float = 30.0
     humid_max: float = 90.0
-    # Error injection model
-    fail_rate: float = 0.02       # 2% of reads fail (OSError)
-    max_consecutive_fails: int = 3
-    min_interval_s: float = 0.5   # Minimum time between reads
-    measure_duration_us: int = 5000  # Typical measure() duration
-    # Error types observed
-    error_types: dict[str, float] = field(default_factory=lambda: {  # type: ignore[assignment]
-        "OSError": 0.95,   # Most common
-        "EAGAIN": 0.05,    # Occasional
-    })
+    # Error injection model — I2C is far more reliable than one-wire.
+    fail_rate: float = 0.005      # 0.5% of reads fail (OSError/CRC)
+    max_consecutive_fails: int = 2
+    min_interval_s: float = 0.05  # Single-shot conversion ~16 ms
+    measure_duration_us: int = 16_000  # High-repeatability conversion
 
 
 @dataclass
@@ -192,7 +193,7 @@ class ProbeData:
 
     gpio: GPIODefaults = field(default_factory=GPIODefaults)  # type: ignore[assignment]
     i2c: I2CDefaults = field(default_factory=I2CDefaults)  # type: ignore[assignment]
-    dht: DHTDefaults = field(default_factory=DHTDefaults)  # type: ignore[assignment]
+    sht31: SHT31Defaults = field(default_factory=SHT31Defaults)  # type: ignore[assignment]
     sd: SDDefaults = field(default_factory=SDDefaults)  # type: ignore[assignment]
     button: ButtonDefaults = field(default_factory=ButtonDefaults)  # type: ignore[assignment]
     led: LEDDefaults = field(default_factory=LEDDefaults)  # type: ignore[assignment]
@@ -250,38 +251,28 @@ def _populate_from_json(data: dict, probe: ProbeData) -> None:
     if stat:
         probe.i2c.ds3231_status = int(stat, 16)
 
-    # -- DHT22 endurance --
+    # -- Temperature/humidity environment (legacy DHT22 probe distribution
+    # carries over to SHT31 since the greenhouse environment is unchanged).
     dht = probes.get("dht22_endurance", {})
     totals = dht.get("totals", {})
-    if totals.get("overall_fail_rate") is not None:
-        probe.dht.fail_rate = totals["overall_fail_rate"]
     temp_all = totals.get("temperature_all", {})
     if temp_all.get("mean") is not None:
-        probe.dht.temp_mean = temp_all["mean"]
+        probe.sht31.temp_mean = temp_all["mean"]
     if temp_all.get("stddev") is not None:
-        probe.dht.temp_stddev = temp_all["stddev"]
+        probe.sht31.temp_stddev = temp_all["stddev"]
     if temp_all.get("min") is not None:
-        probe.dht.temp_min = temp_all["min"]
+        probe.sht31.temp_min = temp_all["min"]
     if temp_all.get("max") is not None:
-        probe.dht.temp_max = temp_all["max"]
+        probe.sht31.temp_max = temp_all["max"]
     humid_all = totals.get("humidity_all", {})
     if humid_all.get("mean") is not None:
-        probe.dht.humid_mean = humid_all["mean"]
+        probe.sht31.humid_mean = humid_all["mean"]
     if humid_all.get("stddev") is not None:
-        probe.dht.humid_stddev = humid_all["stddev"]
+        probe.sht31.humid_stddev = humid_all["stddev"]
     if humid_all.get("min") is not None:
-        probe.dht.humid_min = humid_all["min"]
+        probe.sht31.humid_min = humid_all["min"]
     if humid_all.get("max") is not None:
-        probe.dht.humid_max = humid_all["max"]
-    # Inspect interval buckets for min_interval and measure_duration
-    buckets = dht.get("interval_buckets", {})
-    for bk, bv in buckets.items():
-        dur = bv.get("measure_duration_us", {})
-        if dur.get("mean"):
-            probe.dht.measure_duration_us = int(dur["mean"])
-        # Find the fastest interval with 0% fail rate
-        if bv.get("fail_rate", 1) == 0:
-            probe.dht.min_interval_s = bv.get("interval_s", 0.5)
+        probe.sht31.humid_max = humid_all["max"]
 
     # -- SD card --
     sd = probes.get("sd_card", {})

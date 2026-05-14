@@ -3,7 +3,7 @@
 #
 # HeaterController: GP3 → R6 → IRLZ44N gate. Active-HIGH (the opposite of
 # the relay modules); turn_on() drives the gate HIGH. Thermostat reads
-# the cached temperature from DHTLogger so calibration matches the fans.
+# the cached temperature from TempHumidityLogger so calibration matches the fans.
 # Day/night setpoints inherit the growlight schedule plus offsets.
 
 import uasyncio as asyncio
@@ -17,7 +17,7 @@ class HeaterController:
     Attributes:
         pin: machine.Pin instance (output, active HIGH = heater on)
         time_provider: TimeProvider instance
-        dht_logger: DHTLogger instance (reads last_temperature)
+        th_logger: TempHumidityLogger instance (reads last_temperature)
         logger: EventLogger instance
         day_min_temp: setpoint while day window is active (°C)
         night_min_temp: setpoint while night window is active (°C)
@@ -32,7 +32,7 @@ class HeaterController:
         self,
         pin: int,
         time_provider,
-        dht_logger,
+        th_logger,
         logger,
         day_min_temp: float = 22.0,
         night_min_temp: float = 16.0,
@@ -48,7 +48,7 @@ class HeaterController:
         self.pin = Pin(pin, Pin.OUT)
         self.name = name or f"Heater_{pin}"
         self.time_provider = time_provider
-        self.dht_logger = dht_logger
+        self.th_logger = th_logger
         self.logger = logger
         self.day_min_temp = day_min_temp
         self.night_min_temp = night_min_temp
@@ -103,7 +103,7 @@ class HeaterController:
         while True:
             try:
                 setpoint = self.current_setpoint()
-                temp = self.dht_logger.last_temperature
+                temp = self.th_logger.last_temperature
 
                 if temp is None:
                     self._stale_count += 1
@@ -122,8 +122,7 @@ class HeaterController:
                             self.turn_on()
                             self.logger.info(
                                 "Heater",
-                                f"{self.name} ON at {temp:.1f}°C < {fire_temp:.1f}°C "
-                                f"(setpoint {setpoint:.1f}°C)",
+                                f"{self.name} ON at {temp:.1f}°C < {fire_temp:.1f}°C (setpoint {setpoint:.1f}°C)",
                             )
                         except Exception as e:
                             self.logger.error("Heater", f"{self.name} turn_on failed: {e}")
@@ -151,7 +150,7 @@ class HeaterController:
         return {
             "name": self.name,
             "is_on": self._state,
-            "current_temp": self.dht_logger.last_temperature,
+            "current_temp": self.th_logger.last_temperature,
             "current_setpoint": self.current_setpoint(),
             "stale_count": self._stale_count,
         }

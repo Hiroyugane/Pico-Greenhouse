@@ -10,7 +10,7 @@
 # 3. Create providers: TimeProvider (wraps RTC)
 # 4. Create centralized BufferManager (SD + fallback)
 # 5. Create EventLogger (system event tracking)
-# 6. Create DHTLogger (temperature/humidity sensor)
+# 6. Create TempHumidityLogger (SHT31 on shared I2C0)
 # 7. Create relay controllers: FanController × 2, GrowlightController
 # 8. Create LED/button handler and ServiceReminder task
 # 9. Spawn all async tasks and run event loop
@@ -20,7 +20,7 @@
 # HOW TO RUN:
 # 1. First time only: run rtc_set_time.py to sync RTC
 # 2. Run this main.py via Thonny
-# 3. Check /sd/dht_log_YYYY-MM-DD.csv for data
+# 3. Check /sd/th_log_YYYY-MM-DD.csv for data
 
 import gc
 import os
@@ -40,7 +40,6 @@ from config import DEVICE_CONFIG, validate_config
 from lib.buffer_manager import BufferManager
 from lib.buzzer import BuzzerController
 from lib.co2_logger import CO2Logger
-from lib.dht_logger import DHTLogger
 from lib.event_logger import EventLogger
 from lib.hardware_factory import HardwareFactory
 from lib.heater import HeaterController
@@ -48,8 +47,10 @@ from lib.led_button import LEDButtonHandler, ServiceReminder
 from lib.mcp4725 import MCP4725
 from lib.oled_display import OLEDDisplay
 from lib.relay import FanController, GrowlightController
+from lib.sht31 import SHT31
 from lib.soil_logger import SoilLogger
 from lib.status_manager import StatusManager
+from lib.temp_humidity_logger import TempHumidityLogger
 from lib.time_provider import RTCTimeProvider
 from lib.write_queue_manager import WriteQueueManager
 
@@ -259,40 +260,45 @@ async def main():
         debug_to_file=logger_config.get("debug_to_file", False),
     )
 
-    # Step 6: Create DHTLogger
-    dht_config = DEVICE_CONFIG.get("dht_logger", {})
+    # Step 6: Create SHT31 sensor and TempHumidityLogger
+    th_config = DEVICE_CONFIG.get("temp_humidity_logger", {})
     files_config = DEVICE_CONFIG.get("files", {})
+    sht31_config = DEVICE_CONFIG.get("sht31", {})
+    sht31 = SHT31(
+        i2c=hardware.get_i2c(),
+        address=sht31_config.get("i2c_address", 0x44),
+    )
     try:
-        dht_logger = DHTLogger(
-            pin=DEVICE_CONFIG["pins"]["dht22"],
+        th_logger = TempHumidityLogger(
+            sensor=sht31,
             time_provider=time_provider,
             buffer_manager=buffer_manager,
             logger=logger,
-            interval=dht_config.get("interval_s", 30),
-            filename=f"/sd/{files_config.get('dht_log_base', 'dht_log.csv')}",
-            max_retries=dht_config.get("max_retries", 3),
+            interval=th_config.get("interval_s", 30),
+            filename=f"/sd/{files_config.get('th_log_base', 'th_log.csv')}",
+            max_retries=th_config.get("max_retries", 3),
             status_manager=status_manager,
-            dht_warn_threshold=status_led_config.get("dht_warn_threshold", 3),
-            dht_error_threshold=status_led_config.get("dht_error_threshold", 10),
-            retry_delay_s=dht_config.get("retry_delay_s", 0.5),
+            th_warn_threshold=status_led_config.get("th_warn_threshold", 3),
+            th_error_threshold=status_led_config.get("th_error_threshold", 10),
+            retry_delay_s=th_config.get("retry_delay_s", 0.5),
             write_queue=write_queue,
         )
     except Exception as e:
-        logger.error("MAIN", f"DHTLogger init failed: {e}")
-        # Create a minimal DHTLogger without status manager to keep system running
-        dht_logger = DHTLogger(
-            pin=DEVICE_CONFIG["pins"]["dht22"],
+        logger.error("MAIN", f"TempHumidityLogger init failed: {e}")
+        # Create a minimal logger without status manager to keep system running
+        th_logger = TempHumidityLogger(
+            sensor=sht31,
             time_provider=time_provider,
             buffer_manager=buffer_manager,
             logger=logger,
-            interval=dht_config.get("interval_s", 30),
-            filename=f"/sd/{files_config.get('dht_log_base', 'dht_log.csv')}",
-            max_retries=dht_config.get("max_retries", 3),
-            retry_delay_s=dht_config.get("retry_delay_s", 0.5),
+            interval=th_config.get("interval_s", 30),
+            filename=f"/sd/{files_config.get('th_log_base', 'th_log.csv')}",
+            max_retries=th_config.get("max_retries", 3),
+            retry_delay_s=th_config.get("retry_delay_s", 0.5),
             write_queue=write_queue,
         )
 
-    wdt.feed()  # Feed after DHTLogger init
+    wdt.feed()  # Feed after TempHumidityLogger init
 
     # Step 7: Create relay controllers with dependency injection
     fan_configs = [
@@ -305,7 +311,7 @@ async def main():
         fan = FanController(
             pin=pin,
             time_provider=time_provider,
-            dht_logger=dht_logger,
+            th_logger=th_logger,
             logger=logger,
             interval_s=config.get("interval_s", 600),
             on_time_s=config.get("on_time_s", 20),
@@ -371,7 +377,7 @@ async def main():
     heater = HeaterController(
         pin=DEVICE_CONFIG["pins"]["heater_mosfet"],
         time_provider=time_provider,
-        dht_logger=dht_logger,
+        th_logger=th_logger,
         logger=logger,
         day_min_temp=heater_config.get("day_min_temp", 22.0),
         night_min_temp=heater_config.get("night_min_temp", 16.0),
@@ -418,8 +424,7 @@ async def main():
             fans[fan_index].external_override = co2_logger_obj.is_override_active
             logger.info(
                 "MAIN",
-                f"CO2 override wired to {fans[fan_index].name} "
-                f"(>{co2_config.get('override_ppm_on', 1000)} ppm)",
+                f"CO2 override wired to {fans[fan_index].name} (>{co2_config.get('override_ppm_on', 1000)} ppm)",
             )
     except Exception as e:
         logger.warning("MAIN", f"CO2Logger init failed (non-critical): {e}")
@@ -539,7 +544,7 @@ async def main():
             oled = OLEDDisplay(
                 i2c=hardware.get_i2c(),
                 time_provider=time_provider,
-                dht_logger=dht_logger,
+                th_logger=th_logger,
                 buffer_manager=buffer_manager,
                 status_manager=status_manager,
                 reminder=reminder,
@@ -609,8 +614,8 @@ async def main():
     logger.debug("MAIN", "task spawned", task="growlight.start_scheduler")
     asyncio.create_task(heater.start_cycle())
     logger.debug("MAIN", "task spawned", task="heater.start_cycle")
-    asyncio.create_task(dht_logger.log_loop())
-    logger.debug("MAIN", "task spawned", task="dht_logger.log_loop")
+    asyncio.create_task(th_logger.log_loop())
+    logger.debug("MAIN", "task spawned", task="th_logger.log_loop")
     if co2_logger_obj is not None:
         asyncio.create_task(co2_logger_obj.log_loop())
         logger.debug("MAIN", "task spawned", task="co2_logger.log_loop")

@@ -333,7 +333,7 @@ class BufferManager:
         while SD is down.
 
         Args:
-            relpath: Relative path (e.g. 'dht_log_2026-02-16.csv')
+            relpath: Relative path (e.g. 'th_log_2026-02-16.csv')
 
         Returns:
             True if data for this relpath already exists somewhere.
@@ -382,7 +382,7 @@ class BufferManager:
         If fallback also fails, buffers in memory and returns False.
 
         Args:
-            relpath (str): Relative path from SD mount or local root (e.g., 'dht_log.csv' or '/sd/dht_log.csv')
+            relpath (str): Relative path from SD mount or local root (e.g., 'th_log.csv' or '/sd/dht_log.csv')
             data (str): Data to append (should include newline if needed)
 
         Returns:
@@ -390,13 +390,13 @@ class BufferManager:
 
         Example:
             >>> bm = BufferManager()
-            >>> bm.write('dht_log.csv', '2026-01-29 14:35:00,22.5,65.0\n')
+            >>> bm.write('th_log.csv', '2026-01-29 14:35:00,22.5,65.0\n')
             True  # Written to primary SD
             >>> # Later, if SD disconnects:
-            >>> bm.write('dht_log.csv', '2026-01-29 14:36:00,22.6,65.2\n')
+            >>> bm.write('th_log.csv', '2026-01-29 14:36:00,22.6,65.2\n')
             False  # Written to fallback instead
             >>> # And if SD reconnects before next write:
-            >>> bm.write('dht_log.csv', '2026-01-29 14:37:00,22.7,65.3\n')
+            >>> bm.write('th_log.csv', '2026-01-29 14:37:00,22.7,65.3\n')
             # Fallback entries migrated first, then new entry written (maintains order!)
         """
         # Normalize path
@@ -540,10 +540,10 @@ class BufferManager:
                   still in memory
 
         Example:
-            >>> bm.flush('dht_log.csv')  # Flush specific file
+            >>> bm.flush('th_log.csv')  # Flush specific file
             False  # Primary still unavailable (went to fallback)
             >>> # ... SD card becomes available ...
-            >>> bm.flush('dht_log.csv')
+            >>> bm.flush('th_log.csv')
             True  # Flushed to primary
         """
         paths_to_flush = [relpath] if relpath else list(self._buffers.keys())

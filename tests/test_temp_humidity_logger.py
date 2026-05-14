@@ -1,4 +1,4 @@
-# Tests for lib/dht_logger.py
+# Tests for lib/temp_humidity_logger.py
 # Covers sensor reading, date rollover, CSV file creation, log loop
 
 import asyncio
@@ -9,120 +9,120 @@ import pytest
 from tests.conftest import FAKE_LOCALTIME
 
 
-class TestDHTLoggerInit:
-    """Tests for DHTLogger initialization."""
+def _make_sensor(temp=22.5, hum=65.0, measure_side_effect=None):
+    """Build a sensor mock matching the SHT31 driver surface."""
+    sensor = Mock()
+    if measure_side_effect is not None:
+        sensor.measure = Mock(side_effect=measure_side_effect)
+    else:
+        sensor.measure = Mock()
+    sensor.temperature = Mock(return_value=temp)
+    sensor.humidity = Mock(return_value=hum)
+    return sensor
+
+
+class TestTempHumidityLoggerInit:
+    """Tests for TempHumidityLogger initialization."""
 
     def test_init_creates_csv_header(self, time_provider, buffer_manager, mock_event_logger):
-        """DHTLogger init creates CSV file with header via buffer_manager."""
-        from lib.dht_logger import DHTLogger
+        """Init creates CSV file with header via buffer_manager."""
+        from lib.temp_humidity_logger import TempHumidityLogger
 
+        sensor = _make_sensor()
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
             with patch.object(buffer_manager, "write", return_value=True) as write_mock:
-                DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
-        # Should have written CSV header
+                TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger)
         write_mock.assert_called()
         header_call = write_mock.call_args_list[0]
         assert "Timestamp,Temperature,Humidity" in header_call[0][1]
 
     def test_init_logs_fallback_when_sd_unavailable(self, time_provider, buffer_manager, mock_event_logger):
         """When write returns False (fallback), log message reflects fallback destination."""
-        from lib.dht_logger import DHTLogger
+        from lib.temp_humidity_logger import TempHumidityLogger
 
+        sensor = _make_sensor()
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
             with patch.object(buffer_manager, "write", return_value=False):
                 with patch.object(buffer_manager, "has_data_for", return_value=False):
-                    DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
-        # Should log fallback message, not primary
+                    TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger)
         info_calls = [str(c) for c in mock_event_logger.debug.call_args_list]
         assert any("fallback" in c for c in info_calls)
 
     def test_init_sets_interval(self, time_provider, buffer_manager, mock_event_logger):
-        """DHTLogger interval is set from constructor arg."""
-        from lib.dht_logger import DHTLogger
+        """Interval is set from constructor arg."""
+        from lib.temp_humidity_logger import TempHumidityLogger
 
+        sensor = _make_sensor()
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger, interval=30)
-        assert dht.interval == 30
+            th = TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger, interval=30)
+        assert th.interval == 30
 
     def test_init_state_defaults(self, time_provider, buffer_manager, mock_event_logger):
         """Initial state: no cached readings, zero failures."""
-        from lib.dht_logger import DHTLogger
+        from lib.temp_humidity_logger import TempHumidityLogger
 
+        sensor = _make_sensor()
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
-        assert dht.last_temperature is None
-        assert dht.last_humidity is None
-        assert dht.read_failures == 0
-        assert dht.write_failures == 0
+            th = TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger)
+        assert th.last_temperature is None
+        assert th.last_humidity is None
+        assert th.read_failures == 0
+        assert th.write_failures == 0
 
     def test_init_existing_csv_skips_create(self, time_provider, buffer_manager, mock_event_logger, tmp_path):
         """When CSV already exists, __init__ skips _create_file."""
-        from lib.dht_logger import DHTLogger
+        from lib.temp_humidity_logger import TempHumidityLogger
 
-        # Pre-create the file that DHTLogger would look for
+        sensor = _make_sensor()
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            # Peek at what the filename would be
-            # Manually create the expected file so _file_exists returns True
-            relpath = "dht_log_2026-01-29.csv"
+            relpath = "th_log_2026-01-29.csv"
             primary_path = tmp_path / "sd" / relpath
             primary_path.write_text("Timestamp,Temperature,Humidity\n")
 
             with patch.object(buffer_manager, "write") as write_mock:
-                DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
-        # write should NOT have been called (file already exists)
+                TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger)
         write_mock.assert_not_called()
 
     def test_init_create_file_failure_logged(self, time_provider, buffer_manager, mock_event_logger):
         """If _create_file raises, error is logged but init continues."""
-        from lib.dht_logger import DHTLogger
+        from lib.temp_humidity_logger import TempHumidityLogger
 
+        sensor = _make_sensor()
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
             with patch.object(buffer_manager, "write", side_effect=OSError("disk full")):
-                # Should not crash
-                DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
-        # Error should have been logged
+                TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger)
         mock_event_logger.error.assert_called()
 
 
-class TestDHTLoggerReadSensor:
+class TestTempHumidityLoggerReadSensor:
     """Tests for read_sensor() method."""
 
     def test_read_sensor_success(self, time_provider, buffer_manager, mock_event_logger):
         """Successful sensor read returns (temp, hum)."""
-        from lib.dht_logger import DHTLogger
+        from lib.temp_humidity_logger import TempHumidityLogger
 
-        sensor = Mock()
-        sensor.measure = Mock()
-        sensor.temperature = Mock(return_value=22.5)
-        sensor.humidity = Mock(return_value=65.0)
-
+        sensor = _make_sensor(temp=22.5, hum=65.0)
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            with patch("dht.DHT22", return_value=sensor):
-                dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
-        temp, hum = dht.read_sensor()
+            th = TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger)
+        temp, hum = th.read_sensor()
         assert temp == 22.5
         assert hum == 65.0
 
     def test_read_sensor_out_of_range(self, time_provider, buffer_manager, mock_event_logger):
         """Out-of-range readings return (None, None)."""
-        from lib.dht_logger import DHTLogger
+        from lib.temp_humidity_logger import TempHumidityLogger
 
-        sensor = Mock()
-        sensor.measure = Mock()
-        sensor.temperature = Mock(return_value=120.0)
-        sensor.humidity = Mock(return_value=150.0)
-
+        sensor = _make_sensor(temp=120.0, hum=150.0)
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            with patch("dht.DHT22", return_value=sensor):
-                dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger, max_retries=2)
-        temp, hum = dht.read_sensor()
+            th = TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger, max_retries=2)
+        temp, hum = th.read_sensor()
         assert temp is None
         assert hum is None
-        assert dht.read_failures == 1
+        assert th.read_failures == 1
 
     def test_read_sensor_retry_on_exception(self, time_provider, buffer_manager, mock_event_logger):
         """First measure() raises, second attempt succeeds."""
-        from lib.dht_logger import DHTLogger
+        from lib.temp_humidity_logger import TempHumidityLogger
 
         sensor = Mock()
         call_count = 0
@@ -138,203 +138,187 @@ class TestDHTLoggerReadSensor:
         sensor.humidity = Mock(return_value=60.0)
 
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            with patch("dht.DHT22", return_value=sensor):
-                dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger, max_retries=3)
+            th = TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger, max_retries=3)
         with patch("time.sleep"):
-            temp, hum = dht.read_sensor()
+            temp, hum = th.read_sensor()
         assert temp == 22.0
         assert hum == 60.0
 
     def test_read_sensor_all_retries_fail(self, time_provider, buffer_manager, mock_event_logger):
         """All retry attempts fail → (None, None) and read_failures incremented."""
-        from lib.dht_logger import DHTLogger
+        from lib.temp_humidity_logger import TempHumidityLogger
 
         sensor = Mock()
         sensor.measure = Mock(side_effect=OSError("always fails"))
 
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            with patch("dht.DHT22", return_value=sensor):
-                dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger, max_retries=3)
+            th = TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger, max_retries=3)
         with patch("time.sleep"):
-            temp, hum = dht.read_sensor()
+            temp, hum = th.read_sensor()
         assert temp is None
         assert hum is None
-        assert dht.read_failures == 1
+        assert th.read_failures == 1
 
     def test_read_sensor_negative_boundary(self, time_provider, buffer_manager, mock_event_logger):
         """Boundary: -40°C is valid, -41°C is out of range."""
-        from lib.dht_logger import DHTLogger
+        from lib.temp_humidity_logger import TempHumidityLogger
 
-        sensor = Mock()
-        sensor.measure = Mock()
-        sensor.temperature = Mock(return_value=-40.0)
-        sensor.humidity = Mock(return_value=0.0)
-
+        sensor = _make_sensor(temp=-40.0, hum=0.0)
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            with patch("dht.DHT22", return_value=sensor):
-                dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
-        temp, hum = dht.read_sensor()
+            th = TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger)
+        temp, hum = th.read_sensor()
         assert temp == -40.0
         assert hum == 0.0
 
 
-class TestDHTLoggerDateRollover:
+class TestTempHumidityLoggerDateRollover:
     """Tests for date-based file rollover."""
 
     def test_update_filename_for_date(self, time_provider, buffer_manager, mock_event_logger):
-        """Filename includes date in dht_log_YYYY-MM-DD.csv format."""
-        from lib.dht_logger import DHTLogger
+        """Filename includes date in th_log_YYYY-MM-DD.csv format."""
+        from lib.temp_humidity_logger import TempHumidityLogger
 
+        sensor = _make_sensor()
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
-        assert "2026-01-29" in dht.filename
+            th = TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger)
+        assert "2026-01-29" in th.filename
 
     def test_check_date_changed_detects_rollover(self, time_provider, buffer_manager, mock_event_logger):
         """_check_date_changed returns True when date changes."""
-        from lib.dht_logger import DHTLogger
+        from lib.temp_humidity_logger import TempHumidityLogger
 
+        sensor = _make_sensor()
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
+            th = TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger)
 
-        dht.current_date = (2026, 1, 28)  # Yesterday
+        th.current_date = (2026, 1, 28)
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            changed = dht._check_date_changed()
+            changed = th._check_date_changed()
         assert changed is True
-        assert dht.current_date == (2026, 1, 29)
+        assert th.current_date == (2026, 1, 29)
 
     def test_check_date_no_change(self, time_provider, buffer_manager, mock_event_logger):
         """_check_date_changed returns False when date hasn't changed."""
-        from lib.dht_logger import DHTLogger
+        from lib.temp_humidity_logger import TempHumidityLogger
 
+        sensor = _make_sensor()
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
-            changed = dht._check_date_changed()
+            th = TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger)
+            changed = th._check_date_changed()
         assert changed is False
 
     def test_update_filename_error_fallback(self, time_provider, buffer_manager, mock_event_logger):
         """If now_date_tuple raises, filename falls back to base."""
-        from lib.dht_logger import DHTLogger
+        from lib.temp_humidity_logger import TempHumidityLogger
 
+        sensor = _make_sensor()
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
+            th = TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger)
 
-        dht.time_provider = Mock()
-        dht.time_provider.now_date_tuple = Mock(side_effect=OSError("fail"))
-        dht.logger = mock_event_logger
-        dht._update_filename_for_date()
-        # Should fall back to filename_base
-        assert dht.filename == dht.filename_base
+        th.time_provider = Mock()
+        th.time_provider.now_date_tuple = Mock(side_effect=OSError("fail"))
+        th.logger = mock_event_logger
+        th._update_filename_for_date()
+        assert th.filename == th.filename_base
 
 
-class TestDHTLoggerFileOps:
+class TestTempHumidityLoggerFileOps:
     """Tests for file operations."""
 
     def test_file_exists_true_primary(self, time_provider, buffer_manager, mock_event_logger, tmp_path):
         """_file_exists returns True when file exists on primary."""
-        from lib.dht_logger import DHTLogger
+        from lib.temp_humidity_logger import TempHumidityLogger
 
+        sensor = _make_sensor()
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
-        # Create the expected file
-        relpath = dht._strip_sd_prefix(dht.filename)
+            th = TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger)
+        relpath = th._strip_sd_prefix(th.filename)
         (tmp_path / "sd" / relpath).write_text("header\n")
-        assert dht._file_exists() is True
+        assert th._file_exists() is True
 
     def test_file_exists_true_fallback(self, time_provider, buffer_manager, mock_event_logger, tmp_path):
         """_file_exists returns True when data exists only in fallback."""
-        from lib.dht_logger import DHTLogger
+        from lib.temp_humidity_logger import TempHumidityLogger
 
+        sensor = _make_sensor()
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
-        # Remove the primary file (was created during init)
-        relpath = dht._strip_sd_prefix(dht.filename)
+            th = TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger)
+        relpath = th._strip_sd_prefix(th.filename)
         primary = tmp_path / "sd" / relpath
         if primary.exists():
             primary.unlink()
-        # Write to fallback in pipe-delimited format
         fallback = tmp_path / "local" / "fallback.csv"
         fallback.write_text(f"{relpath}|Timestamp,Temperature,Humidity\n")
-        assert dht._file_exists() is True
+        assert th._file_exists() is True
 
     def test_file_exists_true_buffer(self, time_provider, buffer_manager, mock_event_logger, tmp_path):
         """_file_exists returns True when data exists only in memory buffer."""
-        from lib.dht_logger import DHTLogger
+        from lib.temp_humidity_logger import TempHumidityLogger
 
+        sensor = _make_sensor()
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
-        relpath = dht._strip_sd_prefix(dht.filename)
-        # Remove primary file
+            th = TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger)
+        relpath = th._strip_sd_prefix(th.filename)
         primary = tmp_path / "sd" / relpath
         if primary.exists():
             primary.unlink()
-        # Put data in memory buffer
         buffer_manager._buffers[relpath] = ["Timestamp,Temperature,Humidity\n"]
-        assert dht._file_exists() is True
+        assert th._file_exists() is True
 
     def test_file_exists_false(self, time_provider, buffer_manager, mock_event_logger):
         """_file_exists returns False when data absent from all locations."""
-        from lib.dht_logger import DHTLogger
+        from lib.temp_humidity_logger import TempHumidityLogger
 
+        sensor = _make_sensor()
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
-        dht.filename = "/sd/nonexistent_file.csv"
-        assert dht._file_exists() is False
+            th = TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger)
+        th.filename = "/sd/nonexistent_file.csv"
+        assert th._file_exists() is False
 
     def test_file_exists_true_after_create_even_if_has_data_for_fails(
         self, time_provider, buffer_manager, mock_event_logger
     ):
-        """_file_exists returns True from in-memory cache even when has_data_for fails.
+        """_file_exists returns True from in-memory cache even when has_data_for fails."""
+        from lib.temp_humidity_logger import TempHumidityLogger
 
-        Reproduces the MicroPython FAT VFS bug where has_data_for() returns
-        False for a file that was just written, causing repeated CSV header
-        creation on every log cycle.
-        """
-        from lib.dht_logger import DHTLogger
-
+        sensor = _make_sensor()
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
+            th = TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger)
 
-        # Simulate MicroPython FAT failure: has_data_for returns False
         with patch.object(buffer_manager, "has_data_for", return_value=False):
-            # _file_exists should still return True via _created_files cache
-            assert dht._file_exists() is True
+            assert th._file_exists() is True
 
     def test_created_files_not_shared_across_dates(self, time_provider, buffer_manager, mock_event_logger):
         """After date rollover, new filename is not in _created_files cache."""
-        from lib.dht_logger import DHTLogger
+        from lib.temp_humidity_logger import TempHumidityLogger
 
+        sensor = _make_sensor()
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
+            th = TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger)
 
-        # Change to a new date filename not yet created
-        dht.filename = "/sd/dht_log_2026-01-30.csv"
+        th.filename = "/sd/th_log_2026-01-30.csv"
         with patch.object(buffer_manager, "has_data_for", return_value=False):
-            assert dht._file_exists() is False
+            assert th._file_exists() is False
 
     def test_strip_sd_prefix(self):
         """_strip_sd_prefix removes /sd/ prefix."""
-        from lib.dht_logger import DHTLogger
+        from lib.temp_humidity_logger import TempHumidityLogger
 
-        assert DHTLogger._strip_sd_prefix("/sd/dht_log.csv") == "dht_log.csv"
-        assert DHTLogger._strip_sd_prefix("dht_log.csv") == "dht_log.csv"
+        assert TempHumidityLogger._strip_sd_prefix("/sd/th_log.csv") == "th_log.csv"
+        assert TempHumidityLogger._strip_sd_prefix("th_log.csv") == "th_log.csv"
 
 
 @pytest.mark.asyncio
-class TestDHTLoggerLogLoop:
+class TestTempHumidityLoggerLogLoop:
     """Tests for the async log_loop."""
 
     async def test_log_loop_writes_csv_row(self, time_provider, buffer_manager, mock_event_logger):
         """log_loop writes CSV rows in timestamp,temp,hum format."""
-        from lib.dht_logger import DHTLogger
+        from lib.temp_humidity_logger import TempHumidityLogger
 
-        sensor = Mock()
-        sensor.measure = Mock()
-        sensor.temperature = Mock(return_value=22.5)
-        sensor.humidity = Mock(return_value=65.0)
-
+        sensor = _make_sensor(temp=22.5, hum=65.0)
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            with patch("dht.DHT22", return_value=sensor):
-                dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger, interval=1)
+            th = TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger, interval=1)
 
         loop_count = 0
 
@@ -348,14 +332,14 @@ class TestDHTLoggerLogLoop:
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
             with patch("asyncio.sleep", side_effect=limited_sleep):
                 with pytest.raises(asyncio.CancelledError):
-                    await dht.log_loop()
+                    await th.log_loop()
 
-        assert dht.last_temperature == 22.5
-        assert dht.last_humidity == 65.0
+        assert th.last_temperature == 22.5
+        assert th.last_humidity == 65.0
 
     async def test_log_loop_sensor_failure_increments_count(self, time_provider, buffer_manager, mock_event_logger):
         """When sensor fails in log_loop, read_failures counter increments."""
-        from lib.dht_logger import DHTLogger
+        from lib.temp_humidity_logger import TempHumidityLogger
 
         sensor = Mock()
         sensor.measure = Mock(side_effect=OSError("sensor error"))
@@ -363,8 +347,14 @@ class TestDHTLoggerLogLoop:
         sensor.humidity = Mock(return_value=65.0)
 
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            with patch("dht.DHT22", return_value=sensor):
-                dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger, interval=1, max_retries=1)
+            th = TempHumidityLogger(
+                sensor,
+                time_provider,
+                buffer_manager,
+                mock_event_logger,
+                interval=1,
+                max_retries=1,
+            )
 
         loop_count = 0
 
@@ -379,31 +369,22 @@ class TestDHTLoggerLogLoop:
             with patch("time.sleep"):
                 with patch("asyncio.sleep", side_effect=limited_sleep):
                     with pytest.raises(asyncio.CancelledError):
-                        await dht.log_loop()
+                        await th.log_loop()
 
-        assert dht.read_failures >= 1
+        assert th.read_failures >= 1
 
     async def test_log_loop_write_failure_increments_count(self, time_provider, buffer_manager, mock_event_logger):
         """When buffer_manager.write raises in log_loop, write_failures increments."""
-        from lib.dht_logger import DHTLogger
+        from lib.temp_humidity_logger import TempHumidityLogger
 
-        sensor = Mock()
-        sensor.measure = Mock()
-        sensor.temperature = Mock(return_value=22.5)
-        sensor.humidity = Mock(return_value=65.0)
-
+        sensor = _make_sensor()
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            with patch("dht.DHT22", return_value=sensor):
-                dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger, interval=1)
+            th = TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger, interval=1)
 
-        # Make write raise after the CSV header is already created
         original_write = buffer_manager.write
-        call_count = 0
 
         def failing_write(relpath, data):
-            nonlocal call_count
-            call_count += 1
-            if "Timestamp" not in data:  # Don't fail on header writes
+            if "Timestamp" not in data:
                 raise OSError("disk full")
             return original_write(relpath, data)
 
@@ -421,19 +402,19 @@ class TestDHTLoggerLogLoop:
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
             with patch("asyncio.sleep", side_effect=limited_sleep):
                 with pytest.raises(asyncio.CancelledError):
-                    await dht.log_loop()
+                    await th.log_loop()
 
-        assert dht.write_failures >= 1
+        assert th.write_failures >= 1
 
     async def test_log_loop_unexpected_error_continues(self, time_provider, buffer_manager, mock_event_logger):
         """Generic exception in log_loop is caught and loop continues."""
-        from lib.dht_logger import DHTLogger
+        from lib.temp_humidity_logger import TempHumidityLogger
 
+        sensor = _make_sensor()
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger, interval=1)
+            th = TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger, interval=1)
 
-        # Make _check_date_changed raise a generic error
-        dht._check_date_changed = Mock(side_effect=RuntimeError("unexpected"))
+        th._check_date_changed = Mock(side_effect=RuntimeError("unexpected"))
 
         call_count = 0
 
@@ -446,34 +427,29 @@ class TestDHTLoggerLogLoop:
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
             with patch("asyncio.sleep", side_effect=counting_sleep):
                 with pytest.raises(asyncio.CancelledError):
-                    await dht.log_loop()
+                    await th.log_loop()
 
-        # The unexpected error was logged
         mock_event_logger.error.assert_called()
 
     async def test_log_loop_cancelled_error(self, time_provider, buffer_manager, mock_event_logger):
         """CancelledError is re-raised from log_loop."""
-        from lib.dht_logger import DHTLogger
+        from lib.temp_humidity_logger import TempHumidityLogger
 
+        sensor = _make_sensor()
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
+            th = TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger)
 
         with patch("asyncio.sleep", side_effect=asyncio.CancelledError):
             with pytest.raises(asyncio.CancelledError):
-                await dht.log_loop()
+                await th.log_loop()
 
     async def test_log_loop_data_written_to_sd_file(self, time_provider, buffer_manager, mock_event_logger, tmp_path):
         """log_loop writes CSV rows to the actual SD file (not just cache)."""
-        from lib.dht_logger import DHTLogger
+        from lib.temp_humidity_logger import TempHumidityLogger
 
-        sensor = Mock()
-        sensor.measure = Mock()
-        sensor.temperature = Mock(return_value=22.5)
-        sensor.humidity = Mock(return_value=65.0)
-
+        sensor = _make_sensor(temp=22.5, hum=65.0)
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            with patch("dht.DHT22", return_value=sensor):
-                dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger, interval=1)
+            th = TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger, interval=1)
 
         loop_count = 0
 
@@ -487,12 +463,11 @@ class TestDHTLoggerLogLoop:
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
             with patch("asyncio.sleep", side_effect=limited_sleep):
                 with pytest.raises(asyncio.CancelledError):
-                    await dht.log_loop()
+                    await th.log_loop()
 
-        # Verify that the CSV file exists on the SD mount and contains data rows
-        relpath = dht._strip_sd_prefix(dht.filename)
+        relpath = th._strip_sd_prefix(th.filename)
         sd_file = tmp_path / "sd" / relpath
-        assert sd_file.exists(), f"DHT log file was not created on SD: {sd_file}"
+        assert sd_file.exists(), f"Log file was not created on SD: {sd_file}"
         content = sd_file.read_text()
         lines = content.strip().split("\n")
         assert lines[0] == "Timestamp,Temperature,Humidity", "Missing CSV header"
@@ -501,23 +476,17 @@ class TestDHTLoggerLogLoop:
 
     async def test_log_loop_fallback_write_logs_warning(self, time_provider, buffer_manager, mock_event_logger):
         """When write returns False (fallback), log_loop logs a warning."""
-        from lib.dht_logger import DHTLogger
+        from lib.temp_humidity_logger import TempHumidityLogger
 
-        sensor = Mock()
-        sensor.measure = Mock()
-        sensor.temperature = Mock(return_value=22.5)
-        sensor.humidity = Mock(return_value=65.0)
-
+        sensor = _make_sensor()
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            with patch("dht.DHT22", return_value=sensor):
-                dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger, interval=1)
+            th = TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger, interval=1)
 
-        # Make buffer_manager.write return False (simulating fallback)
         original_write = buffer_manager.write
 
         def fallback_write(relpath, data):
             if "Timestamp" not in data:
-                return False  # Simulate fallback for data rows
+                return False
             return original_write(relpath, data)
 
         buffer_manager.write = fallback_write
@@ -534,17 +503,16 @@ class TestDHTLoggerLogLoop:
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
             with patch("asyncio.sleep", side_effect=limited_sleep):
                 with pytest.raises(asyncio.CancelledError):
-                    await dht.log_loop()
+                    await th.log_loop()
 
-        # Should have warned about fallback write
         warn_calls = [str(c) for c in mock_event_logger.warning.call_args_list]
         assert any("fallback" in c.lower() for c in warn_calls), f"No fallback warning logged: {warn_calls}"
 
 
-class TestDHTStatusUpdate:
-    """Tests for _update_dht_status() status propagation."""
+class TestTHStatusUpdate:
+    """Tests for _update_th_status() status propagation."""
 
-    def _make_dht_with_status(
+    def _make_th_with_status(
         self,
         time_provider,
         buffer_manager,
@@ -553,26 +521,26 @@ class TestDHTStatusUpdate:
         warn_threshold=3,
         error_threshold=10,
     ):
-        """Helper: create DHTLogger with a StatusManager wired in."""
-        from lib.dht_logger import DHTLogger
+        from lib.temp_humidity_logger import TempHumidityLogger
 
+        sensor = _make_sensor()
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            dht = DHTLogger(
-                15,
+            th = TempHumidityLogger(
+                sensor,
                 time_provider,
                 buffer_manager,
                 mock_event_logger,
                 status_manager=mock_status_manager,
-                dht_warn_threshold=warn_threshold,
-                dht_error_threshold=error_threshold,
+                th_warn_threshold=warn_threshold,
+                th_error_threshold=error_threshold,
             )
-        return dht
+        return th
 
     def test_warning_threshold_sets_warning(
         self, time_provider, buffer_manager, mock_event_logger, mock_status_manager
     ):
-        """At warn_threshold consecutive failures, sets dht_intermittent warning."""
-        dht = self._make_dht_with_status(
+        """At warn_threshold consecutive failures, sets th_intermittent warning."""
+        th = self._make_th_with_status(
             time_provider,
             buffer_manager,
             mock_event_logger,
@@ -580,15 +548,15 @@ class TestDHTStatusUpdate:
             warn_threshold=3,
             error_threshold=10,
         )
-        dht._consecutive_failures = 3
-        dht._update_dht_status()
+        th._consecutive_failures = 3
+        th._update_th_status()
 
-        mock_status_manager.set_warning.assert_called_with("dht_intermittent", True)
-        mock_status_manager.set_error.assert_called_with("dht_dead", False)
+        mock_status_manager.set_warning.assert_called_with("th_intermittent", True)
+        mock_status_manager.set_error.assert_called_with("th_dead", False)
 
     def test_error_threshold_sets_error(self, time_provider, buffer_manager, mock_event_logger, mock_status_manager):
-        """At error_threshold consecutive failures, sets dht_dead error."""
-        dht = self._make_dht_with_status(
+        """At error_threshold consecutive failures, sets th_dead error."""
+        th = self._make_th_with_status(
             time_provider,
             buffer_manager,
             mock_event_logger,
@@ -596,15 +564,15 @@ class TestDHTStatusUpdate:
             warn_threshold=3,
             error_threshold=10,
         )
-        dht._consecutive_failures = 10
-        dht._update_dht_status()
+        th._consecutive_failures = 10
+        th._update_th_status()
 
-        mock_status_manager.set_error.assert_called_with("dht_dead", True)
-        mock_status_manager.set_warning.assert_called_with("dht_intermittent", False)
+        mock_status_manager.set_error.assert_called_with("th_dead", True)
+        mock_status_manager.set_warning.assert_called_with("th_intermittent", False)
 
     def test_recovery_clears_both(self, time_provider, buffer_manager, mock_event_logger, mock_status_manager):
         """Below warn_threshold, both warning and error are cleared."""
-        dht = self._make_dht_with_status(
+        th = self._make_th_with_status(
             time_provider,
             buffer_manager,
             mock_event_logger,
@@ -612,70 +580,62 @@ class TestDHTStatusUpdate:
             warn_threshold=3,
             error_threshold=10,
         )
-        dht._consecutive_failures = 0
-        dht._update_dht_status()
+        th._consecutive_failures = 0
+        th._update_th_status()
 
-        mock_status_manager.clear_warning.assert_called_with("dht_intermittent")
-        mock_status_manager.clear_error.assert_called_with("dht_dead")
+        mock_status_manager.clear_warning.assert_called_with("th_intermittent")
+        mock_status_manager.clear_error.assert_called_with("th_dead")
 
     def test_no_status_manager_no_crash(self, time_provider, buffer_manager, mock_event_logger):
-        """When status_manager is None, _update_dht_status() returns silently."""
-        from lib.dht_logger import DHTLogger
+        """When status_manager is None, _update_th_status() returns silently."""
+        from lib.temp_humidity_logger import TempHumidityLogger
 
+        sensor = _make_sensor()
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
-        assert dht.status_manager is None
-        dht._consecutive_failures = 99
-        dht._update_dht_status()  # Should not raise
+            th = TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger)
+        assert th.status_manager is None
+        th._consecutive_failures = 99
+        th._update_th_status()  # Should not raise
 
 
-class TestDHTLoggerDateCheckException:
+class TestTempHumidityLoggerDateCheckException:
     """Tests for _check_date_changed() error handling."""
 
     def test_date_check_exception_returns_false(self, time_provider, buffer_manager, mock_event_logger):
         """When now_date_tuple() raises, _check_date_changed() returns False."""
-        from lib.dht_logger import DHTLogger
+        from lib.temp_humidity_logger import TempHumidityLogger
 
+        sensor = _make_sensor()
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
+            th = TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger)
 
         time_provider.now_date_tuple = Mock(side_effect=OSError("RTC fail"))
-        result = dht._check_date_changed()
+        result = th._check_date_changed()
         assert result is False
         mock_event_logger.error.assert_called()
 
 
-class TestDHTReadSensorBoundaries:
+class TestTHReadSensorBoundaries:
     """Tests for read_sensor() boundary values."""
 
     def test_upper_bound_80c_100pct(self, time_provider, buffer_manager, mock_event_logger):
         """80°C and 100% humidity (upper bounds) are accepted."""
-        from lib.dht_logger import DHTLogger
+        from lib.temp_humidity_logger import TempHumidityLogger
 
-        sensor = Mock()
-        sensor.measure = Mock()
-        sensor.temperature = Mock(return_value=80.0)
-        sensor.humidity = Mock(return_value=100.0)
-
+        sensor = _make_sensor(temp=80.0, hum=100.0)
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            with patch("dht.DHT22", return_value=sensor):
-                dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger)
-        temp, hum = dht.read_sensor()
+            th = TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger)
+        temp, hum = th.read_sensor()
         assert temp == 80.0
         assert hum == 100.0
 
     def test_out_of_range_above_upper_bound(self, time_provider, buffer_manager, mock_event_logger):
         """81°C is out of range and rejected."""
-        from lib.dht_logger import DHTLogger
+        from lib.temp_humidity_logger import TempHumidityLogger
 
-        sensor = Mock()
-        sensor.measure = Mock()
-        sensor.temperature = Mock(return_value=81.0)
-        sensor.humidity = Mock(return_value=50.0)
-
+        sensor = _make_sensor(temp=81.0, hum=50.0)
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            with patch("dht.DHT22", return_value=sensor):
-                dht = DHTLogger(15, time_provider, buffer_manager, mock_event_logger, max_retries=1)
-        temp, hum = dht.read_sensor()
+            th = TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger, max_retries=1)
+        temp, hum = th.read_sensor()
         assert temp is None
         assert hum is None

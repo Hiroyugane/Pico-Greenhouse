@@ -24,7 +24,8 @@ DEVICE_CONFIG = {
     #   GP10-GP13: SPI1 (SD card via SD_CON). MOSI uses R10, MISO uses R8
     #              as series resistors between Pico and SD_CON.
     #   GP14:      Passive buzzer (BUZ_CON, with R3 pulldown to GND)
-    #   GP15:      DHT22 data (T/H_CON pin 4)
+    #   GP15:      Free (formerly DHT22 data on T/H_CON pin 4; SHT31 now
+    #              shares the I2C0 bus, GP15 is available for future use)
     #   GP16:      UART0 TX → CO2 sensor (via R9 to CO2_CON pin 4)
     #   GP17:      UART0 RX ← CO2 sensor (via R11 from CO2_CON pin 3)
     #   GP18:      Relay 1 — fan 1     (REL_CON pin 2)
@@ -58,8 +59,6 @@ DEVICE_CONFIG = {
         "button_menu": 9,  # GP9 — Menu button (short=cycle menu, long≥3s=action)
         # Buzzer (BUZ_CON, pulled to GND via R3)
         "buzzer": 14,  # GP14 — Passive buzzer (PWM output)
-        # DHT22 sensor
-        "dht22": 15,  # GP15 — DHT22 data pin
         # CO2 sensor (UART0 with series resistors R9/R11)
         "co2_uart_id": 0,  # UART0
         "co2_uart_tx": 16,  # GP16 — UART0 TX → CO2_CON pin 4 (via R9)
@@ -90,12 +89,17 @@ DEVICE_CONFIG = {
     },
     # File Paths
     "files": {
-        "dht_log_base": "dht_log",  # Will become dht_log_YYYY-MM-DD.csv
+        "th_log_base": "th_log",  # Will become th_log_YYYY-MM-DD.csv
         "system_log": "/sd/system.log",
         "fallback_path": "/local/fallback.csv",  # Fallback when SD unavailable
     },
-    # DHT Logger Configuration
-    "dht_logger": {
+    # SHT31-D temperature/humidity sensor (shared I2C0 bus, alongside RTC,
+    # OLED and MCP4725 DAC). ADDR pin tied to GND = 0x44; tied to VCC = 0x45.
+    "sht31": {
+        "i2c_address": 0x44,
+    },
+    # Temperature/Humidity Logger Configuration
+    "temp_humidity_logger": {
         "interval_s": 30,  # Log interval in seconds
         "max_retries": 3,  # Sensor read retries
         "max_buffer_size": 200,  # Max in-memory readings
@@ -202,8 +206,8 @@ DEVICE_CONFIG = {
     "status_leds": {
         "activity_blink_ms": 50,  # Activity LED pulse duration (ms)
         "heartbeat_interval_ms": 2000,  # GP25 toggle period (ms)
-        "dht_warn_threshold": 3,  # Consecutive DHT failures → warning
-        "dht_error_threshold": 10,  # Consecutive DHT failures → error
+        "th_warn_threshold": 3,  # Consecutive T/H read failures → warning
+        "th_error_threshold": 10,  # Consecutive T/H read failures → error
         "rtc_min_year": 2025,  # Year below this → RTC invalid warning
         "rtc_max_year": 2035,  # Year above this → RTC invalid warning
         "post_enabled": True,  # Run LED power-on self-test at startup
@@ -319,7 +323,6 @@ def validate_config():
     """
     required_keys = {
         "pins": [
-            "dht22",
             "activity_led",
             "reminder_led",
             "sd_led",
@@ -348,8 +351,9 @@ def validate_config():
             "adc_input",
         ],
         "spi": ["id", "baudrate", "sck", "mosi", "miso", "cs", "mount_point"],
-        "files": ["dht_log_base", "system_log", "fallback_path"],
-        "dht_logger": ["interval_s", "max_retries", "max_buffer_size", "retry_delay_s"],
+        "files": ["th_log_base", "system_log", "fallback_path"],
+        "sht31": ["i2c_address"],
+        "temp_humidity_logger": ["interval_s", "max_retries", "max_buffer_size", "retry_delay_s"],
         "fan_1": [
             "interval_s",
             "on_time_s",
@@ -435,8 +439,8 @@ def validate_config():
         "status_leds": [
             "activity_blink_ms",
             "heartbeat_interval_ms",
-            "dht_warn_threshold",
-            "dht_error_threshold",
+            "th_warn_threshold",
+            "th_error_threshold",
             "rtc_min_year",
             "rtc_max_year",
             "mem_warning_pct",
@@ -483,8 +487,12 @@ def validate_config():
                 raise ValueError(f"Missing config key: {section}.{key}")
 
     # Validate value ranges
-    if DEVICE_CONFIG["dht_logger"]["interval_s"] <= 0:
-        raise ValueError("dht_logger.interval_s must be > 0")
+    if DEVICE_CONFIG["temp_humidity_logger"]["interval_s"] <= 0:
+        raise ValueError("temp_humidity_logger.interval_s must be > 0")
+
+    sht31_addr = DEVICE_CONFIG["sht31"]["i2c_address"]
+    if not isinstance(sht31_addr, int) or sht31_addr not in (0x44, 0x45):
+        raise ValueError("sht31.i2c_address must be 0x44 or 0x45")
 
     if DEVICE_CONFIG["fan_1"]["on_time_s"] <= 0 or DEVICE_CONFIG["fan_1"]["interval_s"] <= 0:
         raise ValueError("fan_1 timing values must be > 0")
@@ -536,8 +544,8 @@ def validate_config():
     if DEVICE_CONFIG["event_logger"]["debug_flush_threshold"] < 1:
         raise ValueError("event_logger.debug_flush_threshold must be >= 1")
 
-    if DEVICE_CONFIG["dht_logger"]["retry_delay_s"] <= 0:
-        raise ValueError("dht_logger.retry_delay_s must be > 0")
+    if DEVICE_CONFIG["temp_humidity_logger"]["retry_delay_s"] <= 0:
+        raise ValueError("temp_humidity_logger.retry_delay_s must be > 0")
 
     for fan_key in ("fan_1", "fan_2"):
         if DEVICE_CONFIG[fan_key]["poll_interval_s"] <= 0:

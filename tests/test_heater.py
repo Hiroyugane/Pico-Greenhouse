@@ -10,14 +10,14 @@ from tests.conftest import FAKE_LOCALTIME
 
 
 @pytest.fixture
-def heater_controller(time_provider, mock_dht_logger, mock_event_logger):
+def heater_controller(time_provider, mock_th_logger, mock_event_logger):
     """HeaterController with mocked deps. Defaults: 06:00 day / 20:00 night."""
     from lib.heater import HeaterController
 
     return HeaterController(
         pin=3,
         time_provider=time_provider,
-        dht_logger=mock_dht_logger,
+        th_logger=mock_th_logger,
         logger=mock_event_logger,
         day_min_temp=22.0,
         night_min_temp=16.0,
@@ -47,13 +47,13 @@ class TestHeaterControllerInit:
         last_call = heater_controller.pin.value.call_args_list[-1]
         assert last_call.args == (0,)
 
-    def test_default_name_from_pin(self, time_provider, mock_dht_logger, mock_event_logger):
+    def test_default_name_from_pin(self, time_provider, mock_th_logger, mock_event_logger):
         from lib.heater import HeaterController
 
         h = HeaterController(
             pin=3,
             time_provider=time_provider,
-            dht_logger=mock_dht_logger,
+            th_logger=mock_th_logger,
             logger=mock_event_logger,
         )
         assert h.name == "Heater_3"
@@ -110,46 +110,46 @@ class TestHeaterThermostat:
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
             asyncio.run(runner())
 
-    def test_fires_when_below_setpoint(self, heater_controller, mock_dht_logger):
+    def test_fires_when_below_setpoint(self, heater_controller, mock_th_logger):
         """Day setpoint = 22.0; temp 20.0 → heater turns ON."""
         heater_controller.time_provider.get_seconds_since_midnight = Mock(return_value=12 * 3600)
-        mock_dht_logger.last_temperature = 20.0
+        mock_th_logger.last_temperature = 20.0
         self._run_once(heater_controller)
         assert heater_controller.is_on() is True
 
-    def test_stays_off_above_setpoint(self, heater_controller, mock_dht_logger):
+    def test_stays_off_above_setpoint(self, heater_controller, mock_th_logger):
         """Day setpoint = 22.0; temp 23.0 → heater stays OFF."""
         heater_controller.time_provider.get_seconds_since_midnight = Mock(return_value=12 * 3600)
-        mock_dht_logger.last_temperature = 23.0
+        mock_th_logger.last_temperature = 23.0
         self._run_once(heater_controller)
         assert heater_controller.is_on() is False
 
-    def test_hysteresis_holds_on_in_band(self, heater_controller, mock_dht_logger):
+    def test_hysteresis_holds_on_in_band(self, heater_controller, mock_th_logger):
         """Heater stays ON when in [setpoint-hyst, setpoint) band."""
         heater_controller.time_provider.get_seconds_since_midnight = Mock(return_value=12 * 3600)
         # Force fan ON, then run at 21.8 (in band [21.5, 22.0)) → stays on
         heater_controller.turn_on()
-        mock_dht_logger.last_temperature = 21.8
+        mock_th_logger.last_temperature = 21.8
         self._run_once(heater_controller)
         assert heater_controller.is_on() is True
 
-    def test_hysteresis_releases_above_setpoint(self, heater_controller, mock_dht_logger):
+    def test_hysteresis_releases_above_setpoint(self, heater_controller, mock_th_logger):
         """Heater turns OFF when temp >= setpoint."""
         heater_controller.time_provider.get_seconds_since_midnight = Mock(return_value=12 * 3600)
         heater_controller.turn_on()
-        mock_dht_logger.last_temperature = 22.1
+        mock_th_logger.last_temperature = 22.1
         self._run_once(heater_controller)
         assert heater_controller.is_on() is False
 
-    def test_night_setpoint_applied(self, heater_controller, mock_dht_logger):
+    def test_night_setpoint_applied(self, heater_controller, mock_th_logger):
         """At night, the night_min_temp (16°C) governs."""
         heater_controller.time_provider.get_seconds_since_midnight = Mock(return_value=22 * 3600)
         # 17°C is above night setpoint of 16 → stay off
-        mock_dht_logger.last_temperature = 17.0
+        mock_th_logger.last_temperature = 17.0
         self._run_once(heater_controller)
         assert heater_controller.is_on() is False
         # 15°C is below → turn on
-        mock_dht_logger.last_temperature = 15.0
+        mock_th_logger.last_temperature = 15.0
         self._run_once(heater_controller)
         assert heater_controller.is_on() is True
 
@@ -166,52 +166,52 @@ class TestHeaterStaleReads:
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
             asyncio.run(runner())
 
-    def test_no_temp_at_boot_stays_off(self, heater_controller, mock_dht_logger):
+    def test_no_temp_at_boot_stays_off(self, heater_controller, mock_th_logger):
         """last_temperature=None at boot → no spurious activation."""
-        mock_dht_logger.last_temperature = None
+        mock_th_logger.last_temperature = None
         heater_controller.time_provider.get_seconds_since_midnight = Mock(return_value=12 * 3600)
         self._run_once(heater_controller)
         assert heater_controller.is_on() is False
 
-    def test_stale_reads_within_tolerance_holds_state(self, heater_controller, mock_dht_logger):
+    def test_stale_reads_within_tolerance_holds_state(self, heater_controller, mock_th_logger):
         """While stale_count <= max_stale_reads, heater holds prior state."""
         heater_controller.time_provider.get_seconds_since_midnight = Mock(return_value=12 * 3600)
         # Prime: fire heater normally
-        mock_dht_logger.last_temperature = 20.0
+        mock_th_logger.last_temperature = 20.0
         self._run_once(heater_controller)
         assert heater_controller.is_on() is True
 
         # Now temp goes None twice — under the limit of 3
-        mock_dht_logger.last_temperature = None
+        mock_th_logger.last_temperature = None
         self._run_once(heater_controller)
         self._run_once(heater_controller)
         assert heater_controller.is_on() is True  # held
 
-    def test_stale_reads_exceed_limit_fails_safe_off(self, heater_controller, mock_dht_logger):
+    def test_stale_reads_exceed_limit_fails_safe_off(self, heater_controller, mock_th_logger):
         """When stale_count > max_stale_reads, heater fails safe OFF."""
         heater_controller.time_provider.get_seconds_since_midnight = Mock(return_value=12 * 3600)
         # Prime: fire heater
-        mock_dht_logger.last_temperature = 20.0
+        mock_th_logger.last_temperature = 20.0
         self._run_once(heater_controller)
         assert heater_controller.is_on() is True
 
         # 4 stale reads exceeds max_stale_reads=3
-        mock_dht_logger.last_temperature = None
+        mock_th_logger.last_temperature = None
         for _ in range(4):
             self._run_once(heater_controller)
         assert heater_controller.is_on() is False
 
-    def test_fresh_read_resets_stale_counter(self, heater_controller, mock_dht_logger):
+    def test_fresh_read_resets_stale_counter(self, heater_controller, mock_th_logger):
         """A successful read after stale reads resets the counter."""
         heater_controller.time_provider.get_seconds_since_midnight = Mock(return_value=12 * 3600)
-        mock_dht_logger.last_temperature = 20.0
+        mock_th_logger.last_temperature = 20.0
         self._run_once(heater_controller)
         # 2 stale
-        mock_dht_logger.last_temperature = None
+        mock_th_logger.last_temperature = None
         self._run_once(heater_controller)
         self._run_once(heater_controller)
         # Now a good read
-        mock_dht_logger.last_temperature = 20.0
+        mock_th_logger.last_temperature = 20.0
         self._run_once(heater_controller)
         assert heater_controller._stale_count == 0  # type: ignore[attr-defined]
 
@@ -229,7 +229,7 @@ class TestHeaterLifecycle:
             asyncio.run(runner())
         assert heater_controller.is_on() is False
 
-    def test_unexpected_error_keeps_loop_alive(self, heater_controller, mock_dht_logger):
+    def test_unexpected_error_keeps_loop_alive(self, heater_controller, mock_th_logger):
         """Generic exceptions get logged but the loop continues."""
         call_count = 0
 
@@ -251,8 +251,8 @@ class TestHeaterLifecycle:
 
 
 class TestHeaterGetState:
-    def test_get_state_includes_thermostat_fields(self, heater_controller, mock_dht_logger):
-        mock_dht_logger.last_temperature = 19.5
+    def test_get_state_includes_thermostat_fields(self, heater_controller, mock_th_logger):
+        mock_th_logger.last_temperature = 19.5
         heater_controller.time_provider.get_seconds_since_midnight = Mock(return_value=12 * 3600)
         state = heater_controller.get_state()
         assert state["name"] == "TestHeater"

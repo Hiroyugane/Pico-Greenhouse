@@ -78,7 +78,7 @@ class SoilLogger:
 
     Polls a single ADC channel every ``interval_s`` seconds, converts
     the reading to a percentage using ``adc_dry_raw``/``adc_wet_raw``,
-    and persists ``Timestamp,Raw,Percent`` rows the same way DHTLogger /
+    and persists ``Timestamp,Raw,Percent`` rows the same way TempHumidityLogger /
     CO2Logger do. When the percentage falls below ``warn_pct_below`` and
     a ``status_manager`` is wired, the soil-moisture warning is raised
     on the warning LED; it clears once the value recovers.
@@ -122,9 +122,7 @@ class SoilLogger:
         self.write_failures = 0
         self._warn_active = False
 
-        self._filename_base = (
-            filename_base if filename_base.startswith("/sd/") else f"/sd/{filename_base}"
-        )
+        self._filename_base = filename_base if filename_base.startswith("/sd/") else f"/sd/{filename_base}"
         self.current_date = None
         self._update_filename_for_date()
         self._ensure_header()

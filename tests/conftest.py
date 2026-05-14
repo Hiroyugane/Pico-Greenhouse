@@ -1,8 +1,8 @@
 # pytest Configuration and Fixtures
 # conftest.py — Unified MagicMock approach for MicroPython hardware
 #
-# Patches sys.modules for machine, dht, micropython, uasyncio ONCE at session start.
-# All hardware (Pin, SPI, I2C, DHT22, RTC) is MagicMock-based with realistic attributes.
+# Patches sys.modules for machine, micropython, uasyncio ONCE at session start.
+# All hardware (Pin, SPI, I2C, SHT31, RTC) is MagicMock-based with realistic attributes.
 # Provides reusable fixtures for all lib/ modules under test.
 
 import asyncio
@@ -100,9 +100,6 @@ class _MockWDT:
 
 _machine_mock.WDT = _MockWDT
 
-# --- dht module ---
-_dht_mock = MagicMock()
-
 # --- micropython module ---
 _micropython_mock = MagicMock()
 _micropython_mock.const = lambda x: x
@@ -115,7 +112,6 @@ import host_shims.framebuf as _framebuf_shim  # noqa: E402
 
 # --- uasyncio → standard asyncio ---
 sys.modules["machine"] = _machine_mock
-sys.modules["dht"] = _dht_mock
 sys.modules["micropython"] = _micropython_mock
 sys.modules["framebuf"] = _framebuf_shim
 
@@ -258,13 +254,13 @@ def write_queue_manager(buffer_manager, mock_event_logger):
 
 
 # ---------------------------------------------------------------------------
-# Fixtures: DHT sensor
+# Fixtures: SHT31 temperature/humidity sensor
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture
-def mock_dht_sensor():
-    """Configurable DHT22 mock with measure/temperature/humidity."""
+def mock_th_sensor():
+    """Configurable SHT31 mock with measure/temperature/humidity."""
     sensor = Mock()
     sensor.measure = Mock()
     sensor.temperature = Mock(return_value=22.5)
@@ -273,8 +269,8 @@ def mock_dht_sensor():
 
 
 @pytest.fixture
-def mock_dht_logger():
-    """Mock DHTLogger for relay controller tests."""
+def mock_th_logger():
+    """Mock TempHumidityLogger for relay/heater/OLED tests."""
     logger = Mock()
     logger.last_temperature = 22.5
     logger.last_humidity = 65.0
@@ -282,19 +278,18 @@ def mock_dht_logger():
 
 
 @pytest.fixture
-def dht_logger(time_provider, buffer_manager, mock_event_logger, mock_dht_sensor):
-    """Real DHTLogger with mocked sensor for integration-style tests."""
+def th_logger(time_provider, buffer_manager, mock_event_logger, mock_th_sensor):
+    """Real TempHumidityLogger with mocked sensor for integration-style tests."""
     with patch("time.localtime", return_value=FAKE_LOCALTIME):
-        with patch("dht.DHT22", return_value=mock_dht_sensor):
-            from lib.dht_logger import DHTLogger
+        from lib.temp_humidity_logger import TempHumidityLogger
 
-            return DHTLogger(
-                15,
-                time_provider,
-                buffer_manager,
-                mock_event_logger,
-                interval=60,
-            )
+        return TempHumidityLogger(
+            mock_th_sensor,
+            time_provider,
+            buffer_manager,
+            mock_event_logger,
+            interval=60,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -346,14 +341,14 @@ def relay_controller():
 
 
 @pytest.fixture
-def fan_controller(time_provider, mock_dht_logger, mock_event_logger):
+def fan_controller(time_provider, mock_th_logger, mock_event_logger):
     """FanController with all dependencies mocked."""
     from lib.relay import FanController
 
     return FanController(
         pin=16,
         time_provider=time_provider,
-        dht_logger=mock_dht_logger,
+        th_logger=mock_th_logger,
         logger=mock_event_logger,
         interval_s=600,
         on_time_s=20,
@@ -439,7 +434,7 @@ def mock_reminder(time_provider):
 def oled_display(
     mock_i2c,
     time_provider,
-    dht_logger,
+    th_logger,
     buffer_manager,
     mock_status_manager,
     mock_reminder,
@@ -453,7 +448,7 @@ def oled_display(
     return OLEDDisplay(
         i2c=mock_i2c,
         time_provider=time_provider,
-        dht_logger=dht_logger,
+        th_logger=th_logger,
         buffer_manager=buffer_manager,
         status_manager=mock_status_manager,
         reminder=mock_reminder,

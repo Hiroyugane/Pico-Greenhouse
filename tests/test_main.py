@@ -170,7 +170,7 @@ class TestMainStartup:
 
         mock_logger = Mock()
         monkeypatch.setattr(main_module, "EventLogger", lambda *a, **kw: mock_logger)
-        monkeypatch.setattr(main_module, "DHTLogger", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "TempHumidityLogger", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "FanController", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "GrowlightController", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
@@ -227,7 +227,7 @@ class TestMainStartup:
 
         mock_logger = Mock()
         monkeypatch.setattr(main_module, "EventLogger", lambda *a, **kw: mock_logger)
-        monkeypatch.setattr(main_module, "DHTLogger", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "TempHumidityLogger", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "FanController", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "GrowlightController", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
@@ -286,7 +286,7 @@ class TestMainHealthCheck:
 
         mock_logger = Mock()
         monkeypatch.setattr(main_module, "EventLogger", lambda *a, **kw: mock_logger)
-        monkeypatch.setattr(main_module, "DHTLogger", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "TempHumidityLogger", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "FanController", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "GrowlightController", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
@@ -339,7 +339,7 @@ class TestMainHealthCheck:
 
         mock_logger = Mock()
         monkeypatch.setattr(main_module, "EventLogger", lambda *a, **kw: mock_logger)
-        monkeypatch.setattr(main_module, "DHTLogger", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "TempHumidityLogger", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "FanController", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "GrowlightController", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
@@ -395,7 +395,7 @@ class TestMainHealthCheck:
 
         mock_logger = Mock()
         monkeypatch.setattr(main_module, "EventLogger", lambda *a, **kw: mock_logger)
-        monkeypatch.setattr(main_module, "DHTLogger", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "TempHumidityLogger", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "FanController", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "GrowlightController", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
@@ -450,7 +450,7 @@ class TestMainHealthCheck:
 
         mock_logger = Mock()
         monkeypatch.setattr(main_module, "EventLogger", lambda *a, **kw: mock_logger)
-        monkeypatch.setattr(main_module, "DHTLogger", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "TempHumidityLogger", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "FanController", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "GrowlightController", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
@@ -510,7 +510,7 @@ class TestMainHealthCheck:
 
         mock_logger = Mock()
         monkeypatch.setattr(main_module, "EventLogger", lambda *a, **kw: mock_logger)
-        monkeypatch.setattr(main_module, "DHTLogger", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "TempHumidityLogger", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "FanController", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "GrowlightController", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
@@ -564,7 +564,7 @@ class TestMainHealthCheck:
 
         mock_logger = Mock()
         monkeypatch.setattr(main_module, "EventLogger", lambda *a, **kw: mock_logger)
-        monkeypatch.setattr(main_module, "DHTLogger", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "TempHumidityLogger", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "FanController", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "GrowlightController", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
@@ -641,7 +641,7 @@ class TestMainHealthCheck:
 
         mock_logger = Mock()
         monkeypatch.setattr(main_module, "EventLogger", lambda *a, **kw: mock_logger)
-        monkeypatch.setattr(main_module, "DHTLogger", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "TempHumidityLogger", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "FanController", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "GrowlightController", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
@@ -675,8 +675,8 @@ class TestMainHealthCheck:
 class TestMainInitFailures:
     """Tests for main() init-failure resilience paths."""
 
-    async def test_dht_logger_init_failure_creates_fallback(self, monkeypatch):
-        """When DHTLogger init raises (with status_manager), falls back to minimal DHTLogger."""
+    async def test_th_logger_init_failure_creates_fallback(self, monkeypatch):
+        """When TempHumidityLogger init raises (with status_manager), falls back to minimal logger."""
         import main as main_module
 
         monkeypatch.setattr(main_module, "validate_config", lambda: True)
@@ -699,14 +699,14 @@ class TestMainInitFailures:
         # First call (with status_manager) raises; second call (without) succeeds
         call_count = 0
 
-        def dht_factory(*a, **kw):
+        def th_factory(*a, **kw):
             nonlocal call_count
             call_count += 1
             if "status_manager" in kw and kw["status_manager"] is not None:
                 raise RuntimeError("sensor init boom")
             return Mock()
 
-        monkeypatch.setattr(main_module, "DHTLogger", dht_factory)
+        monkeypatch.setattr(main_module, "TempHumidityLogger", th_factory)
         monkeypatch.setattr(main_module, "FanController", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "GrowlightController", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
@@ -727,10 +727,10 @@ class TestMainInitFailures:
             with pytest.raises(asyncio.CancelledError):
                 await main_module.main()
 
-        # DHTLogger should have been called twice (first raises, second succeeds)
+        # TempHumidityLogger should have been called twice (first raises, second succeeds)
         assert call_count == 2
         # Error should have been logged
-        mock_logger.error.assert_any_call("MAIN", "DHTLogger init failed: sensor init boom")
+        mock_logger.error.assert_any_call("MAIN", "TempHumidityLogger init failed: sensor init boom")
 
     async def test_buzzer_init_failure_sets_none(self, monkeypatch):
         """When BuzzerController init raises, buzzer is None and warning is logged."""
@@ -752,7 +752,7 @@ class TestMainInitFailures:
 
         mock_logger = Mock()
         monkeypatch.setattr(main_module, "EventLogger", lambda *a, **kw: mock_logger)
-        monkeypatch.setattr(main_module, "DHTLogger", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "TempHumidityLogger", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "FanController", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "GrowlightController", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
@@ -805,7 +805,7 @@ class TestMainInitFailures:
 
         mock_logger = Mock()
         monkeypatch.setattr(main_module, "EventLogger", lambda *a, **kw: mock_logger)
-        monkeypatch.setattr(main_module, "DHTLogger", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "TempHumidityLogger", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "FanController", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "GrowlightController", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
@@ -861,7 +861,7 @@ class TestMainInitFailures:
 
         mock_logger = Mock()
         monkeypatch.setattr(main_module, "EventLogger", lambda *a, **kw: mock_logger)
-        monkeypatch.setattr(main_module, "DHTLogger", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "TempHumidityLogger", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "FanController", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "GrowlightController", lambda *a, **kw: Mock())
         monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())

@@ -99,7 +99,7 @@ class FanController(RelayController):
     Attributes:
         pin: GPIO pin number
         time_provider: TimeProvider instance for RTC queries
-        dht_logger: DHTLogger instance for temperature reads
+        th_logger: TempHumidityLogger instance for temperature reads
         logger: EventLogger instance for logging
         interval_s: Time-of-day cycle interval (seconds)
         on_time_s: ON duration per cycle (seconds)
@@ -111,7 +111,7 @@ class FanController(RelayController):
         self,
         pin: int,
         time_provider,
-        dht_logger,
+        th_logger,
         logger,
         interval_s: int = 1800,
         on_time_s: int = 20,
@@ -126,7 +126,7 @@ class FanController(RelayController):
         Args:
             pin (int): GPIO pin for relay
             time_provider: TimeProvider instance
-            dht_logger: DHTLogger instance for temperature
+            th_logger: TempHumidityLogger instance for temperature
             logger: EventLogger instance
             interval_s (int): Cycle interval in seconds (default: 1800 = 30 min)
             on_time_s (int): ON duration per cycle (default: 20)
@@ -138,7 +138,7 @@ class FanController(RelayController):
         super().__init__(pin, invert=True, name=name or f"Fan_{pin}", logger=logger)
 
         self.time_provider = time_provider
-        self.dht_logger = dht_logger
+        self.th_logger = th_logger
         self.logger = logger
         self.interval_s = interval_s
         self.on_time_s = on_time_s
@@ -196,7 +196,7 @@ class FanController(RelayController):
                 schedule_should_be_on = position_in_cycle < self.on_time_s
 
                 # Get current temperature
-                current_temp = self.dht_logger.last_temperature
+                current_temp = self.th_logger.last_temperature
 
                 self.logger.debug(
                     "FanController",
@@ -342,7 +342,7 @@ class FanController(RelayController):
                 "thermostat_active": self.thermostat_active,
                 "thermostat_activations": self.thermostat_on_count,
                 "max_temp": self.max_temp,
-                "current_temp": self.dht_logger.last_temperature,
+                "current_temp": self.th_logger.last_temperature,
             }
         )
         return state

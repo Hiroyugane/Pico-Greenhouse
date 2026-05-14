@@ -3,7 +3,7 @@
 #
 # Wire: GP16 (UART0 TX, via R9) → CO2_CON.4, GP17 (UART0 RX, via R11) ← CO2_CON.3.
 # Protocol: 7-byte read-holding-register request, 7-byte reply with ppm in bytes [3:5].
-# Mirrors DHTLogger's shape (BufferManager-backed CSV with date rollover).
+# Mirrors TempHumidityLogger's shape (BufferManager-backed CSV with date rollover).
 # Exposes is_override_active() so a FanController can poll it as an external override.
 
 import time
@@ -43,7 +43,7 @@ class CO2Logger:
 
     Polls a SenseAir-style UART sensor every ``interval_s`` seconds. Each
     successful reading is cached in ``last_ppm`` and written via
-    ``BufferManager`` (SD → fallback → in-memory) the same way DHTLogger
+    ``BufferManager`` (SD → fallback → in-memory) the same way TempHumidityLogger
     persists temperature/humidity. The override flag latches on at
     ``override_ppm_on`` and clears at ``override_ppm_off``; consumers
     (e.g. FanController.external_override) call ``is_override_active()``.
@@ -92,9 +92,7 @@ class CO2Logger:
         self.read_failures = 0
         self.write_failures = 0
         self._started_ms = _ticks_ms()
-        self._filename_base = (
-            filename_base if filename_base.startswith("/sd/") else f"/sd/{filename_base}"
-        )
+        self._filename_base = filename_base if filename_base.startswith("/sd/") else f"/sd/{filename_base}"
         self.current_date = None
         self._update_filename_for_date()
         self._ensure_header()

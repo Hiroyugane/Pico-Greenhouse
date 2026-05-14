@@ -92,7 +92,7 @@ class WriteQueueManager:
         On queue overflow, writes directly to fallback to preserve data.
 
         Args:
-            relpath (str): Relative path for write (e.g., 'dht_log.csv')
+            relpath (str): Relative path for write (e.g., 'th_log.csv')
             data (str): Data to write
 
         Returns:

@@ -5,6 +5,49 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-14 · Phase 3 — CO2 logger + fan override
+
+**Branch:** `main`
+**Why hardware-only:** SenseAir-style UART framing, 9600 baud line
+levels through R9/R11 series resistors, real sensor response time vs.
+`max_retries`/`retry_delay_ms` budget, and the high-ppm → fan-2 force-on
+behavior all need eyes-on confirmation.
+**Pre-flight:** Flash latest `main.py`. Confirm CO2 sensor is wired via
+CO2_CON (GP16 TX → R9 → sensor RX, sensor TX → R11 → GP17 RX). Power
+the sensor from the same 5 V supply as the rest of the board so the
+common ground is stable.
+
+### CO2 logging
+
+- [ ] On a fresh boot, `/sd/co2_log_YYYY-MM-DD.csv` exists with a
+      `Timestamp,PPM` header within the first ~30 s.
+- [ ] Each poll cycle (default 30 s) appends one row with a plausible
+      indoor reading (400–2000 ppm).
+- [ ] During the `warmup_s` window (first 30 s), any missed reads
+      surface as `DEBUG` lines only — no `WARN`/`ERR`.
+- [ ] After the warmup window, intentionally disconnecting the sensor
+      data line produces a `WARN` per poll cycle but the system loop
+      stays alive (watchdog is still being fed).
+- [ ] Reconnecting the sensor resumes logging within one
+      `interval_s` cycle.
+
+### CO2 override → fan_2
+
+- [ ] Exhale steadily into the sensor inlet until ppm crosses
+      `override_ppm_on` (default 1000). Within one `fan_2.poll_interval_s`
+      cycle the fan relay closes (audible click) and the EventLogger
+      reports `EXTERNAL OVERRIDE ON` against `Fan_2`.
+- [ ] Stop exhaling and ventilate the room. As ppm drops below
+      `override_ppm_off` (default 800), the override releases and
+      `Fan_2` returns to schedule/thermostat control.
+- [ ] Confirm that during an override, the thermostat path still
+      wins: if you also warm the DHT22 to above `fan_2.max_temp`, the
+      thermostat ON message logs and the fan stays on regardless of
+      ppm direction.
+- [ ] Pull the SD card briefly — CO2 rows should route through the
+      fallback file and migrate back to `/sd/co2_log_*.csv` when the
+      card returns (BufferManager path).
+
 ## 2026-05-14 · Phase 0/1/2 — heater + grow-light dimming
 
 **Branch:** `main`

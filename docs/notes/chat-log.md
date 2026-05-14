@@ -5,6 +5,61 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-14 · Phase 3 — CO2 logger + fan override
+
+### decision · CO2Logger mirrors DHTLogger shape, not a new abstraction
+
+`CO2Logger` is structurally a `DHTLogger` clone: BufferManager-backed
+CSV with `Timestamp,PPM`, date-based rollover, optional WriteQueue
+plumbing, async `log_loop()` that yields between polls. Reusing the
+same shape keeps the read path obvious for the next agent and the
+SD-resilience guarantees come for free. The differences are scoped to
+the sensor (UART instead of DHT22 driver) and the override flag.
+
+### decision · External override is a callable attribute on FanController, not a setter method
+
+`FanController.external_override` is a plain attribute typed as
+"callable returning bool or None". The CO2 path assigns it via DI in
+`main.py:417` (`fans[fan_index].external_override = co2_logger_obj.is_override_active`).
+This keeps the FanController interface unchanged for legacy callers
+that don't wire an override (default `None` = no hook) and lets a
+future feature (e.g. an OLED manual-override page) replace the
+callable without subclassing.
+
+### decision · Override priority: thermostat > external > schedule
+
+In the cycle tick, thermostat fires first and latches; if it's
+active, the external override is skipped entirely. This protects
+against the corner case where CO2 reads stale-low (false negative
+release) while temperature is genuinely high — we never want CO2 to
+release the thermostat-fired fan. The external override only outranks
+the time-of-day schedule.
+
+### deviation · Removed the cargo-cult `uart.flush()` call
+
+The CO2 prototype in [`tests/co2log.py`](../../tests/co2log.py) called
+`uart.flush()` before every write. MicroPython's UART has no documented
+`flush()` semantics that affect RX (and on some ports the method does
+not exist at all), so the call was meaningless or actively harmful
+depending on the host shim. The driver omits it. The test fixture's
+fake-UART originally cleared RX on flush, which surfaced the issue.
+
+### decision · fan_2 is the CO2 override target
+
+`co2_logger.override_fan` defaults to `"fan_2"` because fan_2 has the
+higher `max_temp` and thus the larger ventilator role in the existing
+schedule. Operators can flip to `"fan_1"` in config.py without code
+changes. Validator rejects anything else so a typo doesn't silently
+mean "no override".
+
+### note · OLED CO2 page and warmup-tier escalation still deferred
+
+The plan section 4.1 calls for a dedicated OLED page (ppm + 1-hour
+trend arrow) and treating sensor warm-up vs steady-state failures
+distinctly in StatusManager. Phase 3 lands the override + logging
+core; OLED page and StatusManager wiring follow with the deferred
+OLED batch from phases 1-2.
+
 ## 2026-05-14 · PCB gap plan — phases 0, 2, 1 implemented
 
 ### decision · Ordered phase 2 (heater) before phase 1 (DAC dimming)

@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir \"l:\\\\projects\\\\Pi-Greenhouse\\\\myco-app\" /B)"
+    ]
+  },
+  "enabledPlugins": {
+    "ralph-loop@claude-plugins-official": true
+  },
+  "env": {
+    "ECC_GATEGUARD": "off"
+  }
+}

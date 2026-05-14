@@ -18,7 +18,8 @@ service_reminder.txt
 
 
 
-
+.claude/
+.claude/*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

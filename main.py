@@ -333,14 +333,18 @@ async def main():
     # Step 7b: Create grow light controller (relay master + MCP4725 dimming)
     light_config = DEVICE_CONFIG.get("growlight", {})
     grow_dac = None
-    try:
-        grow_dac = MCP4725(
-            i2c=hardware.get_i2c(),
-            address=light_config.get("dac_i2c_address", 0x60),
-        )
-        logger.info("MAIN", f"MCP4725 grow-light DAC at 0x{light_config.get('dac_i2c_address', 0x60):02X}")
-    except Exception as e:
-        logger.warning("MAIN", f"MCP4725 init failed (falling back to relay-only growlight): {e}")
+    growlight_mode = light_config.get("mode", "relay_only")
+    if growlight_mode == "dimmed":
+        try:
+            grow_dac = MCP4725(
+                i2c=hardware.get_i2c(),
+                address=light_config.get("dac_i2c_address", 0x60),
+            )
+            logger.info("MAIN", f"MCP4725 grow-light DAC at 0x{light_config.get('dac_i2c_address', 0x60):02X}")
+        except Exception as e:
+            logger.warning("MAIN", f"MCP4725 init failed (falling back to relay-only growlight): {e}")
+    else:
+        logger.info("MAIN", "growlight.mode=relay_only — MCP4725 init skipped")
     growlight = GrowlightController(
         pin=DEVICE_CONFIG["pins"]["relay_growlight"],
         time_provider=time_provider,

@@ -124,6 +124,9 @@ DEVICE_CONFIG = {
         "sunset_hour": 19,  # Light OFF at 19:00 (10 PM)
         "sunset_minute": 0,
         "poll_interval_s": 60,  # Schedule check interval (seconds)
+        # MCP4725 dimming DAC on shared I2C0. Tentative default 0x60
+        # (A0=GND); confirm with prototypes/i2c_scan.py — A0=VCC is 0x61.
+        "dac_i2c_address": 0x60,
     },
     # Service Reminder Configuration
     "Service_reminder": {
@@ -311,6 +314,7 @@ def validate_config():
             "sunset_hour",
             "sunset_minute",
             "poll_interval_s",
+            "dac_i2c_address",
         ],
         "Service_reminder": [
             "days_interval",
@@ -456,6 +460,10 @@ def validate_config():
 
     if DEVICE_CONFIG["growlight"]["poll_interval_s"] <= 0:
         raise ValueError("growlight.poll_interval_s must be > 0")
+
+    dac_addr = DEVICE_CONFIG["growlight"]["dac_i2c_address"]
+    if not isinstance(dac_addr, int) or not (0x08 <= dac_addr <= 0x77):
+        raise ValueError("growlight.dac_i2c_address must be a 7-bit I2C address (0x08-0x77)")
 
     if DEVICE_CONFIG["Service_reminder"]["blink_after_days"] < 0:
         raise ValueError("Service_reminder.blink_after_days must be >= 0")

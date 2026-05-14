@@ -217,6 +217,30 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["growlight"]["poll_interval_s"] = original
 
+    def test_growlight_dac_address_out_of_range_raises(self):
+        """growlight.dac_i2c_address outside 7-bit I2C range raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["growlight"]["dac_i2c_address"]
+        config.DEVICE_CONFIG["growlight"]["dac_i2c_address"] = 0x80
+        try:
+            with pytest.raises(ValueError, match="dac_i2c_address"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["growlight"]["dac_i2c_address"] = original
+
+    def test_growlight_dac_address_non_int_raises(self):
+        """growlight.dac_i2c_address non-int raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["growlight"]["dac_i2c_address"]
+        config.DEVICE_CONFIG["growlight"]["dac_i2c_address"] = "0x60"
+        try:
+            with pytest.raises(ValueError, match="dac_i2c_address"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["growlight"]["dac_i2c_address"] = original
+
     def test_negative_blink_after_days_raises(self):
         """Service_reminder.blink_after_days = -1 raises ValueError."""
         import config

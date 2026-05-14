@@ -5,6 +5,43 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-14 · PCB ↔ codebase gap analysis
+
+### note · Full netlist walk produced a per-peripheral implementation plan
+
+Extracted the complete netlist from
+`docs/SCH_Pico-Greenhouse-PCB_2026-05-14.json` (union-find over wire
+endpoints + pin endpoints + netflag anchors → 49 named nets, 23
+short unnamed nets). Cross-checked every Pico GPIO and shared bus
+against `config.py`, `main.py`, and `lib/`. Result lives in
+[`2026-05-14-pcb-codebase-gap-plan.md`](2026-05-14-pcb-codebase-gap-plan.md).
+
+### issue · Four firmware-actionable gaps identified
+
+1. **Dimmable grow light** — MCP4725 DAC + op-amp + GL_CON wired on
+   the PCB but no driver and no hook into `GrowlightController`. The
+   relay (GP20) is currently the only control; brightness is wasted.
+2. **Heater control** — GP3 → R6 → IRLZ44N → HE_CON path exists but no
+   `HeaterController`. Config has the pin key only.
+3. **CO2 sensor in main loop** — UART0 on GP16/17 wired through R9/R11
+   to CO2_CON, but only prototype code in `tests/co2log.py` /
+   `co2test.py`. No production driver, no main-loop wiring.
+4. **GP28 ADC** — ADC_CON pin 4 wired but firmware purpose
+   unspecified (soil moisture? light meter? second thermistor?).
+
+Reserved relays GP21/22/26/27 are wired to REL_CON 5–8 but
+intentionally dormant; low-priority.
+
+### decision · Phase order = heater → DAC dim → CO2 → ADC
+
+Recorded in the plan doc. Rationale: heater is smallest-scope and
+biggest immediate value (greenhouse needs heat before it needs
+brightness control); DAC dimming follows because it depends on Q5
+(I2C address verification, which Phase 0 resolves); CO2 is largest
+scope; ADC is gated on Q1 (purpose). Six open questions (Q1–Q6) are
+listed at the top of the plan doc and should be answered via a
+single `AskUserQuestion` round at the start of phase 1.
+
 ## 2026-05-14 · PCB pin remap (Pi-Greenhouse-PCB v2026-05-14)
 
 ### decision · Remapped every GPIO to match the printed PCB

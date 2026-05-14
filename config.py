@@ -142,6 +142,12 @@ DEVICE_CONFIG = {
         # MCP4725 dimming DAC on shared I2C0. Tentative default 0x60
         # (A0=GND); confirm with prototypes/i2c_scan.py — A0=VCC is 0x61.
         "dac_i2c_address": 0x60,
+        # Dimming layer over the master-switch relay. Relay handles
+        # ON/OFF; DAC sets brightness via op-amp buffer to GL_CON.
+        "default_level_pct": 80,  # Brightness when no override active
+        "max_level_pct": 91,  # ViparSpectra XS1500 safe ceiling — never exceed
+        "min_level_pct": 0,  # Below this snaps to 0 (relay off)
+        "ramp_duration_s": 300,  # Linear fade duration on dawn/sunset edges
     },
     # Service Reminder Configuration
     "Service_reminder": {
@@ -339,6 +345,10 @@ def validate_config():
             "sunset_minute",
             "poll_interval_s",
             "dac_i2c_address",
+            "default_level_pct",
+            "max_level_pct",
+            "min_level_pct",
+            "ramp_duration_s",
         ],
         "Service_reminder": [
             "days_interval",
@@ -498,6 +508,18 @@ def validate_config():
     dac_addr = DEVICE_CONFIG["growlight"]["dac_i2c_address"]
     if not isinstance(dac_addr, int) or not (0x08 <= dac_addr <= 0x77):
         raise ValueError("growlight.dac_i2c_address must be a 7-bit I2C address (0x08-0x77)")
+
+    gl_cfg = DEVICE_CONFIG["growlight"]
+    for key in ("default_level_pct", "max_level_pct", "min_level_pct"):
+        v = gl_cfg[key]
+        if not isinstance(v, (int, float)) or not (0 <= v <= 100):
+            raise ValueError(f"growlight.{key} must be 0-100")
+    if gl_cfg["min_level_pct"] > gl_cfg["max_level_pct"]:
+        raise ValueError("growlight.min_level_pct must be <= max_level_pct")
+    if gl_cfg["default_level_pct"] > gl_cfg["max_level_pct"]:
+        raise ValueError("growlight.default_level_pct must be <= max_level_pct")
+    if gl_cfg["ramp_duration_s"] < 0:
+        raise ValueError("growlight.ramp_duration_s must be >= 0")
 
     if DEVICE_CONFIG["Service_reminder"]["blink_after_days"] < 0:
         raise ValueError("Service_reminder.blink_after_days must be >= 0")

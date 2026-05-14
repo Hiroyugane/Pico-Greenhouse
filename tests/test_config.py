@@ -293,6 +293,57 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["growlight"]["dac_i2c_address"] = original
 
+    def test_growlight_max_level_out_of_range_raises(self):
+        """growlight.max_level_pct > 100 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["growlight"]["max_level_pct"]
+        config.DEVICE_CONFIG["growlight"]["max_level_pct"] = 150
+        try:
+            with pytest.raises(ValueError, match="max_level_pct"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["growlight"]["max_level_pct"] = original
+
+    def test_growlight_default_above_max_raises(self):
+        """growlight.default_level_pct > max_level_pct raises ValueError."""
+        import config
+
+        orig_default = config.DEVICE_CONFIG["growlight"]["default_level_pct"]
+        orig_max = config.DEVICE_CONFIG["growlight"]["max_level_pct"]
+        config.DEVICE_CONFIG["growlight"]["max_level_pct"] = 50
+        config.DEVICE_CONFIG["growlight"]["default_level_pct"] = 80
+        try:
+            with pytest.raises(ValueError, match="default_level_pct"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["growlight"]["default_level_pct"] = orig_default
+            config.DEVICE_CONFIG["growlight"]["max_level_pct"] = orig_max
+
+    def test_growlight_min_above_max_raises(self):
+        """growlight.min_level_pct > max_level_pct raises ValueError."""
+        import config
+
+        orig_min = config.DEVICE_CONFIG["growlight"]["min_level_pct"]
+        config.DEVICE_CONFIG["growlight"]["min_level_pct"] = 100
+        try:
+            with pytest.raises(ValueError, match="min_level_pct"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["growlight"]["min_level_pct"] = orig_min
+
+    def test_growlight_negative_ramp_raises(self):
+        """growlight.ramp_duration_s < 0 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["growlight"]["ramp_duration_s"]
+        config.DEVICE_CONFIG["growlight"]["ramp_duration_s"] = -1
+        try:
+            with pytest.raises(ValueError, match="ramp_duration_s"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["growlight"]["ramp_duration_s"] = original
+
     def test_negative_blink_after_days_raises(self):
         """Service_reminder.blink_after_days = -1 raises ValueError."""
         import config

@@ -344,6 +344,82 @@ class TestFanController:
         mock_logger.error.assert_called()
 
 
+class TestFanExternalOverride:
+    """Tests for FanController.external_override — the CO2-driven force-on hook."""
+
+    def _run_once(self, fan):
+        async def runner():
+            with patch("asyncio.sleep", side_effect=RuntimeError("stop")):
+                try:
+                    await fan.start_cycle()
+                except RuntimeError:
+                    pass
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            asyncio.run(runner())
+
+    def test_default_is_none(self, fan_controller):
+        """external_override defaults to None (no hook attached)."""
+        assert fan_controller.external_override is None
+
+    def test_override_callable_true_forces_on(self, fan_controller, mock_dht_logger):
+        """A callable returning True overrides schedule and turns the fan ON."""
+        mock_dht_logger.last_temperature = 20.0  # well below max_temp
+        fan_controller.external_override = lambda: True
+        # Force schedule "off" baseline so we can see the override flip the relay on
+        fan_controller.last_schedule_state = False
+        self._run_once(fan_controller)
+        assert fan_controller.is_on() is True
+
+    def test_override_callable_false_does_not_force(self, fan_controller, mock_dht_logger):
+        """A callable returning False is a no-op; schedule/thermostat decide."""
+        mock_dht_logger.last_temperature = 20.0
+        fan_controller.external_override = lambda: False
+        # Inside schedule-off window, no thermostat trigger → fan stays off
+        fan_controller.last_schedule_state = False
+        self._run_once(fan_controller)
+        assert fan_controller.is_on() is False
+
+    def test_override_release_returns_control(self, fan_controller, mock_dht_logger):
+        """When the override flips False after being True, fan returns to schedule control."""
+        mock_dht_logger.last_temperature = 20.0
+        flag = {"v": True}
+        fan_controller.external_override = lambda: flag["v"]
+        fan_controller.last_schedule_state = False
+        self._run_once(fan_controller)
+        assert fan_controller.is_on() is True
+
+        flag["v"] = False
+        self._run_once(fan_controller)
+        assert fan_controller.is_on() is False
+
+    def test_override_outranks_schedule_off(self, fan_controller, mock_dht_logger):
+        """Override wins even if the schedule says off."""
+        mock_dht_logger.last_temperature = 20.0
+        fan_controller.external_override = lambda: True
+        fan_controller.last_schedule_state = False
+        self._run_once(fan_controller)
+        assert fan_controller.is_on() is True
+
+    def test_thermostat_still_outranks_override_release(self, fan_controller, mock_dht_logger):
+        """If override clears but thermostat is hot, fan stays on for the thermostat."""
+        # Thermostat fires at >= 24.0
+        mock_dht_logger.last_temperature = 25.0
+        fan_controller.external_override = lambda: False
+        self._run_once(fan_controller)
+        assert fan_controller.thermostat_active is True
+        assert fan_controller.is_on() is True
+
+    def test_override_exception_falls_back_to_schedule(self, fan_controller, mock_dht_logger):
+        """If the override callable raises, the controller logs and behaves as if False."""
+        mock_dht_logger.last_temperature = 20.0
+        fan_controller.external_override = Mock(side_effect=RuntimeError("bad hook"))
+        fan_controller.last_schedule_state = False
+        self._run_once(fan_controller)
+        # Fan must not be force-on when the hook crashes
+        assert fan_controller.is_on() is False
+
+
 # ============================================================================
 # GrowlightController
 # ============================================================================

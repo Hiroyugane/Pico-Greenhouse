@@ -110,6 +110,98 @@ Still open (deferred):
   log interval and OLED warning threshold. No automatic watering action
   in scope — just sensing + display.
 
+### 4.1 Locked design parameters (round 2 — 2026-05-14)
+
+A second clarifying-questions round pinned down the concrete defaults
+and edge cases. All values below are the **starting defaults**; every
+one of them is exposed as a config key so it can be retuned without
+code changes.
+
+**Heater (`config.heater`):**
+
+| Key                      | Default | Notes |
+| ------------------------ | ------- | ----- |
+| `day_min_temp`           | 22.0 °C | warmer-baseline setpoint per user choice |
+| `night_min_temp`         | 16.0 °C | ~6 °C night drop |
+| `temp_hysteresis`        | 0.5 °C  | match fan controller |
+| `day_offset_min`         | 0       | minutes added to growlight `dawn_*` to start the day window |
+| `night_offset_min`       | 0       | minutes added to growlight `sunset_*` to start the night window |
+| `max_stale_reads`        | 3       | tolerate N consecutive failed DHT cycles using last-good before failing safe to OFF |
+| `poll_interval_s`        | 30      | thermostat check cadence |
+| `fan_heater_interlock`   | false   | (constant, not a config key — fans and heater run independently) |
+
+The day/night boundary inherits the growlight schedule plus offsets:
+`day_start = growlight.dawn + day_offset_min`, `night_start =
+growlight.sunset + night_offset_min`. With both offsets at 0 the
+heater follows the lamp 1:1.
+
+**Grow-light dimming (`config.growlight` additions):**
+
+| Key                | Default | Notes |
+| ------------------ | ------- | ----- |
+| `default_level_pct`| 80      | brightness when no override active |
+| `max_level_pct`    | 91      | **ViparSpectra XS1500** safe ceiling — never exceed |
+| `min_level_pct`    | 0       | clamps below this snap to 0 (relay off) |
+| `ramp_duration_s`  | 300     | 5-minute linear fade on dawn/sunset edges |
+| `ramp_curve`       | "linear"| only "linear" implemented in phase 1; future "perceptual" possible |
+| `dac_i2c_address`  | 0x60    | tentative; phase 0 hardware probe confirms |
+| `override_hold`    | "until_next_edge" | OLED manual brightness sticks until the next scheduled dawn/sunset transition |
+
+**CO2 (`config.co2_logger`):**
+
+| Key                  | Default | Notes |
+| -------------------- | ------- | ----- |
+| `interval_s`         | 30      | matches DHT cadence by default |
+| `override_ppm_on`    | 1000    | trip threshold |
+| `override_ppm_off`   | 800     | release threshold (hysteresis) |
+| `override_fan`       | "fan_2" | which fan to force-on; `fan_2` has higher max_temp so it's the bigger ventilator |
+| `warmup_s`           | 30      | initial sensor warm-up window where read failures don't escalate |
+| `filename_base`      | `co2_log` | becomes `/sd/co2_log_YYYY-MM-DD.csv` |
+
+Override mechanism: `FanController` gains an `external_override`
+callable (or attribute) checked each `poll_interval_s`. The CO2
+logger sets it true when ppm crosses `override_ppm_on` and clears it
+when ppm falls below `override_ppm_off`. No buzzer alert in scope.
+
+**Soil moisture (`config.soil_logger`):**
+
+| Key             | Default       | Notes |
+| --------------- | ------------- | ----- |
+| `interval_s`    | 60            | once per minute is plenty for soil |
+| `adc_dry_raw`   | TBD (default 850) | user calibrates per sensor + soil + container; REPL helper prints raw value |
+| `adc_wet_raw`   | TBD (default 350) | same |
+| `warn_pct_below`| 20            | trigger warning LED when soil < 20% |
+| `filename_base` | `soil_log`    | becomes `/sd/soil_log_YYYY-MM-DD.csv` |
+
+REPL calibration helper: `python -c "from lib.soil_logger import
+print_raw; print_raw()"` (or REPL on the Pico) — single-shot read of
+the GP28 ADC printed in raw 0–1023, no calibration applied.
+
+**OLED menu layout:**
+
+One page per peripheral. New pages added in cycle order after the
+existing DHT page: **CO2** (ppm + 1-hour trend arrow), **Soil**
+(% + raw value), **Heater** (state + current temp + active setpoint),
+**Dim** (current level % + override status). Existing DHT, Service,
+Buffer pages unchanged. Short-press cycles, long-press fires the
+existing context action.
+
+**Reserved relays GP21/22/26/27:** stay as `relay_reserved_1..4` in
+config. No GPIO init at boot, no driver. Skip phase 5 until a feature
+needs them.
+
+**Logging filenames:** separate file per sensor under `/sd/` —
+`dht_log_YYYY-MM-DD.csv` (existing), `co2_log_YYYY-MM-DD.csv`,
+`soil_log_YYYY-MM-DD.csv`. No combined-rollup file.
+
+### 4.2 Watchdog discipline reminder
+
+Every new async task added by phases 1–4 must `await asyncio.sleep_*`
+inside its main loop at intervals well under `watchdog_timeout_ms`
+(8000 ms). The ramp task in the dim controller is the highest-risk
+new task — it should `await asyncio.sleep_ms(step_ms)` between DAC
+writes, never busy-loop. The same applies to the soil and CO2 readers.
+
 ## 5. Phased implementation plan
 
 Each phase is sized as a self-contained piece of work that lands as

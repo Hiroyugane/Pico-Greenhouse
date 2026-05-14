@@ -16,8 +16,11 @@ prototype wiring. `config.py` is now the single source of truth, and
 
 Key moves:
 
-- **Status LEDs reshuffled on LED_CON** — error=GP4 (was GP7), warning=GP5
-  (was GP6), SD=GP6 (was GP8), reminder=GP7 (was GP5), activity=GP8 (was GP4).
+- **Status LEDs reshuffled on LED_CON** — activity=GP4 (unchanged),
+  SD=GP5 (was GP8), warning=GP6 (unchanged), error=GP7 (unchanged),
+  reminder=GP8 (was GP5). Net effect: SD ↔ reminder swap vs. the original
+  prototype wiring. (Corrected post-PCB-print after eyes-on confirmation
+  by the user.)
 - **CO2 UART → UART0 on GP16/GP17** (was UART1 on GP2/GP3). R9/R11 sit between
   the Pico and CO2_CON as series resistors.
 - **Buzzer GP14** (was GP20), with R3 pull-down to GND on the buzzer line.

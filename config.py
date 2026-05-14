@@ -15,11 +15,11 @@ DEVICE_CONFIG = {
     #              I2C_CON1/2/3 breakouts). Pulled up to 3V3 via R1/R2.
     #   GP2:       GP2_CON header (general-purpose breakout, future use)
     #   GP3:       Heater MOSFET gate (via R6 → IRLZ44N gate, active HIGH)
-    #   GP4:       Error LED      (LED_CON: "Err")
-    #   GP5:       Warning LED    (LED_CON: "Warn")
-    #   GP6:       SD-problem LED (LED_CON: 3rd LED line)
-    #   GP7:       Service / reminder LED (LED_CON: "Service")
-    #   GP8:       Activity LED   (LED_CON: "Activity")
+    #   GP4:       Activity LED   (LED_CON)
+    #   GP5:       SD-problem LED (LED_CON)
+    #   GP6:       Warning LED    (LED_CON)
+    #   GP7:       Error LED      (LED_CON)
+    #   GP8:       Service / reminder LED (LED_CON)
     #   GP9:       Menu button (MEN_BTN, short=cycle, long=action)
     #   GP10-GP13: SPI1 (SD card via SD_CON). MOSI uses R10, MISO uses R8
     #              as series resistors between Pico and SD_CON.
@@ -49,11 +49,11 @@ DEVICE_CONFIG = {
         # Heater control (GP3 → R6 → HE_MOSFET gate)
         "heater_mosfet": 3,  # GP3 — heater MOSFET gate (active HIGH)
         # Status LEDs (LED_CON wiring per new PCB; roles by GPIO)
-        "error_led": 4,  # GP4 — Error LED (solid = fault needs attention)
-        "warning_led": 5,  # GP5 — Warning LED (solid = degraded condition)
-        "sd_led": 6,  # GP6 — SD-problem LED (solid = SD missing/failed)
-        "reminder_led": 7,  # GP7 — Service-reminder LED (blinks when due)
-        "activity_led": 8,  # GP8 — Activity LED (brief blink on I/O actions)
+        "activity_led": 4,  # GP4 — Activity LED (brief blink on I/O actions)
+        "sd_led": 5,  # GP5 — SD-problem LED (solid = SD missing/failed)
+        "warning_led": 6,  # GP6 — Warning LED (solid = degraded condition)
+        "error_led": 7,  # GP7 — Error LED (solid = fault needs attention)
+        "reminder_led": 8,  # GP8 — Service-reminder LED (blinks when due)
         # Menu button
         "button_menu": 9,  # GP9 — Menu button (short=cycle menu, long≥3s=action)
         # Buzzer (BUZ_CON, pulled to GND via R3)

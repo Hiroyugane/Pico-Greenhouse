@@ -18,7 +18,7 @@ T/H_CON, CO2_CON, ADC_CON and at least one I2C_CON breakout per the new PCB.
 
 ### Boot + I2C0 bus
 
-- [ ] Pico boots, POST LED walk fires in order **GP4(Err) → GP5(Warn) → GP6(SD) → GP7(Service) → GP8(Activity)** — confirms LED channel remap.
+- [ ] Pico boots, POST LED walk fires in order **GP4(Activity) → GP5(SD) → GP6(Warn) → GP7(Err) → GP8(Service)** — confirms LED channel remap.
 - [ ] On-board GP25 heartbeat blinks once per ~2 s.
 - [ ] OLED (SSD1306 @ 0x3C) shows the default menu within 5 s.
 - [ ] RTC time displayed is within ±2 s of wall clock (no "RTC invalid" warning LED).
@@ -29,13 +29,14 @@ T/H_CON, CO2_CON, ADC_CON and at least one I2C_CON breakout per the new PCB.
 
 - [ ] `system.log` shows successful SD mount within the first health-check cycle.
 - [ ] DHT log file appears at `/sd/dht_log_YYYY-MM-DD.csv` and grows every 30 s.
-- [ ] Hot-pull the card → SD LED (GP6) goes solid; re-insert → LED clears, fallback rows migrate (check `migrations` metric in log).
+- [ ] Hot-pull the card → SD LED (GP5) goes solid; re-insert → LED clears, fallback rows migrate (check `migrations` metric in log).
 
 ### Status LEDs (LED_CON role swap)
 
-- [ ] Force DHT failure (unplug T/H_CON) → after threshold, **GP5 Warn** then **GP4 Err** light up — confirms GP4↔GP7 swap from old wiring.
-- [ ] Service-reminder due → **GP7** blinks the configured pattern.
-- [ ] During an SD write → **GP8** Activity LED pulses briefly.
+- [ ] Force DHT failure (unplug T/H_CON) → after threshold, **GP6 Warn** then **GP7 Err** light up.
+- [ ] Service-reminder due → **GP8** blinks the configured pattern.
+- [ ] During an SD write → **GP4** Activity LED pulses briefly.
+- [ ] Hot-pull the SD card → **GP5** SD LED goes solid (also covered in the SD section above).
 
 ### Menu button (GP9) + reset
 

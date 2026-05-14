@@ -461,6 +461,29 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["growlight"]["min_level_pct"] = orig_min
 
+    def test_growlight_mode_invalid_raises(self):
+        """growlight.mode outside {'dimmed','relay_only'} raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["growlight"]["mode"]
+        config.DEVICE_CONFIG["growlight"]["mode"] = "bogus"
+        try:
+            with pytest.raises(ValueError, match="growlight.mode"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["growlight"]["mode"] = original
+
+    def test_growlight_mode_dimmed_valid(self):
+        """growlight.mode='dimmed' passes validation."""
+        import config
+
+        original = config.DEVICE_CONFIG["growlight"]["mode"]
+        config.DEVICE_CONFIG["growlight"]["mode"] = "dimmed"
+        try:
+            assert config.validate_config() is True
+        finally:
+            config.DEVICE_CONFIG["growlight"]["mode"] = original
+
     def test_growlight_negative_ramp_raises(self):
         """growlight.ramp_duration_s < 0 raises ValueError."""
         import config

@@ -173,13 +173,19 @@ DEVICE_CONFIG = {
     },
     # Grow Light Configuration
     "growlight": {
+        # "relay_only": drive GP20 relay as plain on/off, skip MCP4725 init.
+        # "dimmed":     init MCP4725 DAC for ViparSpectra XS1500 dimming over
+        #               the relay master-switch. Falls back to relay-only at
+        #               runtime if DAC init throws (logged as warning).
+        "mode": "relay_only",
         "dawn_hour": 7,  # Light ON at 7:00 AM
         "dawn_minute": 0,
         "sunset_hour": 19,  # Light OFF at 19:00 (10 PM)
         "sunset_minute": 0,
         "poll_interval_s": 60,  # Schedule check interval (seconds)
-        # MCP4725 dimming DAC on shared I2C0. Tentative default 0x60
-        # (A0=GND); confirm with prototypes/i2c_scan.py — A0=VCC is 0x61.
+        # MCP4725 dimming DAC on shared I2C0. Only consulted when mode="dimmed".
+        # Tentative default 0x60 (A0=GND); confirm with prototypes/i2c_scan.py —
+        # A0=VCC is 0x61.
         "dac_i2c_address": 0x60,
         # Dimming layer over the master-switch relay. Relay handles
         # ON/OFF; DAC sets brightness via op-amp buffer to GL_CON.
@@ -394,6 +400,7 @@ def validate_config():
             "filename_base",
         ],
         "growlight": [
+            "mode",
             "dawn_hour",
             "dawn_minute",
             "sunset_hour",
@@ -599,6 +606,8 @@ def validate_config():
         raise ValueError("growlight.dac_i2c_address must be a 7-bit I2C address (0x08-0x77)")
 
     gl_cfg = DEVICE_CONFIG["growlight"]
+    if gl_cfg["mode"] not in ("dimmed", "relay_only"):
+        raise ValueError("growlight.mode must be 'dimmed' or 'relay_only'")
     for key in ("default_level_pct", "max_level_pct", "min_level_pct"):
         v = gl_cfg[key]
         if not isinstance(v, (int, float)) or not (0 <= v <= 100):

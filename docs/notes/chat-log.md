@@ -5,6 +5,28 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-15 · Growlight mode flag (relay_only vs dimmed)
+
+### decision · Add `growlight.mode` config flag, default `relay_only`
+
+Introduce `DEVICE_CONFIG["growlight"]["mode"]` with values `"dimmed"`
+(MCP4725 DAC drives ViparSpectra XS1500 brightness over the GP20 relay
+master-switch) or `"relay_only"` (skip MCP4725 init entirely, treat the
+lamp as plain on/off). Default is `"relay_only"` — the current
+deployment has reverted to the bare relay-pin connection and the
+dimming hardware is not wired in. Operators that want XS1500 dimming
+must opt in by setting `mode="dimmed"`. The existing implicit fallback
+(warn + relay-only if DAC init throws while `mode="dimmed"`) is
+preserved so a flaky DAC doesn't brick the lamp schedule.
+
+### note · Validator enforces the enum
+
+`validate_config()` rejects any value other than `"dimmed"` or
+`"relay_only"`. Two new rows in `tests/test_config.py` cover the
+invalid-string and the dimmed-happy-path. No change to the
+`GrowlightController` class — `main.py` already passes `dac=None`
+through the same constructor, so the controller is mode-agnostic.
+
 ## 2026-05-15 · DHT22 → SHT31 sensor migration
 
 ### decision · Replace DHT22 with SHT31-D on shared I2C0, no fallback path

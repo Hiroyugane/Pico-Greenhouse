@@ -5,6 +5,47 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-15 · Growlight `mode` flag
+
+**Branch:** `main`
+**Why hardware-only:** The flag controls whether MCP4725 init runs on
+the live I2C0 bus and whether GP20 is the only grow-light actuator.
+Behavior is observable only by watching the boot log, the relay, and
+the lamp on real hardware.
+**Pre-flight:** Set `DEVICE_CONFIG["growlight"]["mode"]` to the value
+under test (`"relay_only"` or `"dimmed"`) and flash `main.py`. For
+`"dimmed"` runs, confirm the MCP4725 is on I2C0 at the configured
+address (default `0x60`); for `"relay_only"` runs, the DAC can be
+absent.
+
+### relay_only mode
+
+- [ ] Boot log shows `growlight.mode=relay_only — MCP4725 init skipped`
+      and no `MCP4725 grow-light DAC at 0x…` line.
+- [ ] At dawn (`growlight.dawn_hour:dawn_minute`) the GP20 relay
+      energises (audible click, lamp on) without a fade.
+- [ ] At sunset the relay de-energises (lamp off) without a fade.
+- [ ] Removing the MCP4725 from the bus has no effect on grow-light
+      scheduling.
+
+### dimmed mode
+
+- [ ] Boot log shows `MCP4725 grow-light DAC at 0x60` and no relay-only
+      skip line.
+- [ ] At dawn the lamp ramps from 0% to `growlight.default_level_pct`
+      over `growlight.ramp_duration_s` seconds; relay energises at the
+      start of the ramp.
+- [ ] At sunset the lamp ramps back down and the relay de-energises at
+      the end of the ramp.
+- [ ] Disconnecting the MCP4725 before boot (with `mode="dimmed"`)
+      logs `MCP4725 init failed (falling back to relay-only growlight)`
+      and the lamp still switches on/off at the scheduled times via the
+      relay.
+
+### Notes (post-test) · growlight mode
+
+> Fill in here. Add `[!]` items with failure mode and a short repro.
+
 ## 2026-05-15 · DHT22 → SHT31-D migration
 
 **Branch:** `main`

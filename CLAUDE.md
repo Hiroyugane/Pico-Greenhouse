@@ -48,7 +48,8 @@ On-device (via Thonny on the Pico): run [rtc_set_time.py](rtc_set_time.py) once 
 
 ## Project-specific instructions
 
-This repo loads detailed rules from [.claude/rules/ecc/common/](.claude/rules/ecc/common/) on every session. Two are load-bearing for day-to-day work:
+This repo loads detailed rules from [.claude/rules/ecc/common/](.claude/rules/ecc/common/) on every session. Three are load-bearing for day-to-day work:
 
 - [clarifying-questions.md](.claude/rules/ecc/common/clarifying-questions.md) — at the start of any new work-shaped prompt, ask 3–4 clarifying questions via `AskUserQuestion` before planning or editing. Skip for mechanical follow-ups, pure information requests, or when the user says "just do it".
 - [documentation-routine.md](.claude/rules/ecc/common/documentation-routine.md) — after any session that touches user-visible behavior, hardware, permissions, or anything not exercisable by `pytest`, append a checklist entry to [docs/test/hw-test-log.md](docs/test/hw-test-log.md). After any session that produced a decision, spec clarification, deviation, issue, or non-obvious note, append to [docs/notes/chat-log.md](docs/notes/chat-log.md). Mention both files in the end-of-turn summary.
+- [commit-granularity.md](.claude/rules/ecc/common/commit-granularity.md) — one logical change per commit so future AI sessions can reconstruct intent from `git log` alone. Refactor and behavior changes split into separate commits; tests ship with the code they cover; no `wip` / `checkpoint` / grab-bag commits; no squash-merging.

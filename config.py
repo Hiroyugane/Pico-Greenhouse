@@ -8,54 +8,84 @@
 DEVICE_CONFIG = {
     # Hardware Pins
     #
-    # Pico GPIO layout (active header pins only):
-    #   GP0-GP1:   I2C0 bus (RTC + OLED display, shared)
-    #   GP2-GP3:   CO2 sensor UART1 (TX/RX)
-    #   GP4:       Activity LED (brief blink on I/O actions)
-    #   GP5:       Service-reminder LED (blinks when due)
-    #   GP6:       SD-problem LED (solid = SD missing/failed)
-    #   GP7:       Warning LED (solid = degraded condition)
-    #   GP8:       Error LED (solid = fault needs attention)
-    #   GP9:       Menu button (short=cycle, long=action)
-    #   GP10-GP13: SPI1 (SD card)
-    #   GP14:      Reserved button (future use)
-    #   GP15:      DHT22 data
-    #   GP16-GP18: Relay outputs (fans + growlight)
-    #   GP19:      Reserved (future relay)
-    #   GP20:      Passive buzzer (PWM)
-    #   GP21-GP22: Reserved (future relays / PWM fan)
+    # Pico GPIO layout — matches PCB schematic SCH_Pico-Greenhouse-PCB_2026-05-14
+    # (docs/SCH_Pico-Greenhouse-PCB_2026-05-14.json):
+    #
+    #   GP0-GP1:   I2C0 bus (shared: RTC + OLED + MCP4725 grow-light DAC +
+    #              I2C_CON1/2/3 breakouts). Pulled up to 3V3 via R1/R2.
+    #   GP2:       GP2_CON header (general-purpose breakout, future use)
+    #   GP3:       Heater MOSFET gate (via R6 → IRLZ44N gate, active HIGH)
+    #   GP4:       Error LED      (LED_CON: "Err")
+    #   GP5:       Warning LED    (LED_CON: "Warn")
+    #   GP6:       SD-problem LED (LED_CON: 3rd LED line)
+    #   GP7:       Service / reminder LED (LED_CON: "Service")
+    #   GP8:       Activity LED   (LED_CON: "Activity")
+    #   GP9:       Menu button (MEN_BTN, short=cycle, long=action)
+    #   GP10-GP13: SPI1 (SD card via SD_CON). MOSI uses R10, MISO uses R8
+    #              as series resistors between Pico and SD_CON.
+    #   GP14:      Passive buzzer (BUZ_CON, with R3 pulldown to GND)
+    #   GP15:      DHT22 data (T/H_CON pin 4)
+    #   GP16:      UART0 TX → CO2 sensor (via R9 to CO2_CON pin 4)
+    #   GP17:      UART0 RX ← CO2 sensor (via R11 from CO2_CON pin 3)
+    #   GP18:      Relay 1 — fan 1     (REL_CON pin 2)
+    #   GP19:      Relay 2 — fan 2     (REL_CON pin 3)
+    #   GP20:      Relay 3 — growlight (REL_CON pin 4)
+    #   GP21-GP22: Reserved relays (REL_CON pins 5-6, future use)
     #   GP25:      On-board LED (heartbeat)
-    #   GP26-GP28: Reserved ADC (analog sensors)
+    #   GP26-GP27: Reserved relays (REL_CON pins 7-8, future use)
+    #   GP28:      ADC input (ADC_CON pin 4; ADC_VREF on Pico pin 35)
+    #
+    # RES_BTN on the PCB is wired to the Pico's 3V3_EN line (hardware reset),
+    # not a GPIO; "button_reserved" below points at the GP2 breakout for any
+    # future software-side button.
     "pins": {
-        "dht22": 15,  # DHT22 data pin
-        "onboard_led": 25,  # Pico on-board LED (heartbeat)
-        "activity_led": 4,  # Activity LED (brief blink on I/O actions)
-        "reminder_led": 5,  # Service-reminder LED (blinks when due)
-        "warning_led": 6,  # Warning LED (solid = degraded condition)
-        "error_led": 7,  # Error LED (solid = fault needs attention)
-        "sd_led": 8,  # SD-problem LED (solid = SD missing/failed)
-        "button_menu": 9,  # Menu button (short=cycle menu, long≥3s=action)
-        "button_reserved": 14,  # Reserved button (future use)
-        "rtc_i2c_port": 0,  # I2C0 peripheral (shared: RTC + OLED)
-        "rtc_sda": 0,  # I2C0 SDA (GP0)
-        "rtc_scl": 1,  # I2C0 SCL (GP1)
-        "relay_fan_1": 16,  # Fan relay 1 (primary cycle)
-        "relay_fan_2": 18,  # Fan relay 2 (secondary cycle)
-        "relay_growlight": 17,  # Grow light relay
-        "co2_uart_id": 1,  # CO2 sensor UART peripheral
-        "co2_uart_tx": 2,  # CO2 sensor UART1 TX (GP2)
-        "co2_uart_rx": 3,  # CO2 sensor UART1 RX (GP3)
-        "co2_baudrate": 9600,  # CO2 sensor UART baudrate
-        "buzzer": 20,  # Passive buzzer (PWM output)
+        # I2C0 — shared bus (RTC, OLED, MCP4725 grow-light DAC, I2C breakouts)
+        "rtc_i2c_port": 0,
+        "rtc_sda": 0,  # GP0 (I2C0 SDA)
+        "rtc_scl": 1,  # GP1 (I2C0 SCL)
+        # General-purpose breakout header (GP2_CON, future use)
+        "gp2_breakout": 2,  # GP2 — exposed for future use
+        "button_reserved": 2,  # Reserved (mapped onto GP2_CON; RES_BTN is now a hw reset, not a GPIO)
+        # Heater control (GP3 → R6 → HE_MOSFET gate)
+        "heater_mosfet": 3,  # GP3 — heater MOSFET gate (active HIGH)
+        # Status LEDs (LED_CON wiring per new PCB; roles by GPIO)
+        "error_led": 4,  # GP4 — Error LED (solid = fault needs attention)
+        "warning_led": 5,  # GP5 — Warning LED (solid = degraded condition)
+        "sd_led": 6,  # GP6 — SD-problem LED (solid = SD missing/failed)
+        "reminder_led": 7,  # GP7 — Service-reminder LED (blinks when due)
+        "activity_led": 8,  # GP8 — Activity LED (brief blink on I/O actions)
+        # Menu button
+        "button_menu": 9,  # GP9 — Menu button (short=cycle menu, long≥3s=action)
+        # Buzzer (BUZ_CON, pulled to GND via R3)
+        "buzzer": 14,  # GP14 — Passive buzzer (PWM output)
+        # DHT22 sensor
+        "dht22": 15,  # GP15 — DHT22 data pin
+        # CO2 sensor (UART0 with series resistors R9/R11)
+        "co2_uart_id": 0,  # UART0
+        "co2_uart_tx": 16,  # GP16 — UART0 TX → CO2_CON pin 4 (via R9)
+        "co2_uart_rx": 17,  # GP17 — UART0 RX ← CO2_CON pin 3 (via R11)
+        "co2_baudrate": 9600,
+        # Relays (REL_CON pins 2-8 → 7 GPIO control lines)
+        "relay_fan_1": 18,  # GP18 — Fan relay 1 (REL_CON pin 2)
+        "relay_fan_2": 19,  # GP19 — Fan relay 2 (REL_CON pin 3)
+        "relay_growlight": 20,  # GP20 — Grow light relay (REL_CON pin 4)
+        "relay_reserved_1": 21,  # GP21 — Reserved relay (REL_CON pin 5)
+        "relay_reserved_2": 22,  # GP22 — Reserved relay (REL_CON pin 6)
+        "relay_reserved_3": 26,  # GP26 — Reserved relay (REL_CON pin 7)
+        "relay_reserved_4": 27,  # GP27 — Reserved relay (REL_CON pin 8)
+        # Analog input (ADC_CON pin 4; ADC_VREF on Pico pin 35)
+        "adc_input": 28,  # GP28 — ADC input (ADC_CON pin 4)
+        # On-board LED
+        "onboard_led": 25,  # GP25 — Pico on-board LED (heartbeat)
     },
-    # SPI Configuration (SD Card)
+    # SPI Configuration (SD Card via SD_CON; MOSI/MISO use series resistors R10/R8)
     "spi": {
         "id": 1,
         "baudrate": 40000000,
-        "sck": 10,
-        "mosi": 11,
-        "miso": 12,
-        "cs": 13,
+        "sck": 10,  # GP10 → SD_CON.SCK
+        "mosi": 11,  # GP11 → R10 → SD_CON.MOSI
+        "miso": 12,  # GP12 → R8 → SD_CON.MISO
+        "cs": 13,  # GP13 → SD_CON.CS
         "mount_point": "/sd",
     },
     # File Paths
@@ -245,11 +275,18 @@ def validate_config():
             "relay_fan_1",
             "relay_fan_2",
             "relay_growlight",
+            "relay_reserved_1",
+            "relay_reserved_2",
+            "relay_reserved_3",
+            "relay_reserved_4",
             "co2_uart_id",
             "co2_uart_tx",
             "co2_uart_rx",
             "co2_baudrate",
             "buzzer",
+            "heater_mosfet",
+            "gp2_breakout",
+            "adc_input",
         ],
         "spi": ["id", "baudrate", "sck", "mosi", "miso", "cs", "mount_point"],
         "files": ["dht_log_base", "system_log", "fallback_path"],

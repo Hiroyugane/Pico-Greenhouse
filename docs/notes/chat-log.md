@@ -5,6 +5,46 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-14 · PCB pin remap (Pi-Greenhouse-PCB v2026-05-14)
+
+### decision · Remapped every GPIO to match the printed PCB
+
+The board layout in `docs/SCH_Pico-Greenhouse-PCB_2026-05-14.json` (EasyEDA
+schematic, post-PCB-print) reassigns almost every Pico GPIO from the original
+prototype wiring. `config.py` is now the single source of truth, and
+`validate_config()` requires the new pin keys.
+
+Key moves:
+
+- **Status LEDs reshuffled on LED_CON** — error=GP4 (was GP7), warning=GP5
+  (was GP6), SD=GP6 (was GP8), reminder=GP7 (was GP5), activity=GP8 (was GP4).
+- **CO2 UART → UART0 on GP16/GP17** (was UART1 on GP2/GP3). R9/R11 sit between
+  the Pico and CO2_CON as series resistors.
+- **Buzzer GP14** (was GP20), with R3 pull-down to GND on the buzzer line.
+- **Relays consolidated on REL_CON** — fan_1=GP18, fan_2=GP19, growlight=GP20
+  (old values were 16/18/17). Four further relay slots reserved on
+  GP21/GP22/GP26/GP27.
+- **New peripherals** added as config keys with no behavior yet: heater MOSFET
+  on GP3 (via R6 → IRLZ44N gate), ADC input on GP28 (ADC_CON pin 4), and the
+  MCP4725 grow-light DAC on the existing I2C0 bus (default address 0x60).
+- **RES_BTN now drives 3V3_EN** (Pico hardware reset), not a GPIO. The legacy
+  `button_reserved` key is kept (validator stability) and points at the GP2
+  breakout header for any future software-side button.
+
+### note · `main.py` and `lib/hardware_factory.py` are fully config-driven
+
+Confirmed by grep: no hardcoded GPIO numbers outside `config.py` (only
+`Pin(<config>...)` constructions through DI). The remap therefore touched
+zero `lib/` files. 546 pytest tests + ruff stayed green after the edit.
+
+### issue · GL_DAC / heater / ADC have no driver yet
+
+The PCB exposes hardware the firmware does not yet exercise: MCP4725 grow-light
+DAC on I2C0 (0x60), heater MOSFET on GP3, and ADC input on GP28. Config keys
+are in place so future work can wire them without touching the schema again.
+Verification of these channels is captured in `docs/test/hw-test-log.md` as
+"no driver yet — must not energize" checks.
+
 ## 2026-05-14 · Commit-on-stop enforcement
 
 ### decision · Stop hook blocks turn-end while tracked tree is dirty

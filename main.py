@@ -42,6 +42,7 @@ from lib.buzzer import BuzzerController
 from lib.dht_logger import DHTLogger
 from lib.event_logger import EventLogger
 from lib.hardware_factory import HardwareFactory
+from lib.heater import HeaterController
 from lib.led_button import LEDButtonHandler, ServiceReminder
 from lib.oled_display import OLEDDisplay
 from lib.relay import FanController, GrowlightController
@@ -341,6 +342,34 @@ async def main():
         poll_s=light_config.get("poll_interval_s", 60),
     )
 
+    # Step 7b2: Create heater controller (active-HIGH MOSFET, day/night thermostat)
+    heater_config = DEVICE_CONFIG.get("heater", {})
+    dawn_h = light_config.get("dawn_hour", 7)
+    dawn_m = light_config.get("dawn_minute", 0)
+    sunset_h = light_config.get("sunset_hour", 19)
+    sunset_m = light_config.get("sunset_minute", 0)
+    day_offset_min = heater_config.get("day_offset_min", 0)
+    night_offset_min = heater_config.get("night_offset_min", 0)
+    day_total_min = dawn_h * 60 + dawn_m + day_offset_min
+    night_total_min = sunset_h * 60 + sunset_m + night_offset_min
+    heater = HeaterController(
+        pin=DEVICE_CONFIG["pins"]["heater_mosfet"],
+        time_provider=time_provider,
+        dht_logger=dht_logger,
+        logger=logger,
+        day_min_temp=heater_config.get("day_min_temp", 22.0),
+        night_min_temp=heater_config.get("night_min_temp", 16.0),
+        temp_hysteresis=heater_config.get("temp_hysteresis", 0.5),
+        day_start_hour=(day_total_min // 60) % 24,
+        day_start_minute=day_total_min % 60,
+        night_start_hour=(night_total_min // 60) % 24,
+        night_start_minute=night_total_min % 60,
+        max_stale_reads=heater_config.get("max_stale_reads", 3),
+        poll_interval_s=heater_config.get("poll_interval_s", 30),
+        name="Heater",
+    )
+    logger.info("MAIN", "Heater controller initialized")
+
     wdt.feed()  # Feed before buzzer (startup melody takes time)
 
     # Step 7c: Create buzzer controller
@@ -489,6 +518,8 @@ async def main():
     # Spawn other async tasks
     asyncio.create_task(growlight.start_scheduler())
     logger.debug("MAIN", "task spawned", task="growlight.start_scheduler")
+    asyncio.create_task(heater.start_cycle())
+    logger.debug("MAIN", "task spawned", task="heater.start_cycle")
     asyncio.create_task(dht_logger.log_loop())
     logger.debug("MAIN", "task spawned", task="dht_logger.log_loop")
     asyncio.create_task(reminder.monitor())

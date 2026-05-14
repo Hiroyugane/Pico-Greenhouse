@@ -22,8 +22,8 @@ import time
 
 # ── Tunables ──────────────────────────────────────────────────────────────
 DRIFT_HOURS = 4  # How long to measure RTC drift (hours)
-DHT_READS_PER_INTERVAL = 250  # Reads per DHT interval bucket
-DHT_INTERVALS_S = [0.5, 1.0, 2.0, 5.0]  # Seconds between reads to test
+SHT31_READS_PER_INTERVAL = 250  # Reads per SHT31 interval bucket
+SHT31_INTERVALS_S = [0.1, 0.5, 1.0, 2.0]  # Seconds between reads to test
 SD_BENCHMARK_BLOCKS = 100  # Number of block reads/writes for benchmarks
 BUTTON_TIMEOUT_S = 60  # Seconds to wait for button presses
 BUTTON_PRESSES = 10  # Number of button presses to collect
@@ -383,19 +383,21 @@ def probe_memory():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# PROBE:  DHT22 endurance (long-running)
+# PROBE:  SHT31 endurance (long-running)
 # ═══════════════════════════════════════════════════════════════════════════
-def probe_dht22_endurance():
-    import dht
-    from machine import Pin
+def probe_sht31_endurance():
+    from machine import I2C, Pin
 
-    sensor = dht.DHT22(Pin(PINS["dht22"]))
+    from lib.sht31 import SHT31
+
+    i2c = I2C(I2C_PORT, sda=Pin(PINS["rtc_sda"]), scl=Pin(PINS["rtc_scl"]), freq=I2C_FREQ)
+    sensor = SHT31(i2c, address=_CFG.get("sht31", {}).get("i2c_address", 0x44))
     result = {"interval_buckets": {}, "all_temps": [], "all_humids": [], "errors": []}
 
     total_success = 0
     total_fail = 0
 
-    for interval in DHT_INTERVALS_S:
+    for interval in SHT31_INTERVALS_S:
         bucket_key = "{:.1f}s".format(interval)
         temps = []
         humids = []
@@ -406,9 +408,9 @@ def probe_dht22_endurance():
         success = 0
         fail = 0
 
-        _log("dht22_endurance", "INFO", "interval={}s × {} reads".format(interval, DHT_READS_PER_INTERVAL))
+        _log("sht31_endurance", "INFO", "interval={}s × {} reads".format(interval, SHT31_READS_PER_INTERVAL))
 
-        for i in range(DHT_READS_PER_INTERVAL):
+        for i in range(SHT31_READS_PER_INTERVAL):
             # Heartbeat every 50 reads
             if i % 50 == 0:
                 _heartbeat_blink(1, 20)
@@ -451,10 +453,10 @@ def probe_dht22_endurance():
 
         result["interval_buckets"][bucket_key] = {
             "interval_s": interval,
-            "attempts": DHT_READS_PER_INTERVAL,
+            "attempts": SHT31_READS_PER_INTERVAL,
             "success": success,
             "fail": fail,
-            "fail_rate": round(fail / DHT_READS_PER_INTERVAL, 4) if DHT_READS_PER_INTERVAL else 0,
+            "fail_rate": round(fail / SHT31_READS_PER_INTERVAL, 4) if SHT31_READS_PER_INTERVAL else 0,
             "max_consecutive_fails": max_consecutive_fails,
             "temperature": _stats(temps),
             "humidity": _stats(humids),
@@ -995,16 +997,19 @@ def probe_rtc_drift():
     _log("rtc_drift", "INFO", "Starting {}h drift measurement".format(DRIFT_HOURS))
     total_measurements = DRIFT_HOURS * 60  # one per minute
 
-    # Also set up DHT sensor for interleaved reads during drift
-    dht_temps = []
-    dht_humids = []
-    dht_errors = 0
+    # Also set up SHT31 sensor for interleaved reads during drift
+    th_temps = []
+    th_humids = []
+    th_errors = 0
     try:
-        import dht
+        from machine import I2C
 
-        dht_sensor = dht.DHT22(Pin(PINS["dht22"]))
+        from lib.sht31 import SHT31
+
+        _th_i2c = I2C(I2C_PORT, sda=Pin(PINS["rtc_sda"]), scl=Pin(PINS["rtc_scl"]), freq=I2C_FREQ)
+        th_sensor = SHT31(_th_i2c, address=_CFG.get("sht31", {}).get("i2c_address", 0x44))
     except Exception:
-        dht_sensor = None
+        th_sensor = None
 
     for i in range(total_measurements):
         time.sleep(60)  # Wait 1 minute
@@ -1039,14 +1044,14 @@ def probe_rtc_drift():
                 }
             )
 
-        # Interleaved DHT22 read (every other minute)
-        if dht_sensor and i % 2 == 0:
+        # Interleaved SHT31 read (every other minute)
+        if th_sensor and i % 2 == 0:
             try:
-                dht_sensor.measure()
-                dht_temps.append(dht_sensor.temperature())
-                dht_humids.append(dht_sensor.humidity())
+                th_sensor.measure()
+                th_temps.append(th_sensor.temperature())
+                th_humids.append(th_sensor.humidity())
             except Exception:
-                dht_errors += 1
+                th_errors += 1
 
         # Progress heartbeat + console update every 10 min
         _heartbeat_blink(1, 30)
@@ -1071,10 +1076,10 @@ def probe_rtc_drift():
         if total_elapsed_s:
             result["drift_ppm"] = round((drifts[-1] / 1000) / total_elapsed_s * 1_000_000, 3)
     result["ds3231_temp_summary"] = _stats(result["ds3231_temps"])
-    result["interleaved_dht"] = {
-        "temperatures": _stats(dht_temps),
-        "humidities": _stats(dht_humids),
-        "errors": dht_errors,
+    result["interleaved_th"] = {
+        "temperatures": _stats(th_temps),
+        "humidities": _stats(th_humids),
+        "errors": th_errors,
     }
     del result["ds3231_temps"]  # Remove bulky array
     return result
@@ -1159,7 +1164,7 @@ def _truncate_large_arrays(results):
             if len(arr) > 12:
                 v["measurements"] = arr[:6] + arr[-6:]
                 v["measurements_truncated"] = True
-        if k == "dht22_endurance" and "interval_buckets" in v:
+        if k == "sht31_endurance" and "interval_buckets" in v:
             for bucket in v["interval_buckets"].values():
                 for arr_key in ["errors_sample"]:
                     if arr_key in bucket and isinstance(bucket[arr_key], list) and len(bucket[arr_key]) > 20:
@@ -1217,7 +1222,7 @@ run_probe("sd_card", probe_sd_card)
 run_probe("sd_hotswap", probe_sd_hotswap)
 
 # Phase 4: Long-running probes
-run_probe("dht22_endurance", probe_dht22_endurance)
+run_probe("sht31_endurance", probe_sht31_endurance)
 run_probe("rtc_drift", probe_rtc_drift)
 
 # Phase 5: Output

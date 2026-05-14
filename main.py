@@ -34,11 +34,12 @@ if sys.implementation.name != "micropython":  # type: ignore[union-attr]
     sys.path.insert(0, host_shims_path)
 
 import uasyncio as asyncio
-from machine import WDT
+from machine import UART, WDT, Pin
 
 from config import DEVICE_CONFIG, validate_config
 from lib.buffer_manager import BufferManager
 from lib.buzzer import BuzzerController
+from lib.co2_logger import CO2Logger
 from lib.dht_logger import DHTLogger
 from lib.event_logger import EventLogger
 from lib.hardware_factory import HardwareFactory
@@ -384,6 +385,45 @@ async def main():
     )
     logger.info("MAIN", "Heater controller initialized")
 
+    # Step 7b3: Create CO2 logger (UART0 SenseAir-style sensor) and wire its
+    # override flag into the configured fan so high-ppm triggers ventilation.
+    co2_config = DEVICE_CONFIG.get("co2_logger", {})
+    co2_logger_obj = None
+    try:
+        co2_uart = UART(
+            DEVICE_CONFIG["pins"]["co2_uart_id"],
+            baudrate=DEVICE_CONFIG["pins"]["co2_baudrate"],
+            tx=Pin(DEVICE_CONFIG["pins"]["co2_uart_tx"]),
+            rx=Pin(DEVICE_CONFIG["pins"]["co2_uart_rx"]),
+        )
+        co2_logger_obj = CO2Logger(
+            uart=co2_uart,
+            time_provider=time_provider,
+            buffer_manager=buffer_manager,
+            logger=logger,
+            interval_s=co2_config.get("interval_s", 30),
+            warmup_s=co2_config.get("warmup_s", 30),
+            max_retries=co2_config.get("max_retries", 3),
+            override_ppm_on=co2_config.get("override_ppm_on", 1000),
+            override_ppm_off=co2_config.get("override_ppm_off", 800),
+            filename_base=co2_config.get("filename_base", "co2_log"),
+            write_queue=write_queue,
+            status_manager=status_manager,
+        )
+        # Attach the override hook to the chosen fan.
+        override_fan_key = co2_config.get("override_fan", "fan_2")
+        fan_index = 1 if override_fan_key == "fan_2" else 0
+        if fan_index < len(fans):
+            fans[fan_index].external_override = co2_logger_obj.is_override_active
+            logger.info(
+                "MAIN",
+                f"CO2 override wired to {fans[fan_index].name} "
+                f"(>{co2_config.get('override_ppm_on', 1000)} ppm)",
+            )
+    except Exception as e:
+        logger.warning("MAIN", f"CO2Logger init failed (non-critical): {e}")
+        co2_logger_obj = None
+
     wdt.feed()  # Feed before buzzer (startup melody takes time)
 
     # Step 7c: Create buzzer controller
@@ -536,6 +576,9 @@ async def main():
     logger.debug("MAIN", "task spawned", task="heater.start_cycle")
     asyncio.create_task(dht_logger.log_loop())
     logger.debug("MAIN", "task spawned", task="dht_logger.log_loop")
+    if co2_logger_obj is not None:
+        asyncio.create_task(co2_logger_obj.log_loop())
+        logger.debug("MAIN", "task spawned", task="co2_logger.log_loop")
     asyncio.create_task(reminder.monitor())
     logger.debug("MAIN", "task spawned", task="reminder.monitor")
     asyncio.create_task(

@@ -117,6 +117,21 @@ DEVICE_CONFIG = {
         "temp_hysteresis": 0.5,  # Hysteresis for thermostat (°C)
         "poll_interval_s": 5,  # Schedule/thermostat check interval (seconds)
     },
+    # Heater Configuration (GP3 → R6 → IRLZ44N gate, ACTIVE HIGH)
+    #
+    # Day/night setpoints inherit the growlight schedule plus an optional
+    # offset in minutes. day_start = growlight.dawn + day_offset_min;
+    # night_start = growlight.sunset + night_offset_min. With both offsets
+    # at 0 the heater follows the lamp 1:1.
+    "heater": {
+        "day_min_temp": 22.0,  # Setpoint while day window is active (°C)
+        "night_min_temp": 16.0,  # Setpoint while night window is active (°C)
+        "temp_hysteresis": 0.5,  # Drop below setpoint before re-firing (°C)
+        "day_offset_min": 0,  # Minutes after growlight dawn for day window start
+        "night_offset_min": 0,  # Minutes after growlight sunset for night window start
+        "max_stale_reads": 3,  # Tolerate N consecutive DHT failures before failing OFF
+        "poll_interval_s": 30,  # Thermostat check cadence (seconds)
+    },
     # Grow Light Configuration
     "growlight": {
         "dawn_hour": 7,  # Light ON at 7:00 AM
@@ -308,6 +323,15 @@ def validate_config():
             "temp_hysteresis",
             "poll_interval_s",
         ],
+        "heater": [
+            "day_min_temp",
+            "night_min_temp",
+            "temp_hysteresis",
+            "day_offset_min",
+            "night_offset_min",
+            "max_stale_reads",
+            "poll_interval_s",
+        ],
         "growlight": [
             "dawn_hour",
             "dawn_minute",
@@ -460,6 +484,16 @@ def validate_config():
 
     if DEVICE_CONFIG["growlight"]["poll_interval_s"] <= 0:
         raise ValueError("growlight.poll_interval_s must be > 0")
+
+    heater_cfg = DEVICE_CONFIG["heater"]
+    if heater_cfg["temp_hysteresis"] < 0:
+        raise ValueError("heater.temp_hysteresis must be >= 0")
+    if heater_cfg["poll_interval_s"] <= 0:
+        raise ValueError("heater.poll_interval_s must be > 0")
+    if heater_cfg["max_stale_reads"] < 0:
+        raise ValueError("heater.max_stale_reads must be >= 0")
+    if heater_cfg["day_min_temp"] < heater_cfg["night_min_temp"]:
+        raise ValueError("heater.day_min_temp must be >= night_min_temp")
 
     dac_addr = DEVICE_CONFIG["growlight"]["dac_i2c_address"]
     if not isinstance(dac_addr, int) or not (0x08 <= dac_addr <= 0x77):

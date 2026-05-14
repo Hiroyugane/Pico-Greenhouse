@@ -20,6 +20,7 @@ class TestConfigStructure:
             "fan_1",
             "fan_2",
             "growlight",
+            "heater",
             "Service_reminder",
             "buffer_manager",
             "event_logger",
@@ -216,6 +217,57 @@ class TestValidateConfig:
                 config.validate_config()
         finally:
             config.DEVICE_CONFIG["growlight"]["poll_interval_s"] = original
+
+    def test_heater_zero_poll_interval_raises(self):
+        """heater.poll_interval_s = 0 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["heater"]["poll_interval_s"]
+        config.DEVICE_CONFIG["heater"]["poll_interval_s"] = 0
+        try:
+            with pytest.raises(ValueError, match="heater.poll_interval_s"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["heater"]["poll_interval_s"] = original
+
+    def test_heater_negative_hysteresis_raises(self):
+        """heater.temp_hysteresis < 0 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["heater"]["temp_hysteresis"]
+        config.DEVICE_CONFIG["heater"]["temp_hysteresis"] = -0.5
+        try:
+            with pytest.raises(ValueError, match="heater.temp_hysteresis"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["heater"]["temp_hysteresis"] = original
+
+    def test_heater_day_below_night_raises(self):
+        """heater.day_min_temp < night_min_temp raises ValueError."""
+        import config
+
+        orig_day = config.DEVICE_CONFIG["heater"]["day_min_temp"]
+        orig_night = config.DEVICE_CONFIG["heater"]["night_min_temp"]
+        config.DEVICE_CONFIG["heater"]["day_min_temp"] = 10.0
+        config.DEVICE_CONFIG["heater"]["night_min_temp"] = 15.0
+        try:
+            with pytest.raises(ValueError, match="day_min_temp"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["heater"]["day_min_temp"] = orig_day
+            config.DEVICE_CONFIG["heater"]["night_min_temp"] = orig_night
+
+    def test_heater_missing_key_raises(self):
+        """Missing heater.day_min_temp raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["heater"]["day_min_temp"]
+        del config.DEVICE_CONFIG["heater"]["day_min_temp"]
+        try:
+            with pytest.raises(ValueError, match="Missing config key"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["heater"]["day_min_temp"] = original
 
     def test_growlight_dac_address_out_of_range_raises(self):
         """growlight.dac_i2c_address outside 7-bit I2C range raises ValueError."""

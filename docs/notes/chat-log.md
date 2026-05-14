@@ -5,6 +5,64 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-14 · Phase 4 — Soil moisture (GP28 ADC)
+
+### decision · SoilLogger mirrors CO2Logger / DHTLogger shape
+
+`SoilLogger` is another BufferManager-backed CSV writer with date
+rollover and an async `log_loop()` that yields. The only structural
+difference is the input source (`machine.ADC.read_u16()` instead of a
+UART frame) and a status-manager hook for the low-moisture warning.
+Keeping the shape uniform across loggers means the next agent reads
+one pattern, not three.
+
+### decision · Calibration constants live in 0-1023 space, not raw u16
+
+`read_u16()` returns 0–65535 on the RP2040, but the project convention
+(plan section 4.1, REPL `print_raw()`, hardware datasheets) all speak
+in 10-bit 0–1023. `SoilLogger` scales the u16 read down internally and
+exposes only the 10-bit value as `last_raw` / in the CSV / in the OLED
+"Raw:" row. Operators recalibrating with `print_raw()` see the same
+units that go into `adc_dry_raw` / `adc_wet_raw`.
+
+### decision · Warning LED via StatusManager.set_warning("soil_low", …)
+
+Per the chosen option, soil low-moisture surfaces only on the warning
+LED + OLED, not via the buzzer or EventLogger (beyond the natural
+`WARN`/`INFO` lines on each transition). The warning key is
+`soil_low`; the LED stays solid as long as the percent is below
+`warn_pct_below` and clears on the first recovery cycle. No event-log
+re-firing on every cycle because StatusManager already de-duplicates
+keys.
+
+### decision · `validate_config()` rejects dry <= wet at boot
+
+Calibration mistakes (swapping dry/wet, or using the same raw value
+for both) would silently produce nonsensical percentages or
+divide-by-zero ratios. Catching it at boot is consistent with how the
+heater's `day_min_temp >= night_min_temp` and the CO2 logger's
+`override_ppm_on > override_ppm_off` are guarded. SoilLogger's
+constructor also re-asserts the inequality so the unit tests can
+exercise the guard without booting the whole config.
+
+### note · OLED CO2 page upgraded as part of this phase
+
+Phase 3 landed the CO2 logger but left the OLED `co2` menu as a
+"Not active / future" placeholder. Phase 4 already had to extend
+`OLEDDisplay` to inject `soil_logger`, so the `co2_logger` kwarg
+landed in the same commit and the placeholder render was replaced
+with `PPM: N` + `Vent: ON/off`. Future phases should not re-touch
+this surface unless they add new fields.
+
+### decision · ADC `read_u16` → 0-1023 uses round-half-up
+
+The naive integer downscale `(u16 * 1023) // 65535` truncates and
+gives off-by-one results at calibration anchor points
+(`u16 == raw10 * 65535 / 1023`). `SoilLogger` uses
+`(u16 * 1023 + 32767) // 65535` so a round-tripped calibration value
+maps back to itself. Negligible cost on the Pico and removes a class
+of test-flakiness.
+
 ## 2026-05-14 · Phase 3 — CO2 logger + fan override
 
 ### decision · CO2Logger mirrors DHTLogger shape, not a new abstraction

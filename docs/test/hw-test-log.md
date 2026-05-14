@@ -5,6 +5,52 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-14 · Phase 4 — Soil moisture (GP28 ADC)
+
+**Branch:** `main`
+**Why hardware-only:** ADC range, probe-to-soil contact resistance, and
+real-world dry/wet endpoints differ per sensor and per soil pot;
+only an eyes-on calibration pass produces useful `adc_dry_raw` /
+`adc_wet_raw` defaults. CSV logging cadence and the warning-LED hook
+also need confirmation against the live status manager.
+**Pre-flight:** Flash latest `main.py`. Wire the soil probe to
+`ADC_CON.4` (GP28). Have a small jar of saturated soil and an empty/dry
+medium handy for calibration.
+
+### Calibration via REPL
+
+- [ ] In Thonny's REPL, run `from lib.soil_logger import print_raw` then
+      `print_raw()` with the probe held in air. Record the value as
+      `adc_dry_raw` (expected somewhere in the 700–900 range, but per-
+      sensor).
+- [ ] Insert the probe into saturated soil, run `print_raw()` again.
+      Record the value as `adc_wet_raw` (expected 250–450 range).
+- [ ] Update `config.py`'s `soil_logger.adc_dry_raw` and
+      `adc_wet_raw` with the measured values; reboot.
+
+### Logging
+
+- [ ] On a fresh boot, `/sd/soil_log_YYYY-MM-DD.csv` exists with a
+      `Timestamp,Raw,Percent` header within the first
+      `soil_logger.interval_s` (default 60 s).
+- [ ] Each cycle appends a plausible row: raw value in calibrated
+      range, percent in 0–100.
+- [ ] Pull the SD card briefly — soil rows should route through the
+      fallback file and migrate back to `/sd/soil_log_*.csv` when the
+      card returns.
+
+### Warning LED + OLED page
+
+- [ ] With the probe in dry soil (or air), the warning LED (GP6) turns
+      solid ON within one `interval_s` cycle and EventLogger emits a
+      `WARN` line `soil moisture low: N% (< 20%)`.
+- [ ] Wet the soil — within one cycle the warning clears, LED turns
+      off, and an `INFO` line `soil moisture recovered: N%` lands.
+- [ ] Cycle the OLED to the `SOIL` page (after `CO2`). Verify the page
+      shows `Moist: N%`, `Raw: NNN`, and the `Warn<20%` indicator.
+      The `LOW!` row should appear only when percent is below the
+      threshold.
+
 ## 2026-05-14 · Phase 3 — CO2 logger + fan override
 
 **Branch:** `main`

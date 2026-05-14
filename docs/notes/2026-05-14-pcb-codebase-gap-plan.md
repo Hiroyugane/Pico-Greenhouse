@@ -72,16 +72,43 @@ Four firmware-actionable gaps, ranked by user-visible value:
 
 ## 4. Open questions before phase work starts
 
-| ID  | Question                                                                                                            | Why it matters                                                                |
-| --- | ------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| Q1  | What does the GP28 ADC actually sense? (soil moisture, light meter, second thermistor, spare?)                       | Determines whether the driver is a simple sampler, a calibrated converter, or a thermostat input. |
-| Q2  | Dimming semantics: does the dim level live in `config.py` (static), follow the schedule (ramped at dawn/sunset), or be commanded from the OLED menu (manual)? | Drives whether `GrowlightController` gains a level setter, a ramp method, or a config-only constant. |
-| Q3  | Heater thermostat: single setpoint with hysteresis (like the fans, just inverted) or a separate day/night setpoint? | Drives whether `HeaterController` is one config block or two.                  |
-| Q4  | CO2: do we want ppm logged to CSV (parallel to DHT), surfaced on OLED, used for fan override (high CO2 → fan on), or all three? | Affects how deep the integration goes in phase 3.                              |
-| Q5  | Verify MCP4725 I2C address — is A0 tied to GND (→ 0x60) or VCC (→ 0x61) on this board?                              | Required before the DAC driver can be wired up.                                |
-| Q6  | Reserved relays — leave dormant, or surface a generic "extra relay" config to drive any one of them from a future feature? | Determines whether phase 5 happens at all.                                     |
+Answered 2026-05-14 (this session):
 
-These should be answered before starting phase 1. The picker form can be a single `AskUserQuestion` round at the top of the next session.
+| ID  | Question                          | Answer                                                                                          |
+| --- | --------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Q1  | GP28 ADC purpose                  | **Soil moisture probe** — calibrated 0–1023 → % converter, CSV + OLED page.                      |
+| Q2  | Grow-light dimming semantics      | **Static default + dawn/sunset ramp + OLED manual override.** All three layers.                  |
+| Q3  | Heater thermostat shape           | **Day/night setpoints.** Two `min_temp` values keyed by hour-of-day window.                      |
+| Q4  | CO2 integration depth             | **Log + OLED page + high-CO2 fan override.** No buzzer alert.                                    |
+
+Still open (deferred):
+
+| ID  | Question                                                                                                              | Defer to                                       |
+| --- | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| Q5  | MCP4725 I2C address — A0=GND (0x60) or A0=VCC (0x61)?                                                                 | Phase 0 (hardware probe via `I2C(0).scan()`).  |
+| Q6  | Reserved relays GP21/22/26/27 — leave dormant, or expose a generic "extra relay" config?                              | After phase 3; decide based on what features want them. |
+
+### Implications of the answers
+
+- **Heater (phase 2)** needs a `heater` config block with `day_min_temp`,
+  `night_min_temp`, `day_start_hour`, `night_start_hour`, plus the
+  usual `temp_hysteresis` and `poll_interval_s`. Time logic mirrors
+  `GrowlightController`'s dawn/sunset shape.
+- **Grow-light dimming (phase 1)** is the biggest sub-project: needs
+  the MCP4725 driver, a level setter on `GrowlightController`, a ramp
+  scheduler (analog of dawn/sunset transitions but with fade duration),
+  AND an OLED menu page that lets the user override the current level
+  until the next schedule edge clears it. Config keys: `default_level_pct`,
+  `ramp_duration_s`, `min_level_pct` (clamping for hardware safety).
+- **CO2 (phase 3)** needs the logger + OLED menu page + a hook into
+  `FanController` for the override. Cleanest hook is a callable
+  `external_override` on `FanController` that the CO2 logger can flip
+  when ppm > threshold; expires after a hold window so a single spike
+  doesn't latch the fan on. No buzzer code.
+- **Soil moisture (phase 4)** is a calibrated ADC reader. Need two
+  calibration constants in config (`adc_dry_raw`, `adc_wet_raw`) plus
+  log interval and OLED warning threshold. No automatic watering action
+  in scope — just sensing + display.
 
 ## 5. Phased implementation plan
 

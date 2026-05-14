@@ -34,7 +34,7 @@ if sys.implementation.name != "micropython":  # type: ignore[union-attr]
     sys.path.insert(0, host_shims_path)
 
 import uasyncio as asyncio
-from machine import UART, WDT, Pin
+from machine import ADC, UART, WDT, Pin
 
 from config import DEVICE_CONFIG, validate_config
 from lib.buffer_manager import BufferManager
@@ -48,6 +48,7 @@ from lib.led_button import LEDButtonHandler, ServiceReminder
 from lib.mcp4725 import MCP4725
 from lib.oled_display import OLEDDisplay
 from lib.relay import FanController, GrowlightController
+from lib.soil_logger import SoilLogger
 from lib.status_manager import StatusManager
 from lib.time_provider import RTCTimeProvider
 from lib.write_queue_manager import WriteQueueManager
@@ -424,6 +425,38 @@ async def main():
         logger.warning("MAIN", f"CO2Logger init failed (non-critical): {e}")
         co2_logger_obj = None
 
+    # Step 7b4: Create SoilLogger (GP28 ADC2 single-probe).
+    # Calibration constants live in config; use prototypes via the
+    # `print_raw()` REPL helper in lib/soil_logger.py to retune them
+    # per sensor + soil pot. Warning LED flips when % < warn_pct_below.
+    soil_config = DEVICE_CONFIG.get("soil_logger", {})
+    soil_logger_obj = None
+    try:
+        soil_adc = ADC(Pin(DEVICE_CONFIG["pins"]["adc_input"]))
+        soil_logger_obj = SoilLogger(
+            adc=soil_adc,
+            time_provider=time_provider,
+            buffer_manager=buffer_manager,
+            logger=logger,
+            interval_s=soil_config.get("interval_s", 60),
+            adc_dry_raw=soil_config.get("adc_dry_raw", 850),
+            adc_wet_raw=soil_config.get("adc_wet_raw", 350),
+            warn_pct_below=soil_config.get("warn_pct_below", 20),
+            filename_base=soil_config.get("filename_base", "soil_log"),
+            write_queue=write_queue,
+            status_manager=status_manager,
+        )
+        logger.info(
+            "MAIN",
+            f"SoilLogger on GP{DEVICE_CONFIG['pins']['adc_input']} "
+            f"(dry={soil_config.get('adc_dry_raw', 850)}, "
+            f"wet={soil_config.get('adc_wet_raw', 350)}, "
+            f"warn<{soil_config.get('warn_pct_below', 20)}%)",
+        )
+    except Exception as e:
+        logger.warning("MAIN", f"SoilLogger init failed (non-critical): {e}")
+        soil_logger_obj = None
+
     wdt.feed()  # Feed before buzzer (startup melody takes time)
 
     # Step 7c: Create buzzer controller
@@ -579,6 +612,9 @@ async def main():
     if co2_logger_obj is not None:
         asyncio.create_task(co2_logger_obj.log_loop())
         logger.debug("MAIN", "task spawned", task="co2_logger.log_loop")
+    if soil_logger_obj is not None:
+        asyncio.create_task(soil_logger_obj.log_loop())
+        logger.debug("MAIN", "task spawned", task="soil_logger.log_loop")
     asyncio.create_task(reminder.monitor())
     logger.debug("MAIN", "task spawned", task="reminder.monitor")
     asyncio.create_task(

@@ -548,6 +548,8 @@ async def main():
                 sd_remount_cb=_sd_remount_cb,
                 start_time_ms=0,
                 logger=logger,
+                co2_logger=co2_logger_obj,
+                soil_logger=soil_logger_obj,
                 width=display_config.get("width", 128),
                 height=display_config.get("height", 64),
                 i2c_address=display_config.get("i2c_address", 0x3C),

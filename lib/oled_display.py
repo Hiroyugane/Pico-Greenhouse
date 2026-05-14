@@ -13,7 +13,8 @@
 #   4: alerts    – active warnings and errors
 #   5: system    – current time, uptime, buffer entries
 #   6: relays    – fan and growlight relay states
-#   7: co2       – CO2 status placeholder
+#   7: co2       – CO2 ppm + override status
+#   8: soil      – soil moisture % + raw value
 
 import gc
 import time
@@ -29,7 +30,7 @@ except AttributeError:
 
 
 # ── Menu identifiers (ordered) ─────────────────────────────────────────────
-MENUS = ("temp", "humidity", "service", "sd", "alerts", "system", "relays", "co2")
+MENUS = ("temp", "humidity", "service", "sd", "alerts", "system", "relays", "co2", "soil")
 
 
 class OLEDDisplay:
@@ -84,6 +85,8 @@ class OLEDDisplay:
         stats_window_s: int = 3600,
         menu_timeout_s: int = 30,
         display_timeout_s: int = 120,
+        co2_logger=None,
+        soil_logger=None,
     ):
         self._i2c = i2c
         self._time_provider = time_provider
@@ -96,6 +99,8 @@ class OLEDDisplay:
         self._sd_remount_cb = sd_remount_cb
         self._start_time_ms = start_time_ms
         self._logger = logger
+        self._co2_logger = co2_logger
+        self._soil_logger = soil_logger
         self._width = width
         self._height = height
         self._i2c_address = i2c_address
@@ -464,5 +469,33 @@ class OLEDDisplay:
 
     def _render_co2(self) -> None:
         self._header("CO2")
-        self._row("Not active", 0)
-        self._row("(future)", 1)
+        if self._co2_logger is None:
+            self._row("Not wired", 0)
+            return
+        ppm = getattr(self._co2_logger, "last_ppm", None)
+        if ppm is None:
+            self._row("Warming up...", 0)
+        else:
+            self._row(f"PPM: {ppm}", 0)
+        if getattr(self._co2_logger, "is_override_active", lambda: False)():
+            self._row("Vent: ON", 1)
+        else:
+            self._row("Vent: off", 1)
+
+    def _render_soil(self) -> None:
+        self._header("SOIL")
+        if self._soil_logger is None:
+            self._row("Not wired", 0)
+            return
+        pct = getattr(self._soil_logger, "last_percent", None)
+        raw = getattr(self._soil_logger, "last_raw", None)
+        warn_below = getattr(self._soil_logger, "warn_pct_below", None)
+        if pct is None:
+            self._row("Reading...", 0)
+        else:
+            self._row(f"Moist: {pct}%", 0)
+            self._row(f"Raw:   {raw}", 1)
+            if warn_below is not None:
+                self._row(f"Warn<{warn_below}%", 2)
+            if pct < (warn_below or 0):
+                self._row("LOW!", 3)

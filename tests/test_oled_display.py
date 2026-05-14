@@ -90,6 +90,7 @@ class TestOLEDDisplayMenuCycling:
             "system",
             "relays",
             "co2",
+            "soil",
         }
         assert set(MENUS) == expected
 
@@ -448,6 +449,59 @@ class TestOLEDDisplayAdditionalCoverage:
             call.args[0] for call in oled_display._row.call_args_list if call.args and isinstance(call.args[0], str)
         ]
         assert any(r.startswith("RAM: 25.0%") for r in ram_rows)
+
+    def test_render_soil_no_logger(self, oled_display):
+        oled_display._row = Mock()
+        oled_display._soil_logger = None
+        oled_display._render_soil()
+        oled_display._row.assert_any_call("Not wired", 0)
+
+    def test_render_soil_waiting_for_reading(self, oled_display):
+        oled_display._row = Mock()
+        sl = Mock()
+        sl.last_percent = None
+        sl.last_raw = None
+        sl.warn_pct_below = 20
+        oled_display._soil_logger = sl
+        oled_display._render_soil()
+        oled_display._row.assert_any_call("Reading...", 0)
+
+    def test_render_soil_low_moisture(self, oled_display):
+        oled_display._row = Mock()
+        sl = Mock()
+        sl.last_percent = 10
+        sl.last_raw = 800
+        sl.warn_pct_below = 20
+        oled_display._soil_logger = sl
+        oled_display._render_soil()
+        oled_display._row.assert_any_call("Moist: 10%", 0)
+        oled_display._row.assert_any_call("Raw:   800", 1)
+        oled_display._row.assert_any_call("LOW!", 3)
+
+    def test_render_co2_no_logger(self, oled_display):
+        oled_display._row = Mock()
+        oled_display._co2_logger = None
+        oled_display._render_co2()
+        oled_display._row.assert_any_call("Not wired", 0)
+
+    def test_render_co2_with_reading(self, oled_display):
+        oled_display._row = Mock()
+        cl = Mock()
+        cl.last_ppm = 850
+        cl.is_override_active = Mock(return_value=False)
+        oled_display._co2_logger = cl
+        oled_display._render_co2()
+        oled_display._row.assert_any_call("PPM: 850", 0)
+        oled_display._row.assert_any_call("Vent: off", 1)
+
+    def test_render_co2_override_active(self, oled_display):
+        oled_display._row = Mock()
+        cl = Mock()
+        cl.last_ppm = 1500
+        cl.is_override_active = Mock(return_value=True)
+        oled_display._co2_logger = cl
+        oled_display._render_co2()
+        oled_display._row.assert_any_call("Vent: ON", 1)
 
 
 # ---------------------------------------------------------------------------

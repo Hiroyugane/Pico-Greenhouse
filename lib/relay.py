@@ -335,13 +335,17 @@ class GrowlightController(RelayController):
         sunset_hour=None,
         sunset_minute=None,
         poll_interval_s: int = 60,
+        dac=None,
+        default_level_pct: int = 100,
+        max_level_pct: int = 100,
+        min_level_pct: int = 0,
         name=None,
     ):
         """
-        Initialize GrowlightController with schedule.
+        Initialize GrowlightController with schedule and optional DAC dimming.
 
         Args:
-            pin (int): GPIO pin for relay
+            pin (int): GPIO pin for relay (master switch)
             time_provider: TimeProvider instance
             logger: EventLogger instance
             dawn_hour (int): Hour to turn ON (0-23)
@@ -349,6 +353,11 @@ class GrowlightController(RelayController):
             sunset_hour (int): Hour to turn OFF (0-23)
             sunset_minute (int): Minute to turn OFF (0-59)
             poll_interval_s (int): Schedule check interval in seconds (default: 60)
+            dac: Optional MCP4725 (or compatible) for brightness control.
+                When None, behaves as a plain relay (legacy mode).
+            default_level_pct (int): Brightness applied by turn_on() (0-100)
+            max_level_pct (int): Hardware-safe ceiling (clamps set_level)
+            min_level_pct (int): Below this, set_level snaps to 0 (relay off)
             name (str, optional): Relay name
         """
         super().__init__(pin, invert=True, name=name or f"Growlight_{pin}", logger=logger)
@@ -356,6 +365,11 @@ class GrowlightController(RelayController):
         self.time_provider = time_provider
         self.logger = logger
         self.poll_interval_s = poll_interval_s
+        self.dac = dac
+        self.default_level_pct = default_level_pct
+        self.max_level_pct = max_level_pct
+        self.min_level_pct = min_level_pct
+        self.current_level_pct = 0
 
         # If dawn/sunset not provided, derive from sunrise_sunset() for today
         if dawn_hour is None or dawn_minute is None or sunset_hour is None or sunset_minute is None:
@@ -408,6 +422,52 @@ class GrowlightController(RelayController):
             sunset_m=sunset_minute,
             poll_interval_s=poll_interval_s,
         )
+
+    def set_level(self, pct: int) -> None:
+        """
+        Set brightness as a percentage 0-100. Drives the relay and DAC together.
+
+        - pct == 0 (or below min_level_pct): relay OFF, DAC = 0
+        - pct in [min_level_pct, max_level_pct]: relay ON, DAC = scaled
+        - pct > max_level_pct: clamped down to max_level_pct
+        """
+        if pct < 0:
+            pct = 0
+        if pct > self.max_level_pct:
+            pct = self.max_level_pct
+        if pct < self.min_level_pct:
+            pct = 0
+
+        # Push DAC value first so the analog level settles before the
+        # relay closes — avoids a brief full-brightness flash on rising edges.
+        dac_value = int(pct * 4095 / 100)
+        if self.dac is not None:
+            try:
+                self.dac.write(dac_value)
+            except Exception as e:
+                self.logger.error("GrowlightController", f"{self.name} DAC write failed: {e}")
+
+        if pct == 0:
+            super().turn_off()
+        else:
+            super().turn_on()
+        self.current_level_pct = pct
+
+    def turn_on(self) -> None:
+        """Apply default_level_pct via the dimming path."""
+        if self.dac is None:
+            super().turn_on()
+            self.current_level_pct = 100
+        else:
+            self.set_level(self.default_level_pct)
+
+    def turn_off(self) -> None:
+        """Drop brightness to 0 and open the relay."""
+        if self.dac is None:
+            super().turn_off()
+            self.current_level_pct = 0
+        else:
+            self.set_level(0)
 
     async def start_scheduler(self) -> None:
         """

@@ -5,6 +5,24 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-14 · Configurability rule
+
+### decision · Added `.claude/rules/ecc/common/configurability.md` as a load-bearing rule
+
+Policy: every tunable behavior value (pins, intervals, thresholds,
+timeouts, retry counts, buffer sizes, feature toggles, paths,
+freq/duty/brightness defaults) MUST go through `DEVICE_CONFIG` in
+[config.py](../../config.py), with a matching `validate_config()`
+entry and a row in [tests/test_config.py](../../tests/test_config.py),
+landing in the same commit. Pure algorithmic constants stay inline.
+Escape hatch is a `# fixed: <reason>` comment above the literal —
+the only acceptable form of hardcoded tunable. Consumers in `lib/`
+receive values via DI from [main.py](../../main.py) and don't import
+`DEVICE_CONFIG`. Chose "any tunable behavior value" as the trigger
+(strictest reasonable bar without forcing math constants into the
+dict) so the field can be retuned without touching logic, matching
+the project's embedded long-life profile.
+
 ## 2026-05-14 · PCB ↔ codebase gap analysis
 
 ### note · Full netlist walk produced a per-peripheral implementation plan

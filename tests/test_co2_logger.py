@@ -3,7 +3,7 @@
 # BufferManager plumbing, hysteresis-driven override flag.
 
 import asyncio
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -214,20 +214,22 @@ class TestLogLoop:
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
             asyncio.run(runner())
 
-    def test_warmup_window_swallows_initial_failures(self, co2_logger, fake_uart, mock_event_logger):
-        """During warmup, missed reads log as debug/info, not error."""
-        # No frame injected → first poll fails
-        async def runner():
-            with patch("asyncio.sleep", side_effect=RuntimeError("stop")):
-                try:
-                    await co2_logger.log_loop()
-                except RuntimeError:
-                    pass
-
+    def test_warmup_window_swallows_initial_failures(self, co2_logger, mock_event_logger):
+        """During warmup, missed reads log as debug, not warning/error."""
+        # No frame injected — poll will find no data
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            asyncio.run(runner())
-        # No error-level log expected during warmup
-        assert not any(call.args[0] == "CO2Logger" for call in mock_event_logger.error.call_args_list)
+            asyncio.run(co2_logger._poll_once())
+        # No warning/error expected while in warmup window
+        assert mock_event_logger.warning.call_count == 0
+        assert mock_event_logger.error.call_count == 0
+
+    def test_after_warmup_failure_logs_warning(self, co2_logger, mock_event_logger):
+        """Past the warmup window, a missed read escalates to warning."""
+        # Force out-of-warmup by backdating _started_ms
+        co2_logger._started_ms -= (co2_logger.warmup_s + 1) * 1000
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            asyncio.run(co2_logger._poll_once())
+        assert mock_event_logger.warning.call_count >= 1
 
 
 class TestFilenameRollover:

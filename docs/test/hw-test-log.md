@@ -5,6 +5,65 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-15 · Relay diagnostic tool — investigate random boot behavior
+
+**Branch:** `main`
+**Why hardware-only:** the symptom is "relay behavior seems random,
+especially when restarting" — only a physical bench run can verify
+which relays click on at boot, whether any latch oddly, and whether
+the all-on phase triggers a brownout. `pytest` can't observe the
+relay coils or the module's power rail.
+**Pre-flight:** Pico powered, full relay board connected through
+REL_CON, 5V supply to the relay module verified. No actuators (fans,
+grow light) need to be plugged into the relay outputs — listening
+for the click and watching the indicator LEDs is sufficient.
+
+### Pre-bring-up: upload script
+
+- [ ] `tools/relay_diag.py` uploaded to Pico via Thonny.
+- [ ] Run it standalone (not via `main.py`).
+
+### Phase 1 — float-state probe
+
+- [ ] Note which GPIOs report `raw=0` in the printout — those are
+  the lines floating LOW at boot and most likely the cause of the
+  "random click on restart" symptom.
+- [ ] Record observations next to each GP line below for the
+  follow-up.
+
+### Phase 2 — drive all HIGH
+
+- [ ] All relay module indicator LEDs go dark (or stay dark) after
+  the phase-2 banner prints.
+
+### Phase 3 — per-relay sweep
+
+- [ ] GP18 fan_1     — single click on, single click off, no
+  neighbour activity.
+- [ ] GP19 fan_2     — same.
+- [ ] GP20 growlight — same.
+- [ ] GP21 reserved_1 — same.
+- [ ] GP22 reserved_2 — same.
+- [ ] GP26 reserved_3 — same.
+- [ ] GP27 reserved_4 — same.
+
+### Phase 4 — all-on stress
+
+- [ ] All 7 LEDs energize together. No Pico reset, no brownout
+  re-enumeration on USB, no spurious extra clicks during the 2s
+  window.
+
+### Phase 5 — settle
+
+- [ ] All relays off at end. Tree left clean.
+
+### Notes (post-test)
+
+> Fill in here. Flag any pin that floats LOW, any relay that fails
+> to switch, any neighbour-activity (one channel's transition causing
+> another to twitch — points at shared-rail or trace coupling), and
+> whether the all-on stress holds the rail.
+
 ## 2026-05-15 · Capacitive soil sensor replacement bring-up
 
 **Branch:** `main`

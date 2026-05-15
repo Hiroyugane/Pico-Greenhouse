@@ -5,6 +5,31 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-15 · Relay diagnostic tool added
+
+### issue · relays behave randomly across restarts — needs bench probe
+
+User reports the 8-channel relay board behaves erratically, especially
+after a reset. Added [tools/relay_diag.py](../../tools/relay_diag.py)
+as a standalone MicroPython script that bypasses `lib/relay.py`,
+config, and DI. It probes each of the 7 wired relay GPIOs in input
+mode first (to capture float-state at boot — the most likely cause
+of "clicks on at restart" with an active-low module), then drives
+each HIGH, sweeps one at a time, runs an all-on stress, and leaves
+everything off. Eyes-on checklist filed in
+[docs/test/hw-test-log.md](../test/hw-test-log.md). The 8th relay
+channel on REL_CON is intentionally unwired on this PCB — only 7
+GPIO control lines exist (REL_CON pins 2-8).
+
+### note · diag-script dwell/gap timings stay inline, not in DEVICE_CONFIG
+
+`DWELL_S`, `GAP_S`, `STRESS_S` in the diag script are named constants
+at the top of the file rather than `DEVICE_CONFIG` entries, because
+this tool is a one-off bench utility run standalone via Thonny —
+the [configurability.md](../../.claude/rules/ecc/common/configurability.md)
+rule targets the runtime path, not tooling. Adjust by editing the
+script.
+
 ## 2026-05-15 · Capacitive soil sensor unresponsive — NE555 unit, replace
 
 ### decision · require TLC555/7555-class chip; this unit was dead

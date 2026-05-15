@@ -582,6 +582,9 @@ async def main():
                 stats_window_s=display_config.get("stats_window_s", 3600),
                 menu_timeout_s=display_config.get("menu_timeout_s", 30),
                 display_timeout_s=display_config.get("display_timeout_s", 120),
+                startup_banner_s=display_config.get("startup_banner_s", 2.0),
+                vram_clear_delay_s=display_config.get("vram_clear_delay_s", 0.05),
+                invert_delay_s=display_config.get("invert_delay_s", 0.1),
             )
             wdt.feed()  # Feed after OLED init
             logger.info("MAIN", f"OLED display initialized (on={oled.display_on})")

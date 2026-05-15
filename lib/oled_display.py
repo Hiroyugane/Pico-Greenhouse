@@ -85,6 +85,9 @@ class OLEDDisplay:
         stats_window_s: int = 3600,
         menu_timeout_s: int = 30,
         display_timeout_s: int = 120,
+        startup_banner_s: float = 2.0,
+        vram_clear_delay_s: float = 0.05,
+        invert_delay_s: float = 0.1,
         co2_logger=None,
         soil_logger=None,
     ):
@@ -109,6 +112,9 @@ class OLEDDisplay:
         self._menu_timeout_s = menu_timeout_s
         self._display_timeout_s = display_timeout_s
         self._menu_timeout_s = menu_timeout_s
+        self._startup_banner_s = startup_banner_s
+        self._vram_clear_delay_s = vram_clear_delay_s
+        self._invert_delay_s = invert_delay_s
 
         self.current_menu: int = 0
         self.display_on: bool = False
@@ -132,27 +138,32 @@ class OLEDDisplay:
             for _ in range(3):  # Triple-clear to ensure VRAM is zeroed
                 self._oled.fill(0)
                 self._oled.show()
-                time.sleep(0.05)
+                if self._vram_clear_delay_s:
+                    time.sleep(self._vram_clear_delay_s)
 
             # Force display refresh by inverting and reverting
             self._oled.invert(1)
             self._oled.show()
-            time.sleep(0.05)
+            if self._vram_clear_delay_s:
+                time.sleep(self._vram_clear_delay_s)
             self._oled.invert(0)
             self._oled.show()
-            time.sleep(0.1)
+            if self._invert_delay_s:
+                time.sleep(self._invert_delay_s)
 
             # Final clear
             self._oled.fill(0)
             self._oled.show()
-            time.sleep(0.1)
+            if self._invert_delay_s:
+                time.sleep(self._invert_delay_s)
 
             # Display startup message
             self._oled.fill(0)
             self._oled.text("Pi Greenhouse", 8, 24, 1)
             self._oled.text("Ready!", 48, 36, 1)
             self._oled.show()
-            time.sleep(2.0)  # Show startup message for 2 seconds
+            if self._startup_banner_s:
+                time.sleep(self._startup_banner_s)
 
             self.display_on = True
             if self._logger:

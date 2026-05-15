@@ -5,22 +5,21 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
-## 2026-05-15 · SD-payload software-update scaffold
+## 2026-05-15 · SD-payload software updater — implementation eyes-on
 
 **Branch:** `main`
 **Why hardware-only:** The updater rewrites flash from SD before
 `EventLogger` is up and ends in `machine.reset()`. Host tests cover
-the file/manifest/hash logic, but real SD timing, watchdog feeding
-during copies, and the post-reset clean-boot path can only be
-confirmed on the Pico. Note: `run_pending_update` is wired into
-`main.py` behind a `try/except` guard, but the implementation is a
-stub (xfailed tests pin the contract). Until the real implementation
-lands, on-device boots will print `[STARTUP] Updater raised
-(non-fatal): Updater.has_pending_update` and continue normally — the
-checks below activate once the stub is replaced.
+the file/manifest/hash logic end-to-end (15/15 passing), but real SD
+timing, watchdog feeding during copies, and the post-reset clean-boot
+path can only be confirmed on the Pico. The stub is gone; checks below
+are now live.
 **Pre-flight:** Working `/sd` mount; SD card formatted FAT32; current
 `main.py` flashed via Thonny. Pull a known-good backup of `/lib/`,
 `/main.py`, `/config.py` off the Pico before testing destructive paths.
+Build a payload via VSCode task `build-update-payload` (or
+`python tools/build_update_payload.py`) and copy it to the SD card with
+`deploy-update-to-sdcard` (or `--copy-to G:/update --no-confirm`).
 
 ### Trigger detection
 

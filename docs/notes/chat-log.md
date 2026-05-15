@@ -5,6 +5,62 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-15 · SD-payload software updater — implementation
+
+### decision · Updater promoted from scaffold to working implementation
+
+All 15 xfailed scaffold tests now drive the real `lib/updater.py`
+implementation. `has_pending_update`, `load_manifest`, `verify_payload`,
+`apply`, `finalize`, `log`, `_is_path_allowed`, `_hash_file`, and
+`run_pending_update` are functional on both host (CPython) and target
+(MicroPython). Hex digests come from `binascii.hexlify(h.digest())` for
+portability — MicroPython's `uhashlib.sha256` has no `hexdigest()`.
+
+### decision · Apply target lives on a module-level `_FLASH_ROOT`
+
+`apply()` writes verified files under `lib.updater._FLASH_ROOT` (default
+`"/"` on the Pico). Tests monkeypatch this to a `tmp_path` so the host
+flow can run end-to-end without touching real flash. Keeping it as a
+module global (not a constructor arg) matches the test contract from
+the scaffold round.
+
+### note · Finalize is idempotent against half-finished prior runs
+
+`finalize()` clears any stale `applied/<version>/` directory before
+renaming `update/` into place. Without this, a Pico that died between
+apply and reset would leave the previous apply's directory there and
+`os.rename` would fail on the next boot.
+
+### note · Apply-OK still resets even if finalize warns
+
+If `apply` succeeded but `finalize` raises (rare: e.g. SD pull-out
+between writing the last file and renaming the dir), the new code is
+already live on flash. `run_pending_update` logs the finalize warning,
+then still calls `machine.reset()` so the freshly-applied code boots
+clean. `/sd/update/` may still be present and would re-trigger on next
+boot, but verify would pass again (hashes match what we just wrote), so
+worst case is a redundant apply.
+
+### decision · Host helper `tools/build_update_payload.py` ships
+
+Operator workflow: `python tools/build_update_payload.py [--copy-to
+G:/update]`. Walks `main.py`, `config.py`, and `lib/*.py` excluding
+vendored drivers (`ds3231.py`, `ds2321_gen.py`, `sdcard.py`, `ssd1306.py`,
+and any `picozero*` / `sdcard-*` / `ssd1306-*` siblings). Auto-versions
+as `YYYY-MM-DD.N` bumping N when a same-day build already exists in the
+parent output dir. Round-trip verified against `Updater.verify_payload`
+on the just-built output.
+
+### note · VSCode tasks `build-update-payload` / `deploy-update-to-sdcard`
+
+Two tasks added to `.vscode/tasks.json`: `build-update-payload` writes
+into `build/update_payload/`, `deploy-update-to-sdcard` runs pytest
+first then copies to `G:/update` with `--no-confirm`. A
+`deploy-update-to-sdcard-nocheck` variant skips pytest for tight inner
+loops. `.vscode/` is gitignored, so these tasks live only on Dennis's
+working copy; the helper script itself (`tools/build_update_payload.py`)
+is committed and works standalone from the CLI.
+
 ## 2026-05-15 · SD-payload software-update scaffold
 
 ### decision · Boot-time SD-payload updater replaces lib/, main.py, config.py
@@ -54,12 +110,12 @@ real implementation lands, the same call site continues to work; the
 guard remains as the documented "updater failures must never block
 normal boot" policy.
 
-### issue · Operator tooling not in scaffold
+### issue · Operator tooling not in scaffold — RESOLVED 2026-05-15
 
 A helper (`tools/build_update_payload.py`) that walks a source tree
-and emits `manifest.json` with computed hashes is out of scope for the
-scaffold. Operator currently has to assemble the payload by hand.
-Open follow-up.
+and emits `manifest.json` with computed hashes was out of scope for
+the scaffold. It now ships in the implementation commit alongside
+VSCode tasks `build-update-payload` and `deploy-update-to-sdcard`.
 
 ## 2026-05-15 · Growlight mode flag (relay_only vs dimmed)
 

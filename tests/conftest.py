@@ -463,4 +463,7 @@ def oled_display(
         refresh_interval_s=5,
         stats_window_s=3600,
         menu_timeout_s=30,
+        startup_banner_s=0,
+        vram_clear_delay_s=0,
+        invert_delay_s=0,
     )

@@ -46,6 +46,9 @@ class TestOLEDDisplayInit:
             fans=[fan_controller],
             growlight=growlight_controller,
             logger=mock_event_logger,
+            startup_banner_s=0,
+            vram_clear_delay_s=0,
+            invert_delay_s=0,
         )
         assert display.display_on is False
 
@@ -164,6 +167,9 @@ class TestOLEDDisplayLongPressActions:
             growlight=growlight_controller,
             sd_remount_cb=None,
             logger=mock_event_logger,
+            startup_banner_s=0,
+            vram_clear_delay_s=0,
+            invert_delay_s=0,
         )
         display.current_menu = MENUS.index("sd")
         display.long_press_action()  # should not raise
@@ -309,6 +315,9 @@ class TestOLEDDisplayAdditionalCoverage:
             refresh_interval_s=5,
             stats_window_s=3600,
             menu_timeout_s=30,
+            startup_banner_s=0,
+            vram_clear_delay_s=0,
+            invert_delay_s=0,
         )
 
     def test_init_logs_with_print_when_logger_missing(

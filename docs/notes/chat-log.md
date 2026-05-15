@@ -5,6 +5,42 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-15 · Button debounce: no caps, external pull-up only (this rev)
+
+### decision · RES_BTN direct short; MEN_BTN with 10 kΩ external pull-up, no cap
+
+Bench-tested both buttons on the assembled PCB. RES_BTN (3V3_EN to GND)
+and MEN_BTN (GP9 to GND) both behaved sporadically with a 100 nF cap to
+GND; RES_BTN as a direct short worked flawlessly, and MEN_BTN works
+reliably with an external 10 kΩ pull-up to 3V3 and no cap. A 100 nF
+cap on MEN_BTN was also tried in parallel with the 10 kΩ pull-up and
+still misbehaved.
+
+Why the cap fails on 3V3_EN: that pin is the RT6150 regulator enable,
+not a logic input. It has a real on/off threshold with a deadband
+(~1.0–1.2 V). With 100 nF the line drifts up through the deadband over
+~10 ms on release, so the regulator brown-outs / restarts / oscillates
+during POR. Direct switch crosses the threshold in ns and POR is
+clean.
+
+Why the cap fails on GP9 even with a stronger pull-up: with the cap
+sitting directly across the switch (no series resistance), each
+contact closure dumps the cap instantly. The cap therefore provides no
+press-side debounce benefit, and on release the bounce can still pull
+the partly-recharged cap back to 0 V — producing extra falling edges
+*outside* the 60 ms software debounce window. Result: false "press"
+events on release. A 10 kΩ pull-up alone (no cap) leaves GP9 as a
+clean digital input that the 60 ms software debounce in
+[lib/led_button.py:142](../../lib/led_button.py#L142) handles fine.
+
+Next board revision adds a 1 kΩ series resistor between the MEN_BTN
+switch and GP9 so the canonical three-component debounce (10 kΩ
+pull-up + 1 kΩ series + 100 nF cap to GND) can be reinstated. Until
+then: caps are off the BOM for both buttons. The firmware still asks
+for `Pin.PULL_UP` internally; that's redundant with the external 10 kΩ
+but harmless — leave it for the host-shim path and so the input
+floats sanely if the external resistor is ever removed.
+
 ## 2026-05-15 · POST LED walk follows physical row order
 
 ### decision · Drive POST walk from `status_leds.walk_order`

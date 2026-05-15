@@ -183,6 +183,71 @@ class TestHardwareFactorySD:
         assert result is True
         assert factory.sd_mounted is True
 
+    def test_init_sd_reinits_spi_between_retries(self):
+        """Each failed mount attempt must deinit + reinit SPI before the next try."""
+        import lib.hardware_factory as hf_mod
+        from lib.hardware_factory import HardwareFactory
+
+        factory = HardwareFactory()
+        first_spi = Mock()
+        factory.spi = first_spi
+
+        reinit_count = {"n": 0}
+        original_reinit = factory._reinit_spi
+
+        def _spy_reinit():
+            reinit_count["n"] += 1
+            # Hand back a fresh Mock to simulate a real SPI() return.
+            factory.spi = Mock()
+            # Don't actually call SPI() inside _init_spi — keep the test pure.
+            return None
+
+        with patch.object(hf_mod, "_IS_HOST", False):
+            with patch.object(factory, "_reinit_spi", side_effect=_spy_reinit):
+                with patch(
+                    "lib.hardware_factory.mount_sd",
+                    side_effect=[(False, None), (False, None), (True, Mock())],
+                ):
+                    with patch("time.sleep_ms"):
+                        result = factory._init_sd()
+
+        assert result is True
+        # Two retries → two SPI reinits before the successful third attempt.
+        assert reinit_count["n"] == 2
+        # Last reinit replaced the original SPI instance.
+        assert factory.spi is not first_spi
+        # Silence "unused" warning on the original helper reference.
+        assert callable(original_reinit)
+
+    def test_reinit_spi_deinits_old_bus(self):
+        """_reinit_spi() calls deinit() on the existing bus before creating a new one."""
+        from lib.hardware_factory import HardwareFactory
+
+        factory = HardwareFactory()
+        old_spi = Mock()
+        old_spi.deinit = Mock()
+        factory.spi = old_spi
+
+        with patch.object(factory, "_init_spi", return_value=True) as init_mock:
+            factory._reinit_spi()
+
+        old_spi.deinit.assert_called_once()
+        init_mock.assert_called_once()
+
+    def test_reinit_spi_tolerates_deinit_failure(self):
+        """_reinit_spi() swallows deinit errors and still reinits."""
+        from lib.hardware_factory import HardwareFactory
+
+        factory = HardwareFactory()
+        bad_spi = Mock()
+        bad_spi.deinit = Mock(side_effect=OSError("bus gone"))
+        factory.spi = bad_spi
+
+        with patch.object(factory, "_init_spi", return_value=True) as init_mock:
+            factory._reinit_spi()  # must not raise
+
+        init_mock.assert_called_once()
+
     def test_init_sd_device_all_retries_fail(self):
         """Device path: all 3 mount attempts fail → returns False."""
         import lib.hardware_factory as hf_mod

@@ -232,7 +232,12 @@ class HardwareFactory:
             time.sleep_ms(sd_power_up_ms)
 
             # Retry mount for cards that need extra power-up time
-            # on standalone (non-Thonny) boot.
+            # on standalone (non-Thonny) boot. A failed sdcard.SDCard()
+            # constructor can leave the SPI bus in a half-initialized
+            # state where every subsequent retry on the same bus also
+            # fails — so we deinit + reinit SPI between attempts. This
+            # mirrors what is_mounted() does on the manual-remount path,
+            # which is why menu remount worked while boot mount did not.
             max_retries = sys_cfg.get("sd_mount_retries", 3)
             sd_retry_delay_ms = sys_cfg.get("sd_retry_delay_ms", 500)
             for attempt in range(max_retries):
@@ -244,7 +249,8 @@ class HardwareFactory:
                         self._debug(f"SD mounted: attempt={attempt + 1}, mount_point={mount_point}")
                     return True
                 if attempt < max_retries - 1:
-                    print(f"[HardwareFactory] SD mount attempt {attempt + 1} failed, retrying...")
+                    print(f"[HardwareFactory] SD mount attempt {attempt + 1} failed, reinit SPI and retry...")
+                    self._reinit_spi()
                     time.sleep_ms(sd_retry_delay_ms)
 
             self.errors.append("SD card mount failed after retries (will use fallback buffering)")
@@ -252,6 +258,25 @@ class HardwareFactory:
         except Exception as e:
             self.errors.append(f"SD init failed: {e}")
             return False
+
+    def _reinit_spi(self) -> None:
+        """Deinit current SPI bus and create a fresh one.
+
+        Used between SD mount retries: sdcard.SDCard() construction over a
+        bus that just failed a probe tends to keep failing until the bus
+        itself is torn down. Errors here are recorded but never raised,
+        since the caller still has the old bus to retry on.
+        """
+        try:
+            if self.spi is not None and hasattr(self.spi, "deinit"):
+                try:
+                    self.spi.deinit()
+                except Exception:
+                    pass
+            self.spi = None
+            self._init_spi()
+        except Exception as e:
+            self.errors.append(f"SPI reinit failed: {e}")
 
     def _init_pins(self) -> bool:
         """

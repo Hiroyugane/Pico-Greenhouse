@@ -8,8 +8,8 @@
 #
 # Outputs:
 #   - Human-readable console log (always)
-#   - JSON file on SD  at /sd/hw_probe_<timestamp>.json   (preferred)
-#   - JSON file on flash at /local/hw_probe.json           (fallback)
+#   - JSON file on SD  at /sd/diagnostics/hw_probe_<timestamp>.json   (preferred)
+#   - JSON file on flash at /local/hw_probe.json                       (fallback)
 #
 # Duration: 4–6 hours (configurable via DRIFT_HOURS below).
 # The suite is self-contained — it imports only MicroPython builtins.
@@ -1102,7 +1102,7 @@ def write_results():
     json_str = json.dumps(payload)
 
     paths_tried = []
-    for path in ["/sd/hw_probe_{}.json".format(_ts().replace(" ", "_").replace(":", "")), "/local/hw_probe.json"]:
+    for path in ["/sd/diagnostics/hw_probe_{}.json".format(_ts().replace(" ", "_").replace(":", "")), "/local/hw_probe.json"]:
         try:
             dir_path = "/".join(path.split("/")[:-1])
             if dir_path:
@@ -1138,7 +1138,7 @@ def _save_partial_results(probe_name):
     }
     try:
         json_str = json.dumps(partial_payload)
-        for path in ["/sd/hw_probe_partial.json", "/local/hw_probe_partial.json"]:
+        for path in ["/sd/diagnostics/hw_probe_partial.json", "/local/hw_probe_partial.json"]:
             try:
                 dir_path = "/".join(path.split("/")[:-1])
                 if dir_path:

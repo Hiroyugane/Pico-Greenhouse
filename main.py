@@ -179,7 +179,7 @@ async def main():
         run_pending_update(DEVICE_CONFIG, hardware, wdt)
     except Exception as e:
         # Updater failures must never block normal boot. The updater
-        # logs its own diagnostics to /sd/updates.log; live code is
+        # logs its own diagnostics to /sd/logs/updates.log; live code is
         # left in whatever state the apply loop reached.
         print(f"[STARTUP] Updater raised (non-fatal): {e}")
     wdt.feed()

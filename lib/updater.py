@@ -138,7 +138,7 @@ class Updater:
         -> finalize -> machine.reset()
 
     Attributes:
-        update_dir (str): Path operator drops payload into (e.g. /sd/update)
+        update_dir (str): Path operator drops payload into (e.g. /sd/ota/pending)
         applied_dir (str): Path successful payloads are renamed under
         log_path (str): Append-only history file path
         allowed_paths (list[str]): Whitelist; entries are either exact file
@@ -469,7 +469,7 @@ def run_pending_update(config, hardware, wdt=None):
         # Apply already succeeded; finalize failure leaves the trigger in
         # place but the new code is live. Log it and proceed to reset so
         # the next boot sees applied code; the operator can clean up
-        # /sd/update manually.
+        # /sd/ota/pending manually.
         updater.log("apply_ok", version, detail="finalize warn: %s" % str(e)[:200])
     else:
         updater.log("apply_ok", version, detail="files=%d" % len(manifest.get("files", [])))

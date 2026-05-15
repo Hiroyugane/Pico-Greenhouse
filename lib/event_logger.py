@@ -58,7 +58,7 @@ class EventLogger:
         self,
         time_provider,
         buffer_manager,
-        logfile="/sd/system.log",
+        logfile="/sd/logs/system.log",
         max_size=50000,
         debug_max_size=25000,
         status_manager=None,
@@ -78,7 +78,7 @@ class EventLogger:
         Args:
             time_provider: TimeProvider instance for timestamps
             buffer_manager: BufferManager instance for writes
-            logfile (str): Path to log file (default: '/sd/system.log')
+            logfile (str): Path to log file (default: '/sd/logs/system.log')
             max_size (int): Max log size before rotation in bytes (default: 50000)
             debug_max_size (int): Rotation threshold used instead of max_size when debug_to_file=True
                 (default: 25000 — debug spam fills the log faster so rotate sooner)

@@ -38,6 +38,7 @@ import uasyncio as asyncio
 from machine import ADC, UART, WDT, Pin
 
 from config import DEVICE_CONFIG, validate_config
+from lib import boot_log
 from lib.buffer_manager import BufferManager
 from lib.buzzer import BuzzerController
 from lib.co2_logger import CO2Logger
@@ -176,6 +177,17 @@ async def main():
     device_mode = DEVICE_CONFIG["mode"]
     is_plant_mode = device_mode == "plant"
     print(f"[STARTUP] Operating mode: {device_mode}")
+
+    # Configure boot_log so HardwareFactory tees its SD diagnostics into
+    # /boot.log (or the configured path). Each boot truncates this file
+    # on first write, so reading it after a reset shows the most recent
+    # boot's diagnostics only — perfect for the require_sd_startup
+    # reset-loop case where the operator never sees USB serial.
+    _sys_cfg = DEVICE_CONFIG.get("system", {})
+    boot_log.configure(
+        path=_sys_cfg.get("boot_log_path", "/boot.log"),
+        max_bytes=int(_sys_cfg.get("boot_log_max_kb", 10)) * 1024,
+    )
 
     # Step 1b: Initialize watchdog timer (early, before any other hardware)
     # If the system freezes during init or runtime, the watchdog will reset it.

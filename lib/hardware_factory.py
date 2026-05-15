@@ -16,7 +16,7 @@ import time
 from machine import I2C, SPI, Pin
 
 from config import DEVICE_CONFIG
-from lib import ds3231
+from lib import boot_log, ds3231
 from lib.sd_integration import is_mounted, mount_sd
 
 # Patchable flag: False when running on the Pico, True on host/CPython.
@@ -75,13 +75,19 @@ class HardwareFactory:
         self._logger = logger
 
     def _debug(self, message: str, **fields) -> None:
-        """Emit debug message via logger, debug_callback, or print."""
+        """Emit debug message via logger, debug_callback, or boot_log.
+
+        Pre-EventLogger boot path tees through ``lib.boot_log.log`` so
+        the same diagnostics that go to USB serial are captured on
+        internal flash — readable over USB MSC after a reset, which
+        is the only way the operator can see them when standalone.
+        """
         if self._logger:
             self._logger.debug("HWFactory", message, **fields)
         elif self._debug_callback:
             self._debug_callback(message)
         else:
-            print(f"[HardwareFactory][DEBUG] {message}")
+            boot_log.log(f"[HardwareFactory][DEBUG] {message}")
 
     def setup(self) -> bool:
         """
@@ -246,7 +252,7 @@ class HardwareFactory:
             max_retries = sys_cfg.get("sd_mount_retries", 3)
             sd_retry_delay_ms = sys_cfg.get("sd_retry_delay_ms", 500)
             for attempt in range(max_retries):
-                print(f"[HardwareFactory] SD mount attempt {attempt + 1}/{max_retries}...")
+                boot_log.log(f"[HardwareFactory] SD mount attempt {attempt + 1}/{max_retries}...")
                 ok, sd = mount_sd(self.spi, cs, mount_point, debug_callback=self._debug)
                 if ok:
                     self.sd = sd
@@ -255,7 +261,9 @@ class HardwareFactory:
                         self._debug(f"SD mounted: attempt={attempt + 1}, mount_point={mount_point}")
                     return True
                 if attempt < max_retries - 1:
-                    print(f"[HardwareFactory] SD mount attempt {attempt + 1} failed, reset SPI/mount and retry...")
+                    boot_log.log(
+                        f"[HardwareFactory] SD mount attempt {attempt + 1} failed, reset SPI/mount and retry..."
+                    )
                     self._safe_umount(mount_point)
                     self._reinit_spi()
                     self._wdt_feed()
@@ -268,7 +276,7 @@ class HardwareFactory:
             # the card needs more total elapsed time than the retry loop
             # above gave it — running the menu's mount path here, after
             # whatever extra time the retries consumed, often succeeds.
-            print("[HardwareFactory] All mount_sd attempts failed; trying is_mounted fallback")
+            boot_log.log("[HardwareFactory] All mount_sd attempts failed; trying is_mounted fallback")
             self._safe_umount(mount_point)
             self._reinit_spi()
             self._wdt_feed()
@@ -279,7 +287,7 @@ class HardwareFactory:
                     self.sd = result[1]
                     self.spi = result[2] or self.spi
                     self.sd_mounted = True
-                    print("[HardwareFactory] SD mounted via is_mounted fallback")
+                    boot_log.log("[HardwareFactory] SD mounted via is_mounted fallback")
                     return True
             except Exception as e:
                 self.errors.append(f"is_mounted fallback raised: {e}")

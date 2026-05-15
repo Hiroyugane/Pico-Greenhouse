@@ -325,6 +325,31 @@ class TestHardwareFactorySD:
 
         assert result is True
 
+    def test_init_sd_writes_diagnostics_to_boot_log(self, tmp_path, monkeypatch):
+        """SD mount progress lines land in /boot.log (or configured path)."""
+        import lib.hardware_factory as hf_mod
+        from lib import boot_log
+        from lib.hardware_factory import HardwareFactory
+
+        boot_log._reset_for_test()
+        log_file = tmp_path / "boot.log"
+        monkeypatch.setattr(boot_log, "_path", str(log_file))
+        monkeypatch.setattr(boot_log, "_max_bytes", 4096)
+
+        factory = HardwareFactory()
+        factory.spi = Mock()
+
+        with patch.object(hf_mod, "_IS_HOST", False):
+            with patch("lib.hardware_factory.mount_sd", return_value=(False, None)):
+                with patch("lib.hardware_factory.is_mounted", return_value=(False, None, None)):
+                    with patch("time.sleep_ms"):
+                        factory._init_sd()
+
+        boot_log._reset_for_test()
+        contents = log_file.read_text()
+        assert "SD mount attempt 1/3" in contents
+        assert "All mount_sd attempts failed; trying is_mounted fallback" in contents
+
     def test_init_sd_device_exception(self):
         """Device path: exception during SD init → returns False."""
         import lib.hardware_factory as hf_mod

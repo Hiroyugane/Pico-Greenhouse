@@ -16,6 +16,7 @@ class TestConfigStructure:
             "pins",
             "spi",
             "files",
+            "paths",
             "sht31",
             "temp_humidity_logger",
             "fan_1",
@@ -150,6 +151,45 @@ class TestValidateConfig:
                 config.validate_config()
         finally:
             config.DEVICE_CONFIG["updater"]["update_dir"] = original
+
+    def test_paths_section_present_and_under_sd(self):
+        """All paths.* live under the SPI mount point."""
+        from config import DEVICE_CONFIG
+
+        sd_mount = DEVICE_CONFIG["spi"]["mount_point"]
+        for key in (
+            "sensor_root",
+            "logs_dir",
+            "ota_pending_dir",
+            "ota_applied_dir",
+            "diagnostics_dir",
+        ):
+            value = DEVICE_CONFIG["paths"][key]
+            assert value.startswith(sd_mount), f"paths.{key}={value!r} not under {sd_mount}"
+
+    def test_paths_relative_value_raises(self):
+        """A non-absolute paths.* entry is rejected."""
+        import config
+
+        original = config.DEVICE_CONFIG["paths"]["sensor_root"]
+        config.DEVICE_CONFIG["paths"]["sensor_root"] = "sensors"
+        try:
+            with pytest.raises(ValueError, match="paths.sensor_root"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["paths"]["sensor_root"] = original
+
+    def test_paths_outside_sd_mount_raises(self):
+        """A paths.* entry outside the SPI mount point is rejected."""
+        import config
+
+        original = config.DEVICE_CONFIG["paths"]["logs_dir"]
+        config.DEVICE_CONFIG["paths"]["logs_dir"] = "/local/logs"
+        try:
+            with pytest.raises(ValueError, match="paths.logs_dir"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["paths"]["logs_dir"] = original
 
     def test_updater_zero_retries_raises(self):
         """updater.max_retries < 1 raises ValueError."""

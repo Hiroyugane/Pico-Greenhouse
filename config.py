@@ -105,6 +105,17 @@ DEVICE_CONFIG = {
         "system_log": "/sd/system.log",
         "fallback_path": "/local/fallback.csv",  # Fallback when SD unavailable
     },
+    # SD card directory layout. Sensor-first tree under sensor_root keeps
+    # one folder per sensor type and one subfolder per year, so adding a
+    # new sensor only needs a new key here — no logger code changes.
+    # Final sensor file path: <sensor_root>/<type>/YYYY/<type>_YYYY-MM-DD.csv
+    "paths": {
+        "sensor_root": "/sd/sensors",
+        "logs_dir": "/sd/logs",
+        "ota_pending_dir": "/sd/ota/pending",
+        "ota_applied_dir": "/sd/ota/applied",
+        "diagnostics_dir": "/sd/diagnostics",
+    },
     # SHT31-D temperature/humidity sensor (shared I2C0 bus, alongside RTC,
     # OLED and MCP4725 DAC). ADDR pin tied to GND = 0x44; tied to VCC = 0x45.
     "sht31": {
@@ -434,6 +445,13 @@ def validate_config():
         ],
         "spi": ["id", "baudrate", "sck", "mosi", "miso", "cs", "mount_point"],
         "files": ["th_log_base", "system_log", "fallback_path"],
+        "paths": [
+            "sensor_root",
+            "logs_dir",
+            "ota_pending_dir",
+            "ota_applied_dir",
+            "diagnostics_dir",
+        ],
         "sht31": ["i2c_address"],
         "temp_humidity_logger": ["interval_s", "max_retries", "max_buffer_size", "retry_delay_s"],
         "fan_1": [
@@ -789,6 +807,24 @@ def validate_config():
             raise ValueError(
                 f"status_leds.walk_order entries must be one of {valid_walk_roles}"
             )
+
+    # Validate paths section: every entry must be a non-empty absolute path.
+    # All five live on the SD card, so each must start with the SPI mount
+    # point ('/sd' by default) — catches typos like 'sd/sensors' early.
+    paths_cfg = DEVICE_CONFIG["paths"]
+    sd_mount = DEVICE_CONFIG["spi"]["mount_point"].rstrip("/") or "/sd"
+    for path_key in (
+        "sensor_root",
+        "logs_dir",
+        "ota_pending_dir",
+        "ota_applied_dir",
+        "diagnostics_dir",
+    ):
+        v = paths_cfg[path_key]
+        if not isinstance(v, str) or not v.startswith("/"):
+            raise ValueError(f"paths.{path_key} must be an absolute path string")
+        if not (v == sd_mount or v.startswith(sd_mount + "/")):
+            raise ValueError(f"paths.{path_key} must live under {sd_mount}")
 
     # Validate updater configuration
     upd_cfg = DEVICE_CONFIG["updater"]

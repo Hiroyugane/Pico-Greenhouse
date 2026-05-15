@@ -46,7 +46,7 @@ class HardwareFactory:
         errors (list): Errors encountered during initialization
     """
 
-    def __init__(self, config=None, debug_callback=None):
+    def __init__(self, config=None, debug_callback=None, wdt=None):
         """
         Initialize hardware factory with configuration.
 
@@ -55,6 +55,8 @@ class HardwareFactory:
         Args:
             config (dict, optional): Device configuration (default: DEVICE_CONFIG from config.py)
             debug_callback: Optional callable(msg) for debug output (pre-logger)
+            wdt: Optional WDT instance, fed between SD mount retries so a
+                long total mount-wait does not trip the watchdog
         """
         self.config = config or DEVICE_CONFIG
         self.i2c1 = None
@@ -66,6 +68,7 @@ class HardwareFactory:
         self.errors = []
         self._debug_callback = debug_callback
         self._logger = None
+        self._wdt = wdt
 
     def set_logger(self, logger) -> None:
         """Attach an EventLogger for debug diagnostics (wired after EventLogger creation)."""
@@ -230,17 +233,20 @@ class HardwareFactory:
             sys_cfg = self.config.get("system", {})
             sd_power_up_ms = sys_cfg.get("sd_power_up_ms", 250)
             time.sleep_ms(sd_power_up_ms)
+            self._wdt_feed()
 
             # Retry mount for cards that need extra power-up time
             # on standalone (non-Thonny) boot. A failed sdcard.SDCard()
-            # constructor can leave the SPI bus in a half-initialized
-            # state where every subsequent retry on the same bus also
-            # fails — so we deinit + reinit SPI between attempts. This
-            # mirrors what is_mounted() does on the manual-remount path,
-            # which is why menu remount worked while boot mount did not.
+            # constructor can leave the SPI bus AND the mount point
+            # half-initialized — so we deinit + reinit SPI and umount
+            # between attempts. This mirrors what is_mounted() does on
+            # the manual-remount path. We feed the WDT inside the loop
+            # so a long total wait doesn't trip the watchdog before the
+            # card has had a chance to settle.
             max_retries = sys_cfg.get("sd_mount_retries", 3)
             sd_retry_delay_ms = sys_cfg.get("sd_retry_delay_ms", 500)
             for attempt in range(max_retries):
+                print(f"[HardwareFactory] SD mount attempt {attempt + 1}/{max_retries}...")
                 ok, sd = mount_sd(self.spi, cs, mount_point, debug_callback=self._debug)
                 if ok:
                     self.sd = sd
@@ -249,9 +255,34 @@ class HardwareFactory:
                         self._debug(f"SD mounted: attempt={attempt + 1}, mount_point={mount_point}")
                     return True
                 if attempt < max_retries - 1:
-                    print(f"[HardwareFactory] SD mount attempt {attempt + 1} failed, reinit SPI and retry...")
+                    print(f"[HardwareFactory] SD mount attempt {attempt + 1} failed, reset SPI/mount and retry...")
+                    self._safe_umount(mount_point)
                     self._reinit_spi()
+                    self._wdt_feed()
                     time.sleep_ms(sd_retry_delay_ms)
+
+            # Last-ditch fallback: try the same code path the menu uses
+            # (lib.sd_integration.is_mounted with sd=None creates a fresh
+            # SDCard via its own _init_sd_local). When the user can mount
+            # via menu but boot mount has failed, it's typically because
+            # the card needs more total elapsed time than the retry loop
+            # above gave it — running the menu's mount path here, after
+            # whatever extra time the retries consumed, often succeeds.
+            print("[HardwareFactory] All mount_sd attempts failed; trying is_mounted fallback")
+            self._safe_umount(mount_point)
+            self._reinit_spi()
+            self._wdt_feed()
+            time.sleep_ms(sd_retry_delay_ms)
+            try:
+                result = is_mounted(None, None, return_instances=True, debug_callback=self._debug)
+                if isinstance(result, tuple) and len(result) == 3 and result[0]:
+                    self.sd = result[1]
+                    self.spi = result[2] or self.spi
+                    self.sd_mounted = True
+                    print("[HardwareFactory] SD mounted via is_mounted fallback")
+                    return True
+            except Exception as e:
+                self.errors.append(f"is_mounted fallback raised: {e}")
 
             self.errors.append("SD card mount failed after retries (will use fallback buffering)")
             return False
@@ -277,6 +308,33 @@ class HardwareFactory:
             self._init_spi()
         except Exception as e:
             self.errors.append(f"SPI reinit failed: {e}")
+
+    @staticmethod
+    def _safe_umount(mount_point: str) -> None:
+        """Try to umount mount_point; swallow errors. Used between SD retries.
+
+        If a previous mount attempt left a half-mounted node behind, the
+        next ``os.mount()`` will hit EBUSY/EEXIST. Best-effort umount
+        clears that so the retry can proceed cleanly.
+        """
+        try:
+            os.umount(mount_point)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+    def _wdt_feed(self) -> None:
+        """Feed the injected WDT, if any. No-op otherwise.
+
+        Mount retries can stack to several seconds when the card is slow
+        to come up; without this, the watchdog would reset the Pico
+        mid-retry, masking the real mount failure.
+        """
+        if self._wdt is None:
+            return
+        try:
+            self._wdt.feed()
+        except Exception:
+            pass
 
     def _init_pins(self) -> bool:
         """

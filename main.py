@@ -195,7 +195,7 @@ async def main():
         _dbg_cb = lambda msg: print(f"[DEBUG] {msg}")  # noqa: E731
 
     wdt.feed()  # Feed before hardware init
-    hardware = HardwareFactory(DEVICE_CONFIG, debug_callback=_dbg_cb)
+    hardware = HardwareFactory(DEVICE_CONFIG, debug_callback=_dbg_cb, wdt=wdt)
     if not hardware.setup():
         print("[STARTUP ERROR] Critical hardware initialization failed (RTC)")
         hardware.print_status()

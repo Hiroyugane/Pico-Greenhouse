@@ -249,7 +249,7 @@ class TestHardwareFactorySD:
         init_mock.assert_called_once()
 
     def test_init_sd_device_all_retries_fail(self):
-        """Device path: all 3 mount attempts fail → returns False."""
+        """Device path: 3 mount_sd attempts fail AND is_mounted fallback fails → returns False."""
         import lib.hardware_factory as hf_mod
         from lib.hardware_factory import HardwareFactory
 
@@ -258,11 +258,72 @@ class TestHardwareFactorySD:
 
         with patch.object(hf_mod, "_IS_HOST", False):
             with patch("lib.hardware_factory.mount_sd", return_value=(False, None)):
-                with patch("time.sleep_ms"):
-                    result = factory._init_sd()
+                with patch("lib.hardware_factory.is_mounted", return_value=(False, None, None)):
+                    with patch("time.sleep_ms"):
+                        result = factory._init_sd()
 
         assert result is False
         assert any("SD card mount failed after retries" in e for e in factory.errors)
+
+    def test_init_sd_is_mounted_fallback_succeeds(self):
+        """Device path: mount_sd fails 3× but is_mounted fallback succeeds → True."""
+        import lib.hardware_factory as hf_mod
+        from lib.hardware_factory import HardwareFactory
+
+        factory = HardwareFactory()
+        factory.spi = Mock()
+
+        mock_sd = Mock()
+        mock_spi = Mock()
+        with patch.object(hf_mod, "_IS_HOST", False):
+            with patch("lib.hardware_factory.mount_sd", return_value=(False, None)) as mount_mock:
+                with patch(
+                    "lib.hardware_factory.is_mounted",
+                    return_value=(True, mock_sd, mock_spi),
+                ) as is_mounted_mock:
+                    with patch("time.sleep_ms"):
+                        result = factory._init_sd()
+
+        assert result is True
+        assert factory.sd_mounted is True
+        assert factory.sd is mock_sd
+        assert mount_mock.call_count == 3  # type: ignore[attr-defined]
+        is_mounted_mock.assert_called_once()  # type: ignore[attr-defined]
+
+    def test_init_sd_feeds_wdt_when_provided(self):
+        """Each attempt + retry pause feeds the injected WDT so a slow card doesn't trip it."""
+        import lib.hardware_factory as hf_mod
+        from lib.hardware_factory import HardwareFactory
+
+        wdt = Mock()
+        factory = HardwareFactory(wdt=wdt)
+        factory.spi = Mock()
+
+        with patch.object(hf_mod, "_IS_HOST", False):
+            with patch("lib.hardware_factory.mount_sd", side_effect=[(False, None), (True, Mock())]):
+                with patch("time.sleep_ms"):
+                    result = factory._init_sd()
+
+        assert result is True
+        # At minimum: one feed after power-up, one between retries.
+        assert wdt.feed.call_count >= 2
+
+    def test_init_sd_wdt_feed_failure_is_swallowed(self):
+        """A raising WDT.feed() inside _init_sd does not abort the mount loop."""
+        import lib.hardware_factory as hf_mod
+        from lib.hardware_factory import HardwareFactory
+
+        wdt = Mock()
+        wdt.feed.side_effect = RuntimeError("dead wdt")
+        factory = HardwareFactory(wdt=wdt)
+        factory.spi = Mock()
+
+        with patch.object(hf_mod, "_IS_HOST", False):
+            with patch("lib.hardware_factory.mount_sd", return_value=(True, Mock())):
+                with patch("time.sleep_ms"):
+                    result = factory._init_sd()
+
+        assert result is True
 
     def test_init_sd_device_exception(self):
         """Device path: exception during SD init → returns False."""

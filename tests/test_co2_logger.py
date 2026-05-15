@@ -255,3 +255,89 @@ class TestGetState:
         assert state["override_active"] is False
         assert state["override_ppm_on"] == 1000
         assert state["override_ppm_off"] == 800
+
+
+class TestErrorPaths:
+    """Cover the failure branches that log errors but keep the loop alive."""
+
+    def _run(self, coro):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            return asyncio.run(coro)
+
+    def test_update_override_none_is_noop(self, co2_logger):
+        # parse_frame returning None hits this branch
+        assert co2_logger.is_override_active() is False
+        co2_logger._update_override(None)
+        assert co2_logger.is_override_active() is False
+
+    def test_uart_write_failure_increments_read_failures(self, co2_logger, fake_uart, mock_event_logger):
+        fake_uart.write = MagicMock(side_effect=OSError("uart down"))
+        self._run(co2_logger._poll_once())
+        assert co2_logger.read_failures >= 1
+        assert mock_event_logger.error.called
+
+    def test_uart_read_attempt_exception_is_logged_as_debug(self, co2_logger, fake_uart, mock_event_logger):
+        """Mid-retry exceptions are swallowed and logged at debug level."""
+
+        def _raising_any():
+            raise OSError("intermittent")
+
+        fake_uart.any = MagicMock(side_effect=_raising_any)
+        self._run(co2_logger._poll_once())
+        # No frame ever came back → read_failures bumped
+        assert co2_logger.read_failures >= 1
+        # And at least one debug log fired for the failed attempt
+        assert mock_event_logger.debug.called
+
+    def test_write_failure_increments_write_failures(self, co2_logger, fake_uart, buffer_manager, mock_event_logger):
+        fake_uart.inject(_frame(700))
+        with patch.object(buffer_manager, "write", side_effect=OSError("sd dead")):
+            self._run(co2_logger._poll_once())
+        assert co2_logger.write_failures >= 1
+        assert mock_event_logger.error.called
+
+    def test_write_queue_path_used_when_supplied(self, co2_logger, fake_uart):
+        from unittest.mock import Mock as _Mock
+
+        wq = _Mock()
+        co2_logger.write_queue = wq
+        fake_uart.inject(_frame(620))
+        self._run(co2_logger._poll_once())
+        wq.enqueue_write.assert_called_once()
+
+    def test_date_changed_exception_logged(self, co2_logger, mock_event_logger):
+        """now_date_tuple raising in _check_date_changed is caught and logged."""
+        with patch.object(co2_logger.time_provider, "now_date_tuple", side_effect=OSError("rtc")):
+            co2_logger._check_date_changed()
+        assert mock_event_logger.error.called
+
+    def test_header_write_exception_logged(self, co2_logger, buffer_manager, mock_event_logger):
+        """Header write failure is logged via error()."""
+        with patch.object(buffer_manager, "has_data_for", return_value=False):
+            with patch.object(buffer_manager, "write", side_effect=OSError("sd dead")):
+                co2_logger._ensure_header()
+        assert mock_event_logger.error.called
+
+    def test_log_loop_unexpected_error_then_cancel(self, co2_logger, mock_event_logger):
+        """An unexpected exception inside the loop body is logged at error level."""
+        call_count = {"n": 0}
+
+        async def _flaky(_):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise RuntimeError("boom")
+            raise asyncio.CancelledError
+
+        async def runner():
+            with patch("asyncio.sleep", _flaky):
+                with patch.object(co2_logger, "_poll_once", return_value=None):
+                    with pytest.raises(asyncio.CancelledError):
+                        await co2_logger.log_loop()
+
+        # Make _poll_once raise unexpectedly
+        with patch.object(co2_logger, "_poll_once", side_effect=[RuntimeError("boom"), None]):
+            with patch("asyncio.sleep", side_effect=[None, asyncio.CancelledError()]):
+                with pytest.raises(asyncio.CancelledError):
+                    with patch("time.localtime", return_value=FAKE_LOCALTIME):
+                        asyncio.run(co2_logger.log_loop())
+        assert mock_event_logger.error.called

@@ -921,3 +921,124 @@ class TestServiceReminderPersistenceErrors:
         reminder.storage_path = str(storage)
         result = reminder._load_last_serviced_timestamp()
         assert result is None
+
+
+class TestLEDButtonHandlerCoverageGaps:
+    """Targeted tests for the remaining uncovered branches in LEDButtonHandler."""
+
+    def test_register_button_callback_with_logger_logs_debug(self, mock_event_logger):
+        from lib.led_button import LEDButtonHandler
+
+        handler = LEDButtonHandler(5, 9, logger=mock_event_logger)
+        handler.register_button_callback(Mock())
+        # Debug log fires only when self._logger is present
+        debug_calls = " ".join(str(c) for c in mock_event_logger.debug.call_args_list)
+        assert "Registered legacy button callback" in debug_calls
+
+    def test_register_callbacks_with_logger_logs_debug(self, mock_event_logger):
+        from lib.led_button import LEDButtonHandler
+
+        handler = LEDButtonHandler(5, 9, logger=mock_event_logger)
+        handler.register_callbacks(short_press=Mock(), long_press=Mock())
+        debug_calls = " ".join(str(c) for c in mock_event_logger.debug.call_args_list)
+        assert "callbacks registered" in debug_calls
+
+    def test_dual_isr_press_while_already_down_ignored(self):
+        """A second FALLING edge while _button_down is True is dropped."""
+        from lib.led_button import LEDButtonHandler
+
+        handler = LEDButtonHandler(5, 9, debounce_ms=0, long_press_ms=3000)
+        handler.register_callbacks(short_press=Mock())
+        mock_pin = MagicMock()
+        mock_pin.value.return_value = 0
+        with patch("lib.led_button._ticks_ms", side_effect=[1000, 1500]):
+            handler._button_dual_isr(mock_pin)  # first press, _button_down=True
+            handler._button_dual_isr(mock_pin)  # second press ignored
+        assert handler._button_down is True
+        assert handler._press_start_time == 1000
+
+    def test_dual_isr_release_without_press_ignored(self):
+        """A RISING edge with no prior press is a no-op."""
+        from lib.led_button import LEDButtonHandler
+
+        handler = LEDButtonHandler(5, 9, debounce_ms=0, long_press_ms=3000)
+        handler.register_callbacks(short_press=Mock())
+        mock_pin = MagicMock()
+        mock_pin.value.return_value = 1
+        with patch("lib.led_button._ticks_ms", return_value=2000):
+            handler._button_dual_isr(mock_pin)
+        assert handler._pending_short is False
+        assert handler._pending_long is False
+
+    def test_dual_isr_release_bounce_skipped(self):
+        """A release shorter than debounce_ms after press is ignored."""
+        from lib.led_button import LEDButtonHandler
+
+        handler = LEDButtonHandler(5, 9, debounce_ms=100, long_press_ms=3000)
+        handler.register_callbacks(short_press=Mock())
+        mock_pin = MagicMock()
+        with patch("lib.led_button._ticks_ms", side_effect=[1000, 1050]):
+            mock_pin.value.return_value = 0
+            handler._button_dual_isr(mock_pin)  # press
+            mock_pin.value.return_value = 1
+            handler._button_dual_isr(mock_pin)  # release at 50ms < 100ms → dropped
+        # Neither flag set because 50ms < debounce_ms filter trips
+        assert handler._pending_short is False
+        assert handler._pending_long is False
+
+    def test_poll_button_dispatches_long_press(self):
+        """poll_button picks up _pending_long and invokes the long-press callback."""
+        import asyncio as _asyncio
+
+        from lib.led_button import LEDButtonHandler
+
+        handler = LEDButtonHandler(5, 9, logger=Mock())
+        long_cb = Mock()
+        handler.register_callbacks(short_press=Mock(), long_press=long_cb)
+        handler._pending_long = True
+
+        async def runner():
+            with patch("asyncio.sleep", side_effect=[None, _asyncio.CancelledError()]):
+                with pytest.raises(_asyncio.CancelledError):
+                    await handler.poll_button(interval_ms=1)
+
+        _asyncio.run(runner())
+        long_cb.assert_called_once()
+
+    def test_poll_button_long_press_callback_error_logged(self):
+        import asyncio as _asyncio
+
+        from lib.led_button import LEDButtonHandler
+
+        logger = Mock()
+        handler = LEDButtonHandler(5, 9, logger=logger)
+        handler.register_callbacks(short_press=Mock(), long_press=lambda: (_ for _ in ()).throw(RuntimeError("bad")))
+        handler._pending_long = True
+
+        async def runner():
+            with patch("asyncio.sleep", side_effect=[None, _asyncio.CancelledError()]):
+                with pytest.raises(_asyncio.CancelledError):
+                    await handler.poll_button(interval_ms=1)
+
+        _asyncio.run(runner())
+        err_msgs = " ".join(str(c) for c in logger.error.call_args_list)
+        assert "Long press callback error" in err_msgs
+
+    def test_poll_button_short_press_callback_error_logged(self):
+        import asyncio as _asyncio
+
+        from lib.led_button import LEDButtonHandler
+
+        logger = Mock()
+        handler = LEDButtonHandler(5, 9, logger=logger)
+        handler.register_callbacks(short_press=lambda: (_ for _ in ()).throw(RuntimeError("bad")))
+        handler._pending_short = True
+
+        async def runner():
+            with patch("asyncio.sleep", side_effect=[None, _asyncio.CancelledError()]):
+                with pytest.raises(_asyncio.CancelledError):
+                    await handler.poll_button(interval_ms=1)
+
+        _asyncio.run(runner())
+        err_msgs = " ".join(str(c) for c in logger.error.call_args_list)
+        assert "Short press callback error" in err_msgs

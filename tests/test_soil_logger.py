@@ -206,3 +206,100 @@ class TestPrintRaw:
             sl_mod.print_raw(pin=28)
         captured = capsys.readouterr()
         assert "742" in captured.out
+
+    def test_print_raw_without_machine_raises(self):
+        from lib import soil_logger as sl_mod
+
+        with patch.object(sl_mod, "machine", None, create=True):
+            with pytest.raises(RuntimeError, match="machine module"):
+                sl_mod.print_raw()
+
+
+class TestU16Helpers:
+    """Cover _u16_to_raw10 clamp paths."""
+
+    def test_u16_below_zero_clamps_to_zero(self):
+        from lib.soil_logger import _u16_to_raw10
+
+        assert _u16_to_raw10(-1) == 0
+
+    def test_u16_above_max_clamps_to_raw10_max(self):
+        from lib.soil_logger import _u16_to_raw10
+
+        assert _u16_to_raw10(99999) == 1023
+
+
+class TestInitValidation:
+    def test_bad_endpoints_raise(self, time_provider, buffer_manager, mock_event_logger, fake_adc):
+        from lib.soil_logger import SoilLogger
+
+        with pytest.raises(ValueError, match="adc_dry_raw"):
+            SoilLogger(
+                adc=fake_adc,
+                time_provider=time_provider,
+                buffer_manager=buffer_manager,
+                logger=mock_event_logger,
+                adc_dry_raw=300,
+                adc_wet_raw=400,
+            )
+
+
+class TestErrorPaths:
+    def _run(self, coro):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            return asyncio.run(coro)
+
+    def test_adc_read_failure_logs_error(self, soil_logger, fake_adc, mock_event_logger):
+        fake_adc.read_u16 = lambda: (_ for _ in ()).throw(OSError("adc dead"))
+        self._run(soil_logger._poll_once())
+        assert soil_logger.read_failures == 1
+        assert mock_event_logger.error.called
+
+    def test_write_failure_logs_error(self, soil_logger, fake_adc, buffer_manager, mock_event_logger):
+        fake_adc.value_u16 = _raw10_to_u16(600)
+        with patch.object(buffer_manager, "write", side_effect=OSError("sd dead")):
+            self._run(soil_logger._poll_once())
+        assert soil_logger.write_failures == 1
+
+    def test_write_queue_path_used_when_supplied(self, soil_logger, fake_adc):
+        from unittest.mock import Mock as _Mock
+
+        wq = _Mock()
+        soil_logger.write_queue = wq
+        fake_adc.value_u16 = _raw10_to_u16(500)
+        self._run(soil_logger._poll_once())
+        wq.enqueue_write.assert_called_once()
+
+    def test_date_check_exception_logged(self, soil_logger, mock_event_logger):
+        with patch.object(soil_logger.time_provider, "now_date_tuple", side_effect=OSError("rtc")):
+            soil_logger._check_date_changed()
+        assert mock_event_logger.error.called
+
+    def test_header_write_exception_logged(self, soil_logger, buffer_manager, mock_event_logger):
+        with patch.object(buffer_manager, "has_data_for", return_value=False):
+            with patch.object(buffer_manager, "write", side_effect=OSError("sd dead")):
+                soil_logger._ensure_header()
+        assert mock_event_logger.error.called
+
+    def test_recovery_clears_warning(self, soil_logger, fake_adc, mock_status_manager):
+        """Once warning is active, recovering above threshold clears it (warning recovered branch)."""
+        soil_logger.status_manager = mock_status_manager
+        # Below threshold: warning ON
+        fake_adc.value_u16 = _raw10_to_u16(800)
+        self._run(soil_logger._poll_once())
+        assert soil_logger._warn_active is True
+        # Above threshold: warning OFF (recovery branch)
+        fake_adc.value_u16 = _raw10_to_u16(400)
+        self._run(soil_logger._poll_once())
+        assert soil_logger._warn_active is False
+        # info recovery message logged
+        info_msgs = " ".join(str(c) for c in soil_logger.logger.info.call_args_list)
+        assert "recovered" in info_msgs
+
+    def test_log_loop_unexpected_error_continues(self, soil_logger, mock_event_logger):
+        with patch.object(soil_logger, "_poll_once", side_effect=[RuntimeError("boom"), None]):
+            with patch("asyncio.sleep", side_effect=[None, asyncio.CancelledError()]):
+                with pytest.raises(asyncio.CancelledError):
+                    with patch("time.localtime", return_value=FAKE_LOCALTIME):
+                        asyncio.run(soil_logger.log_loop())
+        assert mock_event_logger.error.called

@@ -388,3 +388,184 @@ class TestIsMounted:
         assert result[0] is False
         # The SPI created during _init_sd_local should have been deinited
         new_spi_instance.deinit.assert_called()
+
+
+class TestIsMountBusyError:
+    """Tests for the busy/errno detection helper."""
+
+    def test_message_says_busy(self):
+        from lib.sd_integration import _is_mount_busy_error
+
+        assert _is_mount_busy_error(OSError("device is BUSY")) is True
+
+    def test_message_says_already_mounted(self):
+        from lib.sd_integration import _is_mount_busy_error
+
+        assert _is_mount_busy_error(RuntimeError("already mounted at /sd")) is True
+
+    def test_errno_ebusy(self):
+        from lib.sd_integration import _is_mount_busy_error
+
+        e = OSError(16, "EBUSY")
+        assert _is_mount_busy_error(e) is True
+
+    def test_errno_eexist(self):
+        from lib.sd_integration import _is_mount_busy_error
+
+        e = OSError(17, "EEXIST")
+        assert _is_mount_busy_error(e) is True
+
+    def test_unrelated_error_is_false(self):
+        from lib.sd_integration import _is_mount_busy_error
+
+        assert _is_mount_busy_error(ValueError("totally different")) is False
+
+    def test_empty_args_is_false(self):
+        from lib.sd_integration import _is_mount_busy_error
+
+        class NoArgs(Exception):
+            args = ()
+
+        assert _is_mount_busy_error(NoArgs()) is False
+
+
+class TestProbeMountRW:
+    """Tests for _probe_mount_rw write/read/remove probe."""
+
+    def test_probe_writable_directory_returns_true(self, tmp_path):
+        from lib.sd_integration import _probe_mount_rw
+
+        assert _probe_mount_rw(str(tmp_path)) is True
+        # Probe file is cleaned up
+        assert not (tmp_path / ".probe").exists()
+
+
+class TestDebugCallbackPaths:
+    """debug_callback branches in mount_sd / is_mounted."""
+
+    def test_mount_host_debug_callback_invoked(self, tmp_path):
+        from lib.sd_integration import mount_sd
+
+        calls = []
+        ok, _ = mount_sd(None, None, str(tmp_path / "sd"), debug_callback=calls.append)
+        assert ok is True
+        assert any("Host mount simulated" in m for m in calls)
+
+    def test_mount_device_debug_callback_on_success(self):
+        import lib.sd_integration as sd_mod
+
+        mock_sdcard = MagicMock()
+        mock_sdcard.SDCard.return_value = Mock()
+        calls = []
+        with patch.object(sd_mod, "_IS_DEVICE", True):
+            with _patch_lib_sdcard(mock_sdcard):
+                with patch("os.mount", create=True):
+                    sd_mod.mount_sd(Mock(), Mock(), "/sd", debug_callback=calls.append)
+        assert any("SD mounted at /sd" in m for m in calls)
+
+    def test_mount_device_debug_callback_on_reuse(self):
+        import lib.sd_integration as sd_mod
+
+        mock_sdcard = MagicMock()
+        mock_sdcard.SDCard.return_value = Mock()
+        calls = []
+        with patch.object(sd_mod, "_IS_DEVICE", True):
+            with _patch_lib_sdcard(mock_sdcard):
+                with patch("os.mount", create=True, side_effect=OSError("busy")):
+                    with patch.object(sd_mod, "_probe_mount_rw", return_value=True):
+                        sd_mod.mount_sd(Mock(), Mock(), "/sd", debug_callback=calls.append)
+        assert any("reusing existing mount" in m for m in calls)
+
+    def test_mount_device_debug_callback_on_failure(self):
+        import lib.sd_integration as sd_mod
+
+        mock_sdcard = MagicMock()
+        mock_sdcard.SDCard.side_effect = OSError("dead")
+        calls = []
+        with patch.object(sd_mod, "_IS_DEVICE", True):
+            with _patch_lib_sdcard(mock_sdcard):
+                sd_mod.mount_sd(Mock(), Mock(), "/sd", debug_callback=calls.append)
+        assert any("mount failed" in m.lower() for m in calls)
+
+    def test_is_mounted_device_init_debug_callback(self):
+        import lib.sd_integration as sd_mod
+
+        mock_sd = Mock()
+        mock_sd.readblocks = Mock()
+        mock_sdcard_mod = MagicMock()
+        mock_sdcard_mod.SDCard.return_value = mock_sd
+        mock_machine = MagicMock()
+        mock_machine.Pin = MagicMock(return_value=Mock())
+        mock_machine.SPI = MagicMock(return_value=Mock())
+
+        cfg = {
+            "spi": {"id": 1, "baudrate": 1, "sck": 10, "mosi": 11, "miso": 12, "cs": 13, "mount_point": "/sd"}
+        }
+        calls = []
+        with patch.object(sd_mod, "_IS_DEVICE", True):
+            with _patch_lib_sdcard(mock_sdcard_mod):
+                with patch.dict(
+                    "sys.modules",
+                    {"config": MagicMock(DEVICE_CONFIG=cfg), "machine": mock_machine},
+                ):
+                    with patch("os.mount", create=True):
+                        sd_mod.is_mounted(None, None, debug_callback=calls.append)
+        assert any("created new SD/SPI" in m for m in calls)
+        assert any("MBR read OK" in m for m in calls)
+
+    def test_is_mounted_device_reinit_debug_callback(self):
+        """MBR read fails first, then succeeds — both 'MBR failed' and 'MBR read OK' fire."""
+        import lib.sd_integration as sd_mod
+
+        bad = Mock()
+        bad.readblocks = Mock(side_effect=OSError("dead"))
+        good = Mock()
+        good.readblocks = Mock()
+        mock_sdcard_mod = MagicMock()
+        mock_sdcard_mod.SDCard.return_value = good
+        mock_machine = MagicMock()
+        mock_machine.Pin = MagicMock(return_value=Mock())
+        mock_machine.SPI = MagicMock(return_value=Mock())
+
+        cfg = {
+            "spi": {"id": 1, "baudrate": 1, "sck": 10, "mosi": 11, "miso": 12, "cs": 13, "mount_point": "/sd"}
+        }
+        calls = []
+        with patch.object(sd_mod, "_IS_DEVICE", True):
+            with _patch_lib_sdcard(mock_sdcard_mod):
+                with patch.dict(
+                    "sys.modules",
+                    {"config": MagicMock(DEVICE_CONFIG=cfg), "machine": mock_machine},
+                ):
+                    with patch("os.mount", create=True):
+                        with patch("os.umount", create=True):
+                            with patch("time.sleep_ms"):
+                                sd_mod.is_mounted(bad, Mock(), debug_callback=calls.append)
+        assert any("MBR failed" in m for m in calls)
+
+    def test_is_mounted_device_busy_reuse_debug_callback(self):
+        """sd=None busy/already-mounted path with debug_callback fires reuse message."""
+        import lib.sd_integration as sd_mod
+
+        mock_sd = Mock()
+        mock_sd.readblocks = Mock()
+        mock_sdcard_mod = MagicMock()
+        mock_sdcard_mod.SDCard.return_value = mock_sd
+        mock_machine = MagicMock()
+        mock_machine.Pin = MagicMock(return_value=Mock())
+        mock_machine.SPI = MagicMock(return_value=Mock())
+
+        cfg = {
+            "spi": {"id": 1, "baudrate": 1, "sck": 10, "mosi": 11, "miso": 12, "cs": 13, "mount_point": "/sd"}
+        }
+        calls = []
+        with patch.object(sd_mod, "_IS_DEVICE", True):
+            with _patch_lib_sdcard(mock_sdcard_mod):
+                with patch.dict(
+                    "sys.modules",
+                    {"config": MagicMock(DEVICE_CONFIG=cfg), "machine": mock_machine},
+                ):
+                    with patch("os.mount", create=True, side_effect=OSError("already mounted")):
+                        with patch.object(sd_mod, "_probe_mount_rw", return_value=True):
+                            sd_mod.is_mounted(None, None, debug_callback=calls.append)
+        assert any("reusing active mount" in m for m in calls)

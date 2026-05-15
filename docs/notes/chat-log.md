@@ -5,6 +5,31 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-15 · Coverage push to 90%
+
+### decision · Bumped global coverage from 88.68% to 92.94%
+
+Added targeted tests for the lowest-covered modules so every `lib/`
+file is ≥88% individually while leaving the `pyproject.toml`
+`fail_under` gate at 88. New file `tests/test_sht31.py` covers the
+driver end-to-end (100%). Existing test files were extended:
+`test_sd_integration.py` (75 → 93%), `test_buffer_manager.py`
+(78 → 89%, including the previously-untested
+`start_fallback_prune_task` loop body), `test_co2_logger.py`
+(85 → 96%), `test_soil_logger.py` (83 → 97%), `test_led_button.py`
+(87 → 90%). 767 tests pass; the gate stays at 88 so future changes
+can absorb minor regressions without rewriting tests.
+
+### note · Async-loop test idiom for the prune task
+
+`start_fallback_prune_task` is a `while True` loop driven by
+`asyncio.sleep`. The pattern used for buffer_manager / co2_logger /
+soil_logger error-path tests: patch `asyncio.sleep` with a side-effect
+list that returns `None` once (allowing one iteration of the loop
+body) then raises `CancelledError`. Combined with `pytest.raises`
+this exercises both the body and the cancellation handler in one
+test without leaking tasks.
+
 ## 2026-05-15 · SD-payload software updater — implementation
 
 ### decision · Updater promoted from scaffold to working implementation

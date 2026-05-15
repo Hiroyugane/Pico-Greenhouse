@@ -644,3 +644,157 @@ class TestBufferManagerLogger:
         """_log_debug() does nothing when logger is None."""
         buffer_manager._logger = None
         buffer_manager._log_debug("test message")  # should not raise
+
+
+class TestBufferManagerFallbackPrune:
+    """Tests for start_fallback_prune_task() — background size-cap loop."""
+
+    def _make_bm(self, tmp_path, max_kb=1, logger=None):
+        from lib.buffer_manager import BufferManager
+
+        sd_dir = tmp_path / "sd"
+        sd_dir.mkdir()
+        return BufferManager(
+            sd_mount_point=str(sd_dir),
+            fallback_path=str(tmp_path / "local" / "fallback.csv"),
+            max_buffer_entries=100,
+            max_fallback_size_kb=max_kb,
+            logger=logger,
+        )
+
+    def _run_one_iteration(self, bm):
+        """Drive start_fallback_prune_task through exactly one iteration."""
+        import asyncio
+
+        # First sleep returns immediately; second raises to break the loop.
+        sleeps = {"n": 0}
+
+        async def _fake_sleep(_):
+            sleeps["n"] += 1
+            if sleeps["n"] > 1:
+                raise asyncio.CancelledError
+            return None
+
+        async def runner():
+            try:
+                await bm.start_fallback_prune_task(check_interval=0)
+            except asyncio.CancelledError:
+                pass
+
+        from unittest.mock import patch
+
+        with patch("asyncio.sleep", _fake_sleep):
+            asyncio.run(runner())
+
+    def test_prune_skips_when_under_limit(self, tmp_path):
+        from unittest.mock import Mock
+
+        logger = Mock()
+        bm = self._make_bm(tmp_path, max_kb=10, logger=logger)
+        # Tiny fallback content — under the 10 KB ceiling
+        bm.write("foo.csv", "small\n")  # forced via direct fallback write below
+
+        # Force a write to fallback by failing the primary path
+        import os as _os
+
+        _os.makedirs(_os.path.dirname(bm.fallback_path), exist_ok=True)
+        with open(bm.fallback_path, "w") as f:
+            f.write("foo|x\n")
+
+        self._run_one_iteration(bm)
+        # Should not have logged a warning (no pruning happened)
+        warned = [c for c in logger.warning.call_args_list if "exceeds" in str(c)]
+        assert warned == []
+
+    def test_prune_trims_when_over_limit(self, tmp_path):
+        from unittest.mock import Mock
+
+        logger = Mock()
+        bm = self._make_bm(tmp_path, max_kb=1, logger=logger)
+        # Write > 1 KB of fallback content (line-oriented)
+        import os as _os
+
+        _os.makedirs(_os.path.dirname(bm.fallback_path), exist_ok=True)
+        with open(bm.fallback_path, "w") as f:
+            for i in range(200):
+                f.write(f"foo|line{i:04d}-{'x' * 30}\n")
+
+        original_size = _os.path.getsize(bm.fallback_path)
+        assert original_size > 1024
+
+        self._run_one_iteration(bm)
+
+        new_size = _os.path.getsize(bm.fallback_path)
+        assert new_size < original_size
+        # Warning about size overrun should have fired
+        warning_msgs = " ".join(str(c) for c in logger.warning.call_args_list)
+        assert "exceeds" in warning_msgs
+        # Info about prune count should have fired
+        info_msgs = " ".join(str(c) for c in logger.info.call_args_list)
+        assert "Pruned" in info_msgs
+
+    def test_prune_handles_unreadable_fallback(self, tmp_path):
+        """If reading fallback fails mid-loop, the iteration is skipped gracefully."""
+        from unittest.mock import Mock, patch
+
+        logger = Mock()
+        bm = self._make_bm(tmp_path, max_kb=1, logger=logger)
+        # Create an oversized fallback so we reach the read step
+        import os as _os
+
+        _os.makedirs(_os.path.dirname(bm.fallback_path), exist_ok=True)
+        with open(bm.fallback_path, "w") as f:
+            for _ in range(100):
+                f.write("x" * 100 + "\n")
+
+        # Patch builtins.open to raise on the prune read
+        original_open = open
+        call_count = {"n": 0}
+
+        def _flaky_open(path, mode="r", *a, **k):
+            if path == bm.fallback_path and "r" in mode:
+                call_count["n"] += 1
+                if call_count["n"] == 1:
+                    raise OSError("flaky read")
+            return original_open(path, mode, *a, **k)
+
+        with patch("builtins.open", side_effect=_flaky_open):
+            self._run_one_iteration(bm)
+        # Should not have aborted the task — we get here without exception
+
+    def test_prune_cancelled_logs_warning(self, tmp_path):
+        """CancelledError raised from inside the loop propagates and is logged."""
+        from unittest.mock import Mock, patch
+
+        logger = Mock()
+        bm = self._make_bm(tmp_path, max_kb=1, logger=logger)
+
+        import asyncio
+
+        async def _immediate_cancel(_):
+            raise asyncio.CancelledError
+
+        async def runner():
+            with pytest.raises(asyncio.CancelledError):
+                await bm.start_fallback_prune_task(check_interval=0)
+
+        import pytest
+
+        with patch("asyncio.sleep", _immediate_cancel):
+            asyncio.run(runner())
+        # The CancelledError handler logs a warning
+        msgs = " ".join(str(c) for c in logger.warning.call_args_list)
+        assert "cancelled" in msgs.lower()
+
+    def test_prune_unexpected_error_logs_error(self, tmp_path):
+        """An unexpected exception in the loop body is logged but does not kill the task."""
+        from unittest.mock import Mock, patch
+
+        logger = Mock()
+        bm = self._make_bm(tmp_path, max_kb=1, logger=logger)
+
+        # Make _get_file_size raise an unexpected exception
+        with patch.object(bm, "_get_file_size", side_effect=RuntimeError("boom")):
+            self._run_one_iteration(bm)
+        msgs = " ".join(str(c) for c in logger.error.call_args_list)
+        assert "Unexpected error" in msgs or "boom" in msgs

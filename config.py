@@ -6,6 +6,18 @@
 # Modify values here to tune device behavior without editing module code.
 
 DEVICE_CONFIG = {
+    # Operating mode — single switch that picks which optional components
+    # are constructed at boot.
+    #
+    #   "plant":    dimmable grow light (MCP4725 DAC over relay master) AND
+    #               soil-moisture logger (GP28 ADC) are both enabled.
+    #   "mushroom": basic relay-only grow light, soil sensor not constructed.
+    #
+    # Disabled components are skipped entirely in main.py (no task, no I/O),
+    # so the only cost of being in the wrong mode is what's missing — not
+    # idle objects holding RAM. Override growlight.mode below is ignored;
+    # the top-level mode is the source of truth for grow-light wiring.
+    "mode": "mushroom",
     # Hardware Pins
     #
     # Pico GPIO layout — matches PCB schematic SCH_Pico-Greenhouse-PCB_2026-05-14
@@ -581,6 +593,11 @@ def validate_config():
         for key in keys:
             if key not in DEVICE_CONFIG[section]:
                 raise ValueError(f"Missing config key: {section}.{key}")
+
+    if "mode" not in DEVICE_CONFIG:
+        raise ValueError("Missing config key: mode")
+    if DEVICE_CONFIG["mode"] not in ("plant", "mushroom"):
+        raise ValueError("mode must be 'plant' or 'mushroom'")
 
     # Validate value ranges
     if DEVICE_CONFIG["temp_humidity_logger"]["interval_s"] <= 0:

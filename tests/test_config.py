@@ -645,6 +645,41 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["growlight"]["mode"] = original
 
+    def test_mode_invalid_raises(self):
+        """Top-level mode outside {'plant','mushroom'} raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["mode"]
+        config.DEVICE_CONFIG["mode"] = "bogus"
+        try:
+            with pytest.raises(ValueError, match="mode must be"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["mode"] = original
+
+    def test_mode_missing_raises(self):
+        """Top-level mode missing raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["mode"]
+        del config.DEVICE_CONFIG["mode"]
+        try:
+            with pytest.raises(ValueError, match="Missing config key: mode"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["mode"] = original
+
+    def test_mode_plant_valid(self):
+        """mode='plant' passes validation."""
+        import config
+
+        original = config.DEVICE_CONFIG["mode"]
+        config.DEVICE_CONFIG["mode"] = "plant"
+        try:
+            assert config.validate_config() is True
+        finally:
+            config.DEVICE_CONFIG["mode"] = original
+
     def test_growlight_negative_ramp_raises(self):
         """growlight.ramp_duration_s < 0 raises ValueError."""
         import config

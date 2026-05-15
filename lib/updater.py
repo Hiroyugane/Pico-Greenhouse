@@ -162,6 +162,7 @@ class Updater:
         retry_delay_ms=200,
         wdt=None,
         time_provider=None,
+        feedback=None,
     ):
         self.update_dir = update_dir.rstrip("/").rstrip("\\")
         self.applied_dir = applied_dir.rstrip("/").rstrip("\\")
@@ -171,6 +172,7 @@ class Updater:
         self.retry_delay_ms = int(retry_delay_ms)
         self.wdt = wdt
         self.time_provider = time_provider
+        self.feedback = feedback
 
     # --- Public API --------------------------------------------------
 
@@ -201,6 +203,7 @@ class Updater:
             errors.append("manifest.files is empty")
             return errors
         for entry in files:
+            self._step_feedback(audio=True)
             try:
                 rel = entry["path"]
                 expected_hash = entry["sha256"]
@@ -238,6 +241,7 @@ class Updater:
         flash_root = _FLASH_ROOT
         flash_root_clean = flash_root.rstrip("/").rstrip("\\")
         for entry in manifest["files"]:
+            self._step_feedback(audio=True)
             rel = entry["path"]
             src = self.update_dir + "/" + rel
             if flash_root_clean:
@@ -313,6 +317,7 @@ class Updater:
                     break
                 h.update(chunk)
                 self._feed_wdt()
+                self._step_feedback(audio=False)
         return binascii.hexlify(h.digest()).decode("ascii")
 
     def _copy_file(self, src, dst):
@@ -325,12 +330,22 @@ class Updater:
                         break
                     fout.write(chunk)
                     self._feed_wdt()
+                    self._step_feedback(audio=False)
 
     def _feed_wdt(self):
         if self.wdt is None:
             return
         try:
             self.wdt.feed()
+        except Exception:
+            pass
+
+    def _step_feedback(self, audio=False):
+        """Advance loading-screen feedback if attached; silent otherwise."""
+        if self.feedback is None:
+            return
+        try:
+            self.feedback.step(audio=audio)
         except Exception:
             pass
 
@@ -345,6 +360,10 @@ def run_pending_update(config, hardware, wdt=None):
     Returns silently when there is no pending update or the updater is
     disabled in config. On a successful apply, calls machine.reset() and
     does not return.
+
+    When config["updater_feedback"]["enabled"] is True and a pending payload
+    is present, a loading-screen LED chase + buzzer ticks run during verify
+    and apply, then a distinct jingle plays for success or failure.
     """
     upd_cfg = config.get("updater", {}) if isinstance(config, dict) else {}
     if not upd_cfg.get("enabled", False):
@@ -370,12 +389,33 @@ def run_pending_update(config, hardware, wdt=None):
     if not updater.has_pending_update():
         return
 
+    # Build LED/buzzer feedback only once we know a real update is about to
+    # run — otherwise we'd light the row on every boot. Failures here never
+    # block the update.
+    feedback = None
+    try:
+        from lib.updater_feedback import build_from_config
+
+        feedback = build_from_config(config)
+    except Exception:
+        feedback = None
+    updater.feedback = feedback
+
+    def _signal_failure():
+        if feedback is None:
+            return
+        try:
+            feedback.failure()
+        except Exception:
+            pass
+
     updater.log("start", "?", detail="payload detected")
 
     try:
         manifest = updater.load_manifest()
     except UpdateError as e:
         updater.log("verify_fail", "?", detail="load_manifest: %s" % e)
+        _signal_failure()
         return
 
     version = str(manifest.get("version", "?"))
@@ -386,12 +426,14 @@ def run_pending_update(config, hardware, wdt=None):
         if len(detail) > 240:
             detail = detail[:237] + "..."
         updater.log("verify_fail", version, detail=detail)
+        _signal_failure()
         return
 
     try:
         updater.apply(manifest)
     except UpdateError as e:
         updater.log("apply_fail", version, detail=str(e)[:240])
+        _signal_failure()
         return
 
     try:
@@ -404,6 +446,14 @@ def run_pending_update(config, hardware, wdt=None):
         updater.log("apply_ok", version, detail="finalize warn: %s" % str(e)[:200])
     else:
         updater.log("apply_ok", version, detail="files=%d" % len(manifest.get("files", [])))
+
+    # Apply succeeded — play the success jingle before resetting so the
+    # operator hears confirmation while the Pico reboots into the new code.
+    if feedback is not None:
+        try:
+            feedback.success()
+        except Exception:
+            pass
 
     import machine
 

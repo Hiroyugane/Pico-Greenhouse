@@ -606,3 +606,245 @@ class TestRunPendingUpdateBranches:
         upd_mod.run_pending_update({}, self._HW())
         upd_mod.run_pending_update("not a dict", self._HW())  # type: ignore[arg-type]
         assert reset_called == []
+
+
+class _RecordingFeedback:
+    """Drop-in UpdateFeedback that records every call for assertion."""
+
+    def __init__(self):
+        self.steps = []  # list of audio flags
+        self.success_calls = 0
+        self.failure_calls = 0
+        self.finish_calls = 0
+
+    def step(self, audio=False):
+        self.steps.append(bool(audio))
+
+    def success(self):
+        self.success_calls += 1
+
+    def failure(self):
+        self.failure_calls += 1
+
+    def finish(self):
+        self.finish_calls += 1
+
+
+class TestUpdaterFeedbackHooks:
+    """Per-file / per-chunk feedback events fire in the right places."""
+
+    def test_apply_steps_per_file_with_audio(self, updater_factory, good_payload, sd_root, monkeypatch):
+        from lib import updater as upd_mod
+
+        manifest, files = good_payload
+        flash_root = sd_root / "flash"
+        flash_root.mkdir()
+        monkeypatch.setattr(upd_mod, "_FLASH_ROOT", str(flash_root), raising=False)
+
+        fb = _RecordingFeedback()
+        u = updater_factory()
+        u.feedback = fb
+        u.apply(manifest)
+
+        audio_steps = [a for a in fb.steps if a]
+        # One audible step per file in the payload.
+        assert len(audio_steps) == len(files)
+
+    def test_verify_steps_per_file_with_audio(self, updater_factory, good_payload):
+        manifest, files = good_payload
+        fb = _RecordingFeedback()
+        u = updater_factory()
+        u.feedback = fb
+        assert u.verify_payload(manifest) == []
+        audio_steps = [a for a in fb.steps if a]
+        assert len(audio_steps) == len(files)
+
+    def test_hash_chunks_step_silently(self, updater_factory, sd_root):
+        # A multi-chunk file should produce >1 silent step from _hash_file.
+        big = sd_root / "update" / "big.bin"
+        big.write_bytes(b"x" * 4096)
+        u = updater_factory()
+        fb = _RecordingFeedback()
+        u.feedback = fb
+        u._hash_file(str(big))
+        silent_steps = [a for a in fb.steps if not a]
+        assert len(silent_steps) >= 4  # 4096 / 1024 chunks
+
+    def test_step_feedback_swallows_errors(self, updater_factory):
+        class _Boom:
+            def step(self, audio=False):
+                raise RuntimeError("simulated feedback fault")
+
+        u = updater_factory()
+        u.feedback = _Boom()
+        u._step_feedback(audio=True)  # must not raise
+
+
+class TestRunPendingUpdateFeedback:
+    """End-to-end: success/failure jingles fire from the boot hook."""
+
+    def _cfg(self, sd_root, feedback_enabled=True):
+        return {
+            "pins": {
+                "activity_led": 4,
+                "sd_led": 5,
+                "reminder_led": 8,
+                "warning_led": 6,
+                "error_led": 7,
+                "buzzer": 14,
+            },
+            "status_leds": {"walk_order": ["activity", "sd", "reminder", "warning", "error"]},
+            "updater": {
+                "enabled": True,
+                "update_dir": str(sd_root / "update"),
+                "applied_dir": str(sd_root / "applied"),
+                "log_path": str(sd_root / "updates.log"),
+                "max_retries": 3,
+                "retry_delay_ms": 0,
+                "allowed_paths": ["main.py", "config.py", "lib/"],
+            },
+            "updater_feedback": {
+                "enabled": feedback_enabled,
+                "tick_freq_hz": 1500,
+                "tick_duration_ms": 0,
+                "step_delay_ms": 0,
+                "success_pattern": [(1047, 1, 0), (1319, 1, 0), (1568, 1, 0)],
+                "fail_pattern": [(400, 1, 0), (250, 1, 0)],
+            },
+        }
+
+    class _HW:
+        def is_sd_mounted(self):
+            return True
+
+    def test_success_jingle_on_apply_ok(self, sd_root, good_payload, monkeypatch):
+        from lib import updater as upd_mod
+        from lib import updater_feedback as ufb_mod
+
+        flash_root = sd_root / "flash"
+        flash_root.mkdir()
+        monkeypatch.setattr(upd_mod, "_FLASH_ROOT", str(flash_root), raising=False)
+
+        fb = _RecordingFeedback()
+        monkeypatch.setattr(ufb_mod, "build_from_config", lambda cfg: fb)
+
+        monkeypatch.setattr("machine.reset", lambda: None, raising=False)
+        upd_mod.run_pending_update(self._cfg(sd_root), self._HW())
+
+        assert fb.success_calls == 1
+        assert fb.failure_calls == 0
+        assert any(audio for audio in fb.steps)  # audible per-file ticks ran
+
+    def test_failure_jingle_on_verify_fail(self, sd_root, monkeypatch):
+        import json
+
+        from lib import updater as upd_mod
+        from lib import updater_feedback as ufb_mod
+
+        manifest = {
+            "version": "v1",
+            "files": [{"path": "main.py", "sha256": "0" * 64, "bytes": 5}],
+        }
+        (sd_root / "update" / "manifest.json").write_text(json.dumps(manifest))
+
+        fb = _RecordingFeedback()
+        monkeypatch.setattr(ufb_mod, "build_from_config", lambda cfg: fb)
+
+        reset_called = []
+        monkeypatch.setattr("machine.reset", lambda: reset_called.append(True), raising=False)
+        upd_mod.run_pending_update(self._cfg(sd_root), self._HW())
+
+        assert reset_called == []
+        assert fb.failure_calls == 1
+        assert fb.success_calls == 0
+
+    def test_failure_jingle_on_apply_fail(self, sd_root, good_payload, monkeypatch):
+        from lib import updater as upd_mod
+        from lib import updater_feedback as ufb_mod
+
+        flash_root = sd_root / "flash"
+        flash_root.mkdir()
+        monkeypatch.setattr(upd_mod, "_FLASH_ROOT", str(flash_root), raising=False)
+
+        def always_fail(self, src, dst):
+            raise OSError("simulated apply failure")
+
+        monkeypatch.setattr(upd_mod.Updater, "_copy_file", always_fail)
+
+        fb = _RecordingFeedback()
+        monkeypatch.setattr(ufb_mod, "build_from_config", lambda cfg: fb)
+
+        reset_called = []
+        monkeypatch.setattr("machine.reset", lambda: reset_called.append(True), raising=False)
+        cfg = self._cfg(sd_root)
+        cfg["updater"]["max_retries"] = 1
+        upd_mod.run_pending_update(cfg, self._HW())
+
+        assert reset_called == []
+        assert fb.failure_calls == 1
+
+    def test_failure_jingle_on_load_manifest_fail(self, sd_root, monkeypatch):
+        from lib import updater as upd_mod
+        from lib import updater_feedback as ufb_mod
+
+        (sd_root / "update" / "manifest.json").write_text("{not json")
+
+        fb = _RecordingFeedback()
+        monkeypatch.setattr(ufb_mod, "build_from_config", lambda cfg: fb)
+
+        monkeypatch.setattr("machine.reset", lambda: None, raising=False)
+        upd_mod.run_pending_update(self._cfg(sd_root), self._HW())
+
+        assert fb.failure_calls == 1
+        assert fb.success_calls == 0
+
+    def test_no_feedback_when_disabled(self, sd_root, good_payload, monkeypatch):
+        from lib import updater as upd_mod
+
+        flash_root = sd_root / "flash"
+        flash_root.mkdir()
+        monkeypatch.setattr(upd_mod, "_FLASH_ROOT", str(flash_root), raising=False)
+        monkeypatch.setattr("machine.reset", lambda: None, raising=False)
+
+        # build_from_config returns None when enabled=False, so the apply
+        # still runs but no LED/buzzer interaction is attempted.
+        upd_mod.run_pending_update(self._cfg(sd_root, feedback_enabled=False), self._HW())
+        # No assertion crash means run_pending_update tolerated feedback=None.
+
+    def test_feedback_build_failure_does_not_block_update(self, sd_root, good_payload, monkeypatch):
+        from lib import updater as upd_mod
+        from lib import updater_feedback as ufb_mod
+
+        flash_root = sd_root / "flash"
+        flash_root.mkdir()
+        monkeypatch.setattr(upd_mod, "_FLASH_ROOT", str(flash_root), raising=False)
+        monkeypatch.setattr("machine.reset", lambda: None, raising=False)
+
+        def boom(cfg):
+            raise RuntimeError("simulated build fault")
+
+        monkeypatch.setattr(ufb_mod, "build_from_config", boom)
+        # Must apply payload despite feedback construction failure.
+        upd_mod.run_pending_update(self._cfg(sd_root), self._HW())
+        # main.py replacement landed on flash.
+        assert (flash_root / "main.py").exists()
+
+    def test_success_jingle_failure_does_not_block_reset(self, sd_root, good_payload, monkeypatch):
+        from lib import updater as upd_mod
+        from lib import updater_feedback as ufb_mod
+
+        flash_root = sd_root / "flash"
+        flash_root.mkdir()
+        monkeypatch.setattr(upd_mod, "_FLASH_ROOT", str(flash_root), raising=False)
+
+        class _BoomFeedback(_RecordingFeedback):
+            def success(self):
+                raise RuntimeError("simulated jingle fault")
+
+        fb = _BoomFeedback()
+        monkeypatch.setattr(ufb_mod, "build_from_config", lambda cfg: fb)
+
+        reset_called = []
+        monkeypatch.setattr("machine.reset", lambda: reset_called.append(True), raising=False)
+        upd_mod.run_pending_update(self._cfg(sd_root), self._HW())
+        assert reset_called == [True]

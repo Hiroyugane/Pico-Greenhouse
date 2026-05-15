@@ -382,6 +382,66 @@ class TestStatusManagerPOST:
         assert result is True
 
     @pytest.mark.asyncio
+    async def test_post_walks_in_configured_order(self):
+        """walk_order controls the sequential walk; heartbeat is always last."""
+        from lib.led_button import LED
+        from lib.status_manager import StatusManager
+
+        sm = StatusManager(4, 5, 6, 7, 25)  # activity, sd, warning, error, heartbeat
+        reminder = LED(8)
+        on_order = []
+        # Tag each LED's pin.on mock so we can record activation sequence.
+        for tag, led in (
+            ("activity", sm._activity_led),
+            ("sd", sm._sd_led),
+            ("warning", sm._warning_led),
+            ("error", sm._error_led),
+            ("heartbeat", sm._heartbeat_led),
+            ("reminder", reminder),
+        ):
+            led.pin.on.side_effect = (lambda t=tag: on_order.append(t))  # type: ignore[attr-defined]
+
+        await sm.run_post(
+            step_ms=1,
+            reminder_led=reminder,
+            walk_order=["activity", "sd", "reminder", "warning", "error"],
+        )
+
+        # First 6 entries are the sequential walk (5 row LEDs + heartbeat).
+        assert on_order[:6] == [
+            "activity",
+            "sd",
+            "reminder",
+            "warning",
+            "error",
+            "heartbeat",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_post_walk_order_skips_missing_reminder(self):
+        """If walk_order names 'reminder' but no reminder_led is passed, it's skipped."""
+        from lib.status_manager import StatusManager
+
+        sm = StatusManager(4, 5, 6, 7, 25)
+        on_order = []
+        for tag, led in (
+            ("activity", sm._activity_led),
+            ("sd", sm._sd_led),
+            ("warning", sm._warning_led),
+            ("error", sm._error_led),
+            ("heartbeat", sm._heartbeat_led),
+        ):
+            led.pin.on.side_effect = (lambda t=tag: on_order.append(t))  # type: ignore[attr-defined]
+
+        await sm.run_post(
+            step_ms=1,
+            walk_order=["activity", "sd", "reminder", "warning", "error"],
+        )
+
+        assert "reminder" not in on_order
+        assert on_order[:5] == ["activity", "sd", "warning", "error", "heartbeat"]
+
+    @pytest.mark.asyncio
     async def test_post_all_leds_off_after_with_reminder(self):
         """All LEDs including reminder are OFF after POST."""
         from lib.led_button import LED

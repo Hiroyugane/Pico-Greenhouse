@@ -111,20 +111,29 @@ class StatusManager:
 
     # ── Power-on Self-Test (POST) ─────────────────────────────────────
 
-    async def run_post(self, step_ms: int = 150, reminder_led=None) -> bool:
+    async def run_post(self, step_ms: int = 150, reminder_led=None, walk_order=None) -> bool:
         """
         Power-on self-test: walk all owned LEDs to verify visual output.
 
         Sequence:
-        1. Walk each LED on→wait→off (activity, reminder, SD, warning, error, heartbeat)
-        2. Flash all LEDs on simultaneously, then off
-        3. All LEDs left OFF on success
+        1. Walk each LED on→wait→off in the configured row order, then
+           the on-board heartbeat LED.
+        2. Flash all LEDs on simultaneously, then off.
+        3. All LEDs left OFF on success.
 
         Args:
             step_ms (int): Duration each LED stays on during the walk (ms).
-            reminder_led: Optional LED instance (GP5) owned by LEDButtonHandler.
+            reminder_led: Optional LED instance (GP8) owned by LEDButtonHandler.
                           Included in the walk when provided so the operator can
                           verify all six LEDs during POST.
+            walk_order (list[str] | None): Physical left-to-right order of the
+                          status-LED row on the PCB. Each entry is one of
+                          "activity", "sd", "reminder", "warning", "error".
+                          Roles whose LED is not available (e.g. "reminder"
+                          when no reminder_led is passed) are skipped.
+                          Defaults to the historical activity→sd→warning→error
+                          order (reminder appended when provided), preserving
+                          old behavior for callers that haven't been updated.
 
         Returns:
             bool: True (POST passed). Always returns True since GPIO
@@ -132,19 +141,22 @@ class StatusManager:
                   confirm every LED is physically working.
         """
         step_s = step_ms / 1000.0
-        leds = [
-            self._activity_led,
-        ]
-        if reminder_led is not None:
-            leds.append(reminder_led)
-        leds.extend(
-            [
-                self._sd_led,
-                self._warning_led,
-                self._error_led,
-                self._heartbeat_led,
-            ]
-        )
+
+        role_to_led = {
+            "activity": self._activity_led,
+            "sd": self._sd_led,
+            "warning": self._warning_led,
+            "error": self._error_led,
+            "reminder": reminder_led,
+        }
+        if walk_order is None:
+            walk_order = ["activity"]
+            if reminder_led is not None:
+                walk_order.append("reminder")
+            walk_order.extend(["sd", "warning", "error"])
+
+        leds = [role_to_led[role] for role in walk_order if role_to_led.get(role) is not None]
+        leds.append(self._heartbeat_led)
 
         # Phase 1: sequential walk
         for led in leds:

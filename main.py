@@ -528,7 +528,12 @@ async def main():
     # Run POST (visual LED walk) if enabled
     if status_led_config.get("post_enabled", True):
         post_step = status_led_config.get("post_step_ms", 150)
-        await status_manager.run_post(step_ms=post_step, reminder_led=led_handler.led)
+        walk_order = status_led_config.get("walk_order")
+        await status_manager.run_post(
+            step_ms=post_step,
+            reminder_led=led_handler.led,
+            walk_order=walk_order,
+        )
         wdt.feed()  # Feed after POST
         print("[STARTUP] POST complete — all status LEDs verified")
 

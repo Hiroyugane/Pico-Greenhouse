@@ -11,13 +11,14 @@ Usage:
     python tools/build_update_payload.py --version 2026-05-15.2
     python tools/build_update_payload.py --copy-to G:/update
     python tools/build_update_payload.py --copy-to G:/update --no-confirm
+    python tools/build_update_payload.py --compiled --copy-to G:/update --no-confirm
 
 The payload layout matches what `lib/updater.py` expects:
 
     <OUT_DIR>/manifest.json
     <OUT_DIR>/main.py
-    <OUT_DIR>/config.py
-    <OUT_DIR>/lib/<file>.py
+    <OUT_DIR>/config.py            (or config.mpy with --compiled)
+    <OUT_DIR>/lib/<file>.py        (or <file>.mpy with --compiled)
 
 The manifest format:
 
@@ -33,6 +34,11 @@ The manifest format:
 Vendored drivers (lib/picozero*, lib/sdcard*, lib/ds3231.py, lib/ds2321_gen.py,
 lib/ssd1306*) are excluded by default — they ship with the firmware image and
 should not be churned by an update.
+
+With `--compiled`, sources are read from the `build/` tree produced by the
+`build-mpy` VS Code task: `build/main.py` (raw), `build/config.mpy`, and
+`build/lib/*.mpy`. The script does not invoke `mpy-cross` itself; run
+`build-mpy` first.
 """
 
 from __future__ import annotations
@@ -104,6 +110,37 @@ def _collect_sources() -> list[tuple[str, Path]]:
             continue
         if _should_include_lib(entry.name):
             sources.append((f"lib/{entry.name}", entry))
+    return sources
+
+
+def _collect_sources_compiled(build_dir: Path) -> list[tuple[str, Path]]:
+    """Return [(relative_path, absolute_path), ...] from a build-mpy tree."""
+    if not build_dir.is_dir():
+        raise FileNotFoundError(
+            f"missing build directory: {build_dir} — run the build-mpy task first"
+        )
+    sources: list[tuple[str, Path]] = []
+
+    main_src = build_dir / "main.py"
+    if not main_src.is_file():
+        raise FileNotFoundError(f"missing {main_src} — run build-mpy first")
+    sources.append(("main.py", main_src))
+
+    config_src = build_dir / "config.mpy"
+    if not config_src.is_file():
+        raise FileNotFoundError(f"missing {config_src} — run build-mpy first")
+    sources.append(("config.mpy", config_src))
+
+    lib_dir = build_dir / "lib"
+    if not lib_dir.is_dir():
+        raise FileNotFoundError(f"missing {lib_dir} — run build-mpy first")
+    lib_files = sorted(f for f in lib_dir.iterdir() if f.is_file() and f.suffix == ".mpy")
+    if not lib_files:
+        raise FileNotFoundError(
+            f"no compiled .mpy files in {lib_dir} — run build-mpy first"
+        )
+    for entry in lib_files:
+        sources.append((f"lib/{entry.name}", entry))
     return sources
 
 
@@ -198,10 +235,23 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Skip interactive confirmation when --copy-to target exists",
     )
+    parser.add_argument(
+        "--compiled",
+        action="store_true",
+        help="Read pre-compiled artifacts from --build-dir (run build-mpy first)",
+    )
+    parser.add_argument(
+        "--build-dir",
+        default=str(PROJECT_ROOT / "build"),
+        help="Directory containing build-mpy output (default: build/)",
+    )
     args = parser.parse_args(argv)
 
     out_dir = Path(args.out).resolve()
-    sources = _collect_sources()
+    if args.compiled:
+        sources = _collect_sources_compiled(Path(args.build_dir).resolve())
+    else:
+        sources = _collect_sources()
     _clean_out_dir(out_dir)
     files_meta = _copy_payload(sources, out_dir)
     version = args.version or _auto_version(out_dir.parent)

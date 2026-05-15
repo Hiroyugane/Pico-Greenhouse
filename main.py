@@ -52,6 +52,7 @@ from lib.soil_logger import SoilLogger
 from lib.status_manager import StatusManager
 from lib.temp_humidity_logger import TempHumidityLogger
 from lib.time_provider import RTCTimeProvider
+from lib.updater import run_pending_update
 from lib.write_queue_manager import WriteQueueManager
 
 
@@ -163,6 +164,21 @@ async def main():
 
     wdt.feed()  # Feed after hardware init
     hardware.print_status()
+
+    # Step 2b: SD-payload software update (see lib/updater.py).
+    # Runs BEFORE EventLogger so logging code can be safely replaced
+    # along with the rest. If a pending update is applied, this call
+    # ends in machine.reset() and does not return; the new code boots
+    # from a clean import state.
+    wdt.feed()
+    try:
+        run_pending_update(DEVICE_CONFIG, hardware, wdt)
+    except Exception as e:
+        # Updater failures must never block normal boot. The updater
+        # logs its own diagnostics to /sd/updates.log; live code is
+        # left in whatever state the apply loop reached.
+        print(f"[STARTUP] Updater raised (non-fatal): {e}")
+    wdt.feed()
 
     # Step 3: Create TimeProvider (wraps RTC)
     rtc = hardware.get_rtc()

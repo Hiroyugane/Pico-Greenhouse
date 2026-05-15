@@ -331,7 +331,7 @@ DEVICE_CONFIG = {
         "log_path": "/sd/updates.log",
         "max_retries": 3,  # Per-file write retry count on apply failure
         "retry_delay_ms": 200,  # Delay between write retries (ms)
-        "allowed_paths": ["main.py", "config.py", "lib/"],  # Whitelist; anything outside fails verify
+        "allowed_paths": ["main.py", "config.py", "config.mpy", "lib/"],  # Whitelist; anything outside fails verify
     },
 }
 

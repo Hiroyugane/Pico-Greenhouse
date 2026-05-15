@@ -5,6 +5,48 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-15 · Reserved relay GPIOs parked HIGH + REL_CON 3V3 fault
+
+**Branch:** `main`
+**Why hardware-only:** the floating GPIO symptom is an analog
+voltage on the relay board's input pins; `pytest` can prove the
+config plumbing but only a multimeter (or watching the relay LEDs)
+confirms the inputs sit at a clean 3V3 instead of the prior
+half-powered state. The REL_CON 3V3 supply complaint is pure
+hardware — no software fix exists.
+**Pre-flight:** Pico powered cold via USB; relay board connected to
+REL_CON; multimeter ready; nothing wired to the four reserved
+channels (REL_CON pins 5–8).
+
+### Reserved relay channels (GP21, GP22, GP26, GP27)
+
+- [ ] On boot, measure GP21/GP22/GP26/GP27 to GND with a multimeter:
+      each should read a clean ≈3.3 V (HIGH, relay off). No
+      intermediate "half-power" reading (>0.4 V, <2.7 V) anywhere.
+- [ ] Relay-board LEDs (if present) for those four channels stay
+      OFF — no flicker, no dim glow.
+- [ ] Touch each of the four GPIO pads with a finger; the reading
+      and relay state must not change (proves the pins are driven,
+      not floating).
+
+### REL_CON 3V3 supply
+
+- [!] REL_CON 3V3 pin reads 0 V — relay board appears unpowered on
+      the logic side. Check:
+  - [ ] Continuity from REL_CON 3V3 pin → Pico 3V3(OUT) pin 36.
+  - [ ] Series resistor / trace between REL_CON 3V3 and the Pico
+        rail (visual + DMM continuity).
+  - [ ] Relay board's JD-VCC ↔ VCC jumper position (opto-isolator
+        common). If using external relay-coil supply, JD-VCC
+        jumper must be **removed** and JD-VCC fed externally; if
+        powering coils from Pico 3V3 (not recommended past 1
+        relay), jumper must be **installed**.
+  - [ ] No shorted decoupling cap on the relay board's VCC pin.
+
+### Notes (post-test) — reserved relays + 3V3 fault
+
+> Fill in here after bench-checking. Record DMM readings per channel.
+
 ## 2026-05-15 · SD-update loading screen LEDs + buzzer jingles
 
 **Branch:** `main`

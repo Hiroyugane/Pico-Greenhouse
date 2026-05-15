@@ -5,6 +5,33 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-15 · Reserved relay GPIOs floated, parked HIGH
+
+### decision · park GP21/22/26/27 HIGH via output_pins, not Pin.IN+PULL_UP
+
+Operator reported the four reserved relay channels on REL_CON
+(GP21, GP22, GP26, GP27) sitting in a half-powered pseudo-state and
+asked for them to be pulled if unused. Root cause: the pins were
+declared under `DEVICE_CONFIG["pins"]` but not listed in
+`output_pins`, so `HardwareFactory._init_pins()` never configured
+them — they boot as floating inputs and feed the active-low relay
+inputs with an indeterminate voltage. Fix is to add all four to
+`output_pins` with `True` (HIGH = relay off, matching the three
+active relays). Chose Pin.OUT driven HIGH over Pin.IN + PULL_UP
+because (a) it matches the existing pattern for `relay_fan_1/2` and
+`relay_growlight`, (b) a deterministic CMOS drive is stiffer than
+the RP2040's ~50 kΩ internal pull against a relay opto-isolator
+load, and (c) the validator/test plumbing for output_pins already
+exists. Validator entry and a `test_reserved_relays_parked_high`
+guard ship in the same commit.
+
+### issue · 3V3 rail on REL_CON measures dead
+
+Separately reported: the REL_CON 3V3 pin reads 0 V. Pure hardware,
+not addressable in software. Logged under `docs/test/hw-test-log.md`
+with a bench checklist (3V3 pin continuity to Pico 3V3, JD-VCC /
+VCC jumper position on the relay board, R/trace check on the rail).
+
 ## 2026-05-15 · SD-update version string scheme
 
 ### decision · use UTC datetime + git short hash, drop per-day bump

@@ -5,6 +5,47 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-15 · Compiled SD-update payload (.mpy) end-to-end
+
+**Branch:** `main`
+**Why hardware-only:** `mpy-cross` output is bytecode-version specific
+to the firmware on the Pico, and the updater rewrites flash from SD
+and ends in `machine.reset()`. Host tests only confirm the
+file/manifest/hash logic; they cannot prove the compiled `.mpy` files
+actually import after the flash swap.
+**Pre-flight:** Pico already flashed with the matching firmware
+version (`flash-mpremote` baseline known-good). Take a Thonny backup
+of `/main.py`, `/config.mpy`, `/lib/`. Confirm SD card mounted at
+`G:` on host. No prior payload sitting at `G:/update`.
+
+### Payload build and deploy
+
+- [ ] Run `build-mpy` task — succeeds; `build/main.py`,
+      `build/config.mpy`, `build/lib/*.mpy` all present.
+- [ ] Run `deploy-update-to-sdcard-nocheck` task — succeeds; `G:/update/`
+      contains `manifest.json`, `main.py`, `config.mpy`, `lib/*.mpy`
+      and no raw `.py` files under `lib/`.
+- [ ] Total payload size is meaningfully smaller than the previous
+      raw-py payload (record both numbers in Notes below).
+- [ ] `manifest.json` entries all end in `.mpy` except `main.py`.
+
+### Apply on device
+
+- [ ] Eject SD, insert into Pico, power-cycle.
+- [ ] First boot after insert: updater logs `start` then `apply_ok` to
+      `/sd/updates.log`; Pico reboots; comes back up healthy.
+- [ ] `/sd/update` is gone; `/sd/applied/<version>/` holds the
+      applied tree.
+- [ ] `mpremote fs ls /` and `fs ls /lib` show `.mpy` files where
+      expected; no orphan raw `.py` siblings except `main.py`.
+- [ ] Watchdog does not fire during the apply (boot reaches main
+      scheduler).
+
+### Notes (compiled-payload)
+
+> Fill in here. Capture before/after payload size and any
+> firmware-version mismatch if `.mpy` files refuse to import.
+
 ## 2026-05-15 · SD-payload software updater — implementation eyes-on
 
 **Branch:** `main`

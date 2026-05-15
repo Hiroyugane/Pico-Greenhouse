@@ -5,6 +5,27 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-15 · SD-update payload now ships compiled .mpy
+
+### decision · Compile config and lib for SD-update payloads, keep main.py raw
+
+`deploy-update-to-sdcard` (and `-nocheck`) now depend on `build-mpy`
+and call `tools/build_update_payload.py --compiled`, which reads from
+the `build/` tree instead of the source tree. Payload layout matches
+flash-mpremote exactly: `main.py` raw (boot entry name), `config.mpy`,
+and `lib/*.mpy`. Rationale: same size win on the SD-update path as on
+the flash path, and a single artifact shape for both deployment
+routes. `build_update_payload.py` still defaults to source-py mode
+when run by hand without `--compiled`.
+
+### decision · allowed_paths gains config.mpy, keeps config.py
+
+`DEVICE_CONFIG["updater"]["allowed_paths"]` now lists `"main.py"`,
+`"config.py"`, `"config.mpy"`, `"lib/"`. The `lib/` prefix already
+matches `lib/*.mpy`. Both raw-py and compiled payloads pass the
+updater's whitelist so an operator running the script manually
+without `--compiled` still gets a valid payload.
+
 ## 2026-05-15 · Coverage push to 90%
 
 ### decision · Bumped global coverage from 88.68% to 92.94%

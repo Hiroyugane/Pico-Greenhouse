@@ -334,7 +334,8 @@ DEVICE_CONFIG = {
     },
     # System Configuration
     "system": {
-        "require_sd_startup": False,  # If True, system won't start without SD; if False, runs with buffering only # noqa: E501
+        "require_sd_startup": True,  # If True, SD mount failure at boot lights sd+error LEDs and resets after sd_fail_reset_s # noqa: E501
+        "sd_fail_reset_s": 10,  # Countdown (s) the boot path waits with sd+error LEDs lit before machine.reset()
         "button_debounce_ms": 60,  # Debounce delay for button presses
         "long_press_ms": 3000,  # Long-press threshold for menu action button
         "health_check_interval_s": 60,  # Normal health-check loop interval
@@ -587,6 +588,7 @@ def validate_config():
         ],
         "system": [
             "require_sd_startup",
+            "sd_fail_reset_s",
             "button_debounce_ms",
             "long_press_ms",
             "health_check_interval_s",
@@ -768,6 +770,12 @@ def validate_config():
 
     if sys_cfg["sd_mount_retries"] < 1:
         raise ValueError("system.sd_mount_retries must be >= 1")
+
+    if not isinstance(sys_cfg["require_sd_startup"], bool):
+        raise ValueError("system.require_sd_startup must be a bool")
+
+    if not isinstance(sys_cfg["sd_fail_reset_s"], (int, float)) or sys_cfg["sd_fail_reset_s"] < 1:
+        raise ValueError("system.sd_fail_reset_s must be >= 1")
 
     if sys_cfg["rtc_sync_interval_s"] <= 0:
         raise ValueError("system.rtc_sync_interval_s must be > 0")

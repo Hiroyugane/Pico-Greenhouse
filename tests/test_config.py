@@ -191,6 +191,47 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["paths"]["logs_dir"] = original
 
+    def test_require_sd_startup_defaults_true(self):
+        """Default config requires SD at startup so failures fail hard."""
+        from config import DEVICE_CONFIG
+
+        assert DEVICE_CONFIG["system"]["require_sd_startup"] is True
+
+    def test_require_sd_startup_non_bool_raises(self):
+        """system.require_sd_startup must be a bool."""
+        import config
+
+        original = config.DEVICE_CONFIG["system"]["require_sd_startup"]
+        config.DEVICE_CONFIG["system"]["require_sd_startup"] = "yes"
+        try:
+            with pytest.raises(ValueError, match="system.require_sd_startup"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["system"]["require_sd_startup"] = original
+
+    def test_sd_fail_reset_s_zero_raises(self):
+        """system.sd_fail_reset_s must be >= 1."""
+        import config
+
+        original = config.DEVICE_CONFIG["system"]["sd_fail_reset_s"]
+        config.DEVICE_CONFIG["system"]["sd_fail_reset_s"] = 0
+        try:
+            with pytest.raises(ValueError, match="system.sd_fail_reset_s"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["system"]["sd_fail_reset_s"] = original
+
+    def test_sd_fail_reset_s_missing_raises(self):
+        """Removing system.sd_fail_reset_s raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["system"].pop("sd_fail_reset_s")
+        try:
+            with pytest.raises(ValueError, match="Missing config key"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["system"]["sd_fail_reset_s"] = original
+
     def test_updater_zero_retries_raises(self):
         """updater.max_retries < 1 raises ValueError."""
         import config

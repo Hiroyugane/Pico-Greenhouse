@@ -296,6 +296,12 @@ DEVICE_CONFIG = {
         "relay_fan_1": True,  # HIGH = off (relay module inverted logic)
         "relay_fan_2": True,  # HIGH = off (relay module inverted logic)
         "relay_growlight": True,  # HIGH = off (relay module inverted logic)
+        # Reserved relay channels GP21/22/26/27 — driven HIGH at boot so the
+        # active-low relay inputs don't float into a half-powered pseudo-state.
+        "relay_reserved_1": True,  # HIGH = off (relay module inverted logic)
+        "relay_reserved_2": True,  # HIGH = off (relay module inverted logic)
+        "relay_reserved_3": True,  # HIGH = off (relay module inverted logic)
+        "relay_reserved_4": True,  # HIGH = off (relay module inverted logic)
         "activity_led": False,  # LOW = off (active high LED)
         "reminder_led": False,  # LOW = off (active high LED)
         "sd_led": False,  # LOW = off (active high LED)
@@ -494,6 +500,10 @@ def validate_config():
             "relay_fan_1",
             "relay_fan_2",
             "relay_growlight",
+            "relay_reserved_1",
+            "relay_reserved_2",
+            "relay_reserved_3",
+            "relay_reserved_4",
             "activity_led",
             "reminder_led",
             "sd_led",

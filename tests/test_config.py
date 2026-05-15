@@ -77,6 +77,32 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["pins"]["buzzer"] = original
 
+    def test_reserved_relays_parked_high(self):
+        """Reserved relay GPIOs are parked HIGH (off) so they don't float."""
+        from config import DEVICE_CONFIG
+
+        for key in (
+            "relay_reserved_1",
+            "relay_reserved_2",
+            "relay_reserved_3",
+            "relay_reserved_4",
+        ):
+            assert key in DEVICE_CONFIG["output_pins"], f"{key} missing from output_pins"
+            assert DEVICE_CONFIG["output_pins"][key] is True, (
+                f"{key} must be True (HIGH = relay off) to keep input from floating"
+            )
+
+    def test_missing_reserved_relay_output_raises(self):
+        """Removing a reserved relay output_pins entry raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["output_pins"].pop("relay_reserved_1")
+        try:
+            with pytest.raises(ValueError, match="Missing config key"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["output_pins"]["relay_reserved_1"] = original
+
     def test_negative_th_interval_raises(self):
         """Negative temp_humidity_logger.interval_s raises ValueError."""
         import config

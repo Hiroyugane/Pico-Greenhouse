@@ -209,6 +209,15 @@ DEVICE_CONFIG = {
     },
     # Status LED Manager Configuration
     # Design: solid = problem, blink = activity, dark = all good
+    #
+    # walk_order — physical left-to-right order of the LED row on the PCB
+    # (LED_CON). The POST walk lights LEDs in this sequence so the
+    # visual sweep moves smoothly across the row instead of jumping
+    # between GPIOs in pin-number order. Valid role names:
+    #   "activity" (green, GP4), "sd" (blue, GP5),
+    #   "reminder" (white, GP8), "warning" (yellow, GP6),
+    #   "error" (red, GP7).
+    # Heartbeat (GP25 on-board) is always appended after the row.
     "status_leds": {
         "activity_blink_ms": 50,  # Activity LED pulse duration (ms)
         "heartbeat_interval_ms": 2000,  # GP25 toggle period (ms)
@@ -218,6 +227,7 @@ DEVICE_CONFIG = {
         "rtc_max_year": 2035,  # Year above this → RTC invalid warning
         "post_enabled": True,  # Run LED power-on self-test at startup
         "post_step_ms": 150,  # Duration each LED stays on during POST walk (ms)
+        "walk_order": ["activity", "sd", "reminder", "warning", "error"],
         "mem_warning_pct": 80,  # RAM usage % above this → warning LED
         "mem_error_pct": 90,  # RAM usage % above this → error LED
     },
@@ -475,6 +485,7 @@ def validate_config():
             "th_error_threshold",
             "rtc_min_year",
             "rtc_max_year",
+            "walk_order",
             "mem_warning_pct",
             "mem_error_pct",
         ],
@@ -707,6 +718,19 @@ def validate_config():
 
     if DEVICE_CONFIG["system"]["sd_recovery_max_consecutive_failures"] <= 0:
         raise ValueError("system.sd_recovery_max_consecutive_failures must be > 0")
+
+    # Validate status_leds.walk_order: non-empty list of unique role names
+    valid_walk_roles = ("activity", "sd", "reminder", "warning", "error")
+    walk = DEVICE_CONFIG["status_leds"]["walk_order"]
+    if not isinstance(walk, list) or not walk:
+        raise ValueError("status_leds.walk_order must be a non-empty list")
+    if len(set(walk)) != len(walk):
+        raise ValueError("status_leds.walk_order entries must be unique")
+    for role in walk:
+        if role not in valid_walk_roles:
+            raise ValueError(
+                f"status_leds.walk_order entries must be one of {valid_walk_roles}"
+            )
 
     # Validate updater configuration
     upd_cfg = DEVICE_CONFIG["updater"]

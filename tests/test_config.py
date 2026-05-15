@@ -309,6 +309,55 @@ class TestValidateConfig:
             config.DEVICE_CONFIG["heater"]["day_min_temp"] = orig_day
             config.DEVICE_CONFIG["heater"]["night_min_temp"] = orig_night
 
+    def test_status_leds_walk_order_default_valid(self):
+        """Default DEVICE_CONFIG (with the shipped walk_order) validates."""
+        import config
+
+        assert config.validate_config() is True
+        assert config.DEVICE_CONFIG["status_leds"]["walk_order"] == [
+            "activity",
+            "sd",
+            "reminder",
+            "warning",
+            "error",
+        ]
+
+    def test_status_leds_walk_order_empty_raises(self):
+        """status_leds.walk_order = [] raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["status_leds"]["walk_order"]
+        config.DEVICE_CONFIG["status_leds"]["walk_order"] = []
+        try:
+            with pytest.raises(ValueError, match="walk_order"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["status_leds"]["walk_order"] = original
+
+    def test_status_leds_walk_order_unknown_role_raises(self):
+        """status_leds.walk_order with an unknown role raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["status_leds"]["walk_order"]
+        config.DEVICE_CONFIG["status_leds"]["walk_order"] = ["activity", "purple"]
+        try:
+            with pytest.raises(ValueError, match="walk_order"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["status_leds"]["walk_order"] = original
+
+    def test_status_leds_walk_order_duplicate_raises(self):
+        """status_leds.walk_order with duplicate roles raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["status_leds"]["walk_order"]
+        config.DEVICE_CONFIG["status_leds"]["walk_order"] = ["activity", "activity"]
+        try:
+            with pytest.raises(ValueError, match="walk_order"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["status_leds"]["walk_order"] = original
+
     def test_heater_missing_key_raises(self):
         """Missing heater.day_min_temp raises ValueError."""
         import config

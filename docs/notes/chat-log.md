@@ -5,6 +5,60 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-15 · SD card layout refactor
+
+### decision · sensor-first tree under `/sd/sensors/<type>/YYYY/`
+
+Reshaped the SD root from a flat dump of CSVs and logs into a typed
+hierarchy so adding a new sensor type only needs a config row, not
+new path code. Layout:
+
+- `/sd/sensors/<type>/YYYY/<type>_YYYY-MM-DD.csv` — daily-rotated
+  CSVs, kept forever (no auto-pruner — operator clears manually).
+  All paths flow through [lib/sensor_paths.py](../../lib/sensor_paths.py)
+  `daily_csv_path()`.
+- `/sd/logs/system.log` — EventLogger, existing size-based rotation
+  (`event_logger.max_size`).
+- `/sd/logs/updates.log` — Updater log, **new** size-based rotation
+  via `updater.log_max_size` (default 50 KB → renames to
+  `updates_<ts>.log`).
+- `/sd/ota/{pending,applied}` — OTA payload staging (was `/sd/update`
+  and `/sd/applied`).
+- `/sd/diagnostics/hw_probe_*.json` — hw_probe output.
+
+Layout roots live in `DEVICE_CONFIG["paths"]`; the validator enforces
+that every entry is absolute and lives under `spi.mount_point`.
+
+### deviation · no boot-time migration of legacy root files
+
+Per operator preference, files left at `/sd/*.csv`, `/sd/system.log`,
+`/sd/updates.log`, `/sd/update/`, `/sd/applied/`, and
+`/sd/hw_probe_*.json` are **not** moved by the Pico. New writes go
+straight to the new tree; the old files coexist until the operator
+decides what to do. Skipping migration removes a class of boot-time
+failures and keeps the apply path simple — the cost is that
+historical data must be merged manually if you want one continuous
+timeline.
+
+### note · BufferManager now auto-creates parent dirs
+
+`BufferManager.write` / `_flush_inner` / `_migrate_fallback_inner`
+call a new `_ensure_parent_dir()` before each `open(..., "a")`.
+Required because nested relpaths like
+`sensors/co2/2026/co2_2026-05-15.csv` would otherwise fail with
+`OSError(ENOENT)` on the year subdir. MicroPython build uses a
+recursive `os.mkdir` walk (no `os.makedirs` available); host CPython
+uses `os.makedirs(..., exist_ok=True)`.
+
+### note · sensor logger constructors took a clean break
+
+Dropped the `filename_base` / `filename` constructor args on
+CO2Logger, SoilLogger, TempHumidityLogger and replaced them with
+`sensor_root` + `sensor_type`. Config keys followed
+(`co2_logger.filename_base` → `co2_logger.sensor_type`, same for
+soil and a new `temp_humidity_logger.sensor_type`). Per coding-style
+guidance, no backward-compat shim was kept.
+
 ## 2026-05-15 · Plant/mushroom operating mode
 
 ### decision · single top-level `mode` key drives optional component wiring

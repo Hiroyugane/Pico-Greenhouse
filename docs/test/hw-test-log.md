@@ -5,6 +5,57 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-15 · SD card layout refactor — verify writes land in new tree
+
+**Branch:** `main`
+**Why hardware-only:** real FAT32 on the SD card may behave differently
+from the host shim — in particular, recursive `mkdir` on missing
+intermediate dirs (`sensors/co2/2026/`) and the Updater's log-rotation
+rename across `/sd/logs/` are only fully exercised against the real
+VFS. Pytest covers the path math; only the device proves the writes
+hit the card.
+**Pre-flight:** boot the Pico with a freshly inserted SD card that
+**does not** already have a `sensors/`, `logs/`, `ota/`, or
+`diagnostics/` directory. RTC must be set so daily-rotated filenames
+have correct dates.
+
+### Sensor CSVs land under `sensors/<type>/YYYY/`
+
+- [ ] After ~2 minutes uptime,
+  `/sd/sensors/th/<YYYY>/th_<YYYY-MM-DD>.csv` exists and has a
+  `Timestamp,Temperature,Humidity` header followed by readings.
+- [ ] After ~2 minutes uptime,
+  `/sd/sensors/co2/<YYYY>/co2_<YYYY-MM-DD>.csv` exists with rows
+  (sensor connected) or no file (sensor absent — verify no traceback
+  in console).
+- [ ] In **plant** mode, `/sd/sensors/soil/<YYYY>/soil_<YYYY-MM-DD>.csv`
+  exists. In **mushroom** mode, the `soil/` folder is absent.
+- [ ] The legacy root files (`/sd/th_log_*.csv`, `/sd/co2_log_*.csv`,
+  `/sd/soil_log_*.csv`) are **not** modified or recreated.
+
+### System + updates logs land under /sd/logs/
+
+- [ ] `/sd/logs/system.log` exists and grows after a deliberate
+  warning (e.g. unplug SD briefly to trigger fallback path).
+- [ ] After a manual size-rotation trigger (artificially seed a
+  large `/sd/logs/system.log`), a `system_<ts>.log` appears in the
+  same dir and `system.log` restarts at 0 bytes.
+- [ ] OTA payload drop into `/sd/ota/pending/` is detected at next
+  boot, applied, and renamed under `/sd/ota/applied/<version>/`.
+- [ ] `/sd/logs/updates.log` records each attempt; after seeding a
+  pre-existing >50 KB file, the next OTA event rotates it to
+  `updates_<ts>.log`.
+
+### hw_probe diagnostics land under /sd/diagnostics/
+
+- [ ] `prototypes/hw_probe.py` writes its JSON to
+  `/sd/diagnostics/hw_probe_<ts>.json`. Old top-level
+  `/sd/hw_probe_*.json` files are untouched.
+
+### Notes (post-test) — SD layout refactor
+
+> Fill in here. Add `[!]` items with failure mode and a short repro.
+
 ## 2026-05-15 · Relay diagnostic tool — investigate random boot behavior
 
 **Branch:** `main`

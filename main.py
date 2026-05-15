@@ -25,6 +25,7 @@
 import gc
 import os
 import sys
+import time
 
 if sys.implementation.name != "micropython":  # type: ignore[union-attr]
     host_shims_path = os.path.join(  # type: ignore
@@ -90,6 +91,40 @@ def feed_wdt():
     global _wdt
     if _wdt is not None:
         _wdt.feed()
+
+
+def _enter_sd_failure_state(status_manager, wdt, countdown_s):
+    """Hold sd_led + error_led ON for countdown_s, feeding WDT, then reset.
+
+    Invoked when ``system.require_sd_startup`` is True and the cold-boot
+    mount path could not bring the card up. The countdown is visible to
+    the operator (LEDs lit + console line) so the failure cause is
+    obvious before the Pico cycles. Cold-boot SD failures are often
+    transient — bad connector seating, brown-out, slow card — so a
+    bounded reset loop tends to recover without intervention.
+
+    On MicroPython this never returns (calls ``machine.reset()``). On
+    host/CPython it returns after the wait so tests can assert state.
+    """
+    status_manager.set_sd_status(False)
+    status_manager.set_error("sd_required", True)
+    print(f"[STARTUP ERROR] SD card required but not mounted. Resetting in {countdown_s}s...")
+
+    step_s = 0.5
+    elapsed = 0.0
+    while elapsed < countdown_s:
+        if wdt is not None:
+            try:
+                wdt.feed()
+            except Exception:
+                pass
+        time.sleep(step_s)
+        elapsed += step_s
+
+    if sys.implementation.name == "micropython":  # type: ignore[union-attr]
+        import machine
+
+        machine.reset()
 
 
 def _get_runtime_load_snapshot() -> dict:
@@ -213,6 +248,20 @@ async def main():
 
     # Reflect initial SD state
     status_manager.set_sd_status(hardware.is_sd_mounted())
+
+    # Fail hard if SD is required and the boot mount path could not bring
+    # it up. Light sd_led + error_led, hold for the configured countdown
+    # (visible to the operator), then machine.reset(). The next boot will
+    # try again — cold-boot SD failures are often transient. Skipped when
+    # require_sd_startup=False so headless/test runs can proceed on
+    # fallback storage.
+    if not hardware.is_sd_mounted() and system_config.get("require_sd_startup", True):
+        _enter_sd_failure_state(
+            status_manager,
+            wdt,
+            countdown_s=system_config.get("sd_fail_reset_s", 10),
+        )
+        return  # host path: end main() after countdown
 
     wdt.feed()  # Feed before buffer/logger init
 
@@ -547,6 +596,10 @@ async def main():
             walk_order=walk_order,
         )
         wdt.feed()  # Feed after POST
+        # POST drives every owned LED OFF at the end. Re-assert real state
+        # so a degraded condition raised earlier (currently only SD) isn't
+        # silently masked by the visual walk.
+        status_manager.set_sd_status(hardware.is_sd_mounted())
         print("[STARTUP] POST complete — all status LEDs verified")
 
     Service_config = DEVICE_CONFIG.get("Service_reminder", {})

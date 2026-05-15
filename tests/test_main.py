@@ -898,3 +898,209 @@ class TestMainInitFailures:
 
         # run_post should NOT have been called
         mock_sm.run_post.assert_not_called()
+
+
+class TestEnterSDFailureState:
+    """Tests for _enter_sd_failure_state(): boot-time hard-fail on SD missing."""
+
+    def test_lights_sd_and_error_leds(self, monkeypatch):
+        """SD failure path turns on sd_led (via set_sd_status(False)) and error_led."""
+        import main as main_module
+
+        sm = Mock()
+        wdt = Mock()
+        monkeypatch.setattr(main_module.time, "sleep", lambda _: None)
+
+        main_module._enter_sd_failure_state(sm, wdt, countdown_s=1)
+
+        sm.set_sd_status.assert_called_once_with(False)
+        sm.set_error.assert_called_once_with("sd_required", True)
+
+    def test_feeds_watchdog_during_countdown(self, monkeypatch):
+        """Each 0.5s tick of the countdown must feed the watchdog."""
+        import main as main_module
+
+        sm = Mock()
+        wdt = Mock()
+        monkeypatch.setattr(main_module.time, "sleep", lambda _: None)
+
+        main_module._enter_sd_failure_state(sm, wdt, countdown_s=2)
+
+        # 2s / 0.5s step = 4 feeds
+        assert wdt.feed.call_count == 4
+
+    def test_tolerates_wdt_feed_failure(self, monkeypatch):
+        """A raising WDT.feed() does not abort the countdown."""
+        import main as main_module
+
+        sm = Mock()
+        wdt = Mock()
+        wdt.feed.side_effect = RuntimeError("dead WDT")
+        monkeypatch.setattr(main_module.time, "sleep", lambda _: None)
+
+        main_module._enter_sd_failure_state(sm, wdt, countdown_s=1)
+
+        sm.set_error.assert_called_once_with("sd_required", True)
+        assert wdt.feed.call_count >= 1
+
+    def test_tolerates_no_wdt(self, monkeypatch):
+        """Passing wdt=None must not raise."""
+        import main as main_module
+
+        sm = Mock()
+        monkeypatch.setattr(main_module.time, "sleep", lambda _: None)
+
+        main_module._enter_sd_failure_state(sm, None, countdown_s=1)
+
+        sm.set_error.assert_called_once_with("sd_required", True)
+
+
+@pytest.mark.asyncio
+class TestMainSDFailHard:
+    """Tests for the require_sd_startup hard-fail path in main()."""
+
+    async def test_sd_failure_with_required_triggers_fail_state(self, monkeypatch):
+        """SD missing + require_sd_startup=True → _enter_sd_failure_state is called."""
+        import main as main_module
+
+        monkeypatch.setattr(main_module, "validate_config", lambda: True)
+
+        mock_hw = Mock()
+        mock_hw.setup.return_value = True
+        mock_hw.get_rtc.return_value = Mock()
+        mock_hw.is_sd_mounted.return_value = False  # SD failed
+        monkeypatch.setattr(main_module, "HardwareFactory", lambda *a, **kw: mock_hw)
+
+        mock_sm = Mock(run_post=AsyncMock(return_value=True))
+        monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: mock_sm)
+
+        fail_state_calls = []
+
+        def _capture_fail_state(sm, wdt, countdown_s):
+            fail_state_calls.append({"sm": sm, "wdt": wdt, "countdown_s": countdown_s})
+
+        monkeypatch.setattr(main_module, "_enter_sd_failure_state", _capture_fail_state)
+        monkeypatch.setitem(main_module.DEVICE_CONFIG["system"], "require_sd_startup", True)
+        monkeypatch.setitem(main_module.DEVICE_CONFIG["system"], "sd_fail_reset_s", 7)
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            await main_module.main()
+
+        # Hard-fail path entered exactly once with config-driven countdown.
+        assert len(fail_state_calls) == 1
+        assert fail_state_calls[0]["countdown_s"] == 7
+        assert fail_state_calls[0]["sm"] is mock_sm
+        # Subsequent init (BufferManager, EventLogger, ...) must NOT have run.
+        mock_sm.run_post.assert_not_called()
+
+    async def test_sd_failure_without_required_continues_on_fallback(self, monkeypatch):
+        """SD missing + require_sd_startup=False → boot proceeds (existing fallback path)."""
+        import main as main_module
+
+        monkeypatch.setattr(main_module, "validate_config", lambda: True)
+
+        mock_hw = Mock()
+        mock_hw.setup.return_value = True
+        mock_hw.get_rtc.return_value = Mock()
+        mock_hw.is_sd_mounted.return_value = False
+        monkeypatch.setattr(main_module, "HardwareFactory", lambda *a, **kw: mock_hw)
+
+        mock_buffer = Mock()
+        mock_buffer.get_metrics.return_value = {
+            "buffer_entries": 0,
+            "writes_to_fallback": 0,
+            "fallback_migrations": 0,
+            "writes_to_primary": 0,
+            "write_failures": 0,
+        }
+        mock_buffer.is_primary_available.return_value = False
+        mock_buffer._buffers = {}
+        monkeypatch.setattr(main_module, "BufferManager", lambda *a, **kw: mock_buffer)
+
+        mock_logger = Mock()
+        monkeypatch.setattr(main_module, "EventLogger", lambda *a, **kw: mock_logger)
+        monkeypatch.setattr(main_module, "TempHumidityLogger", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "FanController", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "GrowlightController", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "ServiceReminder", lambda *a, **kw: Mock())
+        mock_buzzer = Mock()
+        mock_buzzer.startup = AsyncMock()
+        monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
+        mock_sm = Mock(run_post=AsyncMock(return_value=True))
+        monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: mock_sm)
+
+        fail_state_calls = []
+        monkeypatch.setattr(
+            main_module,
+            "_enter_sd_failure_state",
+            lambda *a, **kw: fail_state_calls.append(a),
+        )
+        monkeypatch.setitem(main_module.DEVICE_CONFIG["system"], "require_sd_startup", False)
+        monkeypatch.setattr(main_module.asyncio, "create_task", _mock_create_task)
+
+        async def stop_sleep(_):
+            raise asyncio.CancelledError()
+
+        monkeypatch.setattr(main_module.asyncio, "sleep", stop_sleep)
+        monkeypatch.setattr(main_module.asyncio, "sleep_ms", stop_sleep)
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with pytest.raises(asyncio.CancelledError):
+                await main_module.main()
+
+        # Restore default so other tests see require_sd_startup=True again.
+        monkeypatch.setitem(main_module.DEVICE_CONFIG["system"], "require_sd_startup", True)
+
+        assert fail_state_calls == []
+        mock_sm.run_post.assert_called_once()
+
+    async def test_post_reasserts_sd_status_after_walk(self, monkeypatch):
+        """After run_post() drives every LED off, set_sd_status is re-called with real state."""
+        import main as main_module
+
+        monkeypatch.setattr(main_module, "validate_config", lambda: True)
+
+        mock_hw = Mock()
+        mock_hw.setup.return_value = True
+        mock_hw.get_rtc.return_value = Mock()
+        mock_hw.is_sd_mounted.return_value = True
+        monkeypatch.setattr(main_module, "HardwareFactory", lambda *a, **kw: mock_hw)
+
+        mock_buffer = Mock()
+        mock_buffer.get_metrics.return_value = {
+            "buffer_entries": 0,
+            "writes_to_fallback": 0,
+            "fallback_migrations": 0,
+            "writes_to_primary": 0,
+            "write_failures": 0,
+        }
+        mock_buffer.is_primary_available.return_value = True
+        mock_buffer._buffers = {}
+        monkeypatch.setattr(main_module, "BufferManager", lambda *a, **kw: mock_buffer)
+        monkeypatch.setattr(main_module, "EventLogger", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "TempHumidityLogger", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "FanController", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "GrowlightController", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "ServiceReminder", lambda *a, **kw: Mock())
+        mock_buzzer = Mock()
+        mock_buzzer.startup = AsyncMock()
+        monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
+        mock_sm = Mock(run_post=AsyncMock(return_value=True))
+        monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: mock_sm)
+        monkeypatch.setattr(main_module.asyncio, "create_task", _mock_create_task)
+
+        async def stop_sleep(_):
+            raise asyncio.CancelledError()
+
+        monkeypatch.setattr(main_module.asyncio, "sleep", stop_sleep)
+        monkeypatch.setattr(main_module.asyncio, "sleep_ms", stop_sleep)
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with pytest.raises(asyncio.CancelledError):
+                await main_module.main()
+
+        # set_sd_status is called at least twice: once before POST (initial
+        # reflection) and once immediately after POST (re-assert).
+        assert mock_sm.set_sd_status.call_count >= 2

@@ -533,6 +533,44 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["growlight"]["ramp_duration_s"] = original
 
+    def test_display_negative_startup_banner_raises(self):
+        """display.startup_banner_s < 0 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["display"]["startup_banner_s"]
+        config.DEVICE_CONFIG["display"]["startup_banner_s"] = -1
+        try:
+            with pytest.raises(ValueError, match="startup_banner_s"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["display"]["startup_banner_s"] = original
+
+    def test_display_non_numeric_vram_delay_raises(self):
+        """display.vram_clear_delay_s with non-numeric value raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["display"]["vram_clear_delay_s"]
+        config.DEVICE_CONFIG["display"]["vram_clear_delay_s"] = "fast"
+        try:
+            with pytest.raises(ValueError, match="vram_clear_delay_s"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["display"]["vram_clear_delay_s"] = original
+
+    def test_display_zero_delays_valid(self):
+        """display warmup delays of 0 are accepted (used in tests)."""
+        import config
+
+        originals = {k: config.DEVICE_CONFIG["display"][k] for k in
+                     ("startup_banner_s", "vram_clear_delay_s", "invert_delay_s")}
+        for k in originals:
+            config.DEVICE_CONFIG["display"][k] = 0
+        try:
+            assert config.validate_config() is True
+        finally:
+            for k, v in originals.items():
+                config.DEVICE_CONFIG["display"][k] = v
+
     def test_negative_blink_after_days_raises(self):
         """Service_reminder.blink_after_days = -1 raises ValueError."""
         import config

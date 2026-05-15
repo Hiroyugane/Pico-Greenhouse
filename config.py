@@ -277,6 +277,9 @@ DEVICE_CONFIG = {
         "max_history": 120,  # Max readings to keep for stats (120 × 30 s ≈ 1 h)
         "menu_timeout_s": 30,  # Return to default menu after this many seconds of inactivity
         "display_timeout_s": 120,  # Turn off display after this many seconds of inactivity (extends OLED lifetime)
+        "startup_banner_s": 2.0,  # How long to show the "Pi Greenhouse / Ready!" banner at init
+        "vram_clear_delay_s": 0.05,  # Per-step delay during the triple-clear sequence at init
+        "invert_delay_s": 0.1,  # Delay after invert/revert and final clear at init
     },
     # Output Pin Initial States
     "output_pins": {
@@ -485,6 +488,9 @@ def validate_config():
             "stats_window_s",
             "max_history",
             "menu_timeout_s",
+            "startup_banner_s",
+            "vram_clear_delay_s",
+            "invert_delay_s",
         ],
         "updater": [
             "enabled",
@@ -631,6 +637,11 @@ def validate_config():
         raise ValueError("soil_logger.warn_pct_below must be 0-100")
     if not isinstance(soil_cfg["filename_base"], str) or not soil_cfg["filename_base"]:
         raise ValueError("soil_logger.filename_base must be a non-empty string")
+
+    disp_cfg = DEVICE_CONFIG["display"]
+    for delay_key in ("startup_banner_s", "vram_clear_delay_s", "invert_delay_s"):
+        if not isinstance(disp_cfg[delay_key], (int, float)) or disp_cfg[delay_key] < 0:
+            raise ValueError(f"display.{delay_key} must be a number >= 0")
 
     dac_addr = DEVICE_CONFIG["growlight"]["dac_i2c_address"]
     if not isinstance(dac_addr, int) or not (0x08 <= dac_addr <= 0x77):

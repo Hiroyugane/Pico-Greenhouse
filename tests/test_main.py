@@ -10,6 +10,18 @@ from config import DEVICE_CONFIG
 from tests.conftest import FAKE_LOCALTIME
 
 
+@pytest.fixture(autouse=True)
+def _stub_oled_display(monkeypatch):
+    """Replace OLEDDisplay in main with a Mock so init warmup sleeps don't run."""
+    import main as main_module
+
+    monkeypatch.setattr(
+        main_module,
+        "OLEDDisplay",
+        lambda *a, **kw: Mock(display_on=True),
+    )
+
+
 def _mock_create_task(coro):
     """Test helper: consume coroutine objects when asyncio.create_task is monkeypatched."""
     coro.close()

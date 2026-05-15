@@ -311,6 +311,28 @@ DEVICE_CONFIG = {
         "queue_batch_size": 5,  # Max writes per drain cycle
         "sd_recovery_max_consecutive_failures": 5,  # Max failures before giving up in recovery attempt
     },
+    # Software Updater Configuration (SD-payload self-update; see lib/updater.py)
+    #
+    # Operator drops a payload tree under update_dir on the SD card:
+    #   <update_dir>/manifest.json           — {version, files: [{path, sha256, bytes}, ...]}
+    #   <update_dir>/main.py                 — replaces /main.py
+    #   <update_dir>/config.py               — replaces /config.py
+    #   <update_dir>/lib/<file>.py           — replaces /lib/<file>.py
+    #
+    # On boot, main.py calls run_pending_update() BEFORE EventLogger init.
+    # The updater verifies every file (SHA-256) before writing any, retries
+    # per-file writes up to max_retries on failure, renames update_dir →
+    # applied_dir/<version>/ on success, appends to log_path, then calls
+    # machine.reset(). Set enabled=False to skip the boot-time check entirely.
+    "updater": {
+        "enabled": True,
+        "update_dir": "/sd/update",
+        "applied_dir": "/sd/applied",
+        "log_path": "/sd/updates.log",
+        "max_retries": 3,  # Per-file write retry count on apply failure
+        "retry_delay_ms": 200,  # Delay between write retries (ms)
+        "allowed_paths": ["main.py", "config.py", "lib/"],  # Whitelist; anything outside fails verify
+    },
 }
 
 
@@ -463,6 +485,15 @@ def validate_config():
             "stats_window_s",
             "max_history",
             "menu_timeout_s",
+        ],
+        "updater": [
+            "enabled",
+            "update_dir",
+            "applied_dir",
+            "log_path",
+            "max_retries",
+            "retry_delay_ms",
+            "allowed_paths",
         ],
         "system": [
             "require_sd_startup",
@@ -665,5 +696,23 @@ def validate_config():
 
     if DEVICE_CONFIG["system"]["sd_recovery_max_consecutive_failures"] <= 0:
         raise ValueError("system.sd_recovery_max_consecutive_failures must be > 0")
+
+    # Validate updater configuration
+    upd_cfg = DEVICE_CONFIG["updater"]
+    if not isinstance(upd_cfg["enabled"], bool):
+        raise ValueError("updater.enabled must be a bool")
+    for path_key in ("update_dir", "applied_dir", "log_path"):
+        v = upd_cfg[path_key]
+        if not isinstance(v, str) or not v.startswith("/"):
+            raise ValueError(f"updater.{path_key} must be an absolute path string")
+    if not isinstance(upd_cfg["max_retries"], int) or upd_cfg["max_retries"] < 1:
+        raise ValueError("updater.max_retries must be an int >= 1")
+    if not isinstance(upd_cfg["retry_delay_ms"], int) or upd_cfg["retry_delay_ms"] < 0:
+        raise ValueError("updater.retry_delay_ms must be an int >= 0")
+    if not isinstance(upd_cfg["allowed_paths"], list) or not upd_cfg["allowed_paths"]:
+        raise ValueError("updater.allowed_paths must be a non-empty list")
+    for entry in upd_cfg["allowed_paths"]:
+        if not isinstance(entry, str) or not entry:
+            raise ValueError("updater.allowed_paths entries must be non-empty strings")
 
     return True

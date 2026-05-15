@@ -30,6 +30,7 @@ class TestConfigStructure:
             "output_pins",
             "display",
             "system",
+            "updater",
         ]
         for key in required:
             assert key in DEVICE_CONFIG, f"Missing section: {key}"
@@ -110,6 +111,42 @@ class TestValidateConfig:
                 config.validate_config()
         finally:
             config.DEVICE_CONFIG["fan_1"]["on_time_s"] = original
+
+    def test_updater_relative_path_raises(self):
+        """updater.update_dir must be an absolute path."""
+        import config
+
+        original = config.DEVICE_CONFIG["updater"]["update_dir"]
+        config.DEVICE_CONFIG["updater"]["update_dir"] = "sd/update"
+        try:
+            with pytest.raises(ValueError, match="updater.update_dir"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["updater"]["update_dir"] = original
+
+    def test_updater_zero_retries_raises(self):
+        """updater.max_retries < 1 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["updater"]["max_retries"]
+        config.DEVICE_CONFIG["updater"]["max_retries"] = 0
+        try:
+            with pytest.raises(ValueError, match="updater.max_retries"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["updater"]["max_retries"] = original
+
+    def test_updater_empty_allowed_paths_raises(self):
+        """updater.allowed_paths must be a non-empty list."""
+        import config
+
+        original = config.DEVICE_CONFIG["updater"]["allowed_paths"]
+        config.DEVICE_CONFIG["updater"]["allowed_paths"] = []
+        try:
+            with pytest.raises(ValueError, match="updater.allowed_paths"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["updater"]["allowed_paths"] = original
 
     def test_zero_fan2_interval_raises(self):
         """fan_2.interval_s = 0 raises ValueError."""

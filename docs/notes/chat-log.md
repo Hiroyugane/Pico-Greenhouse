@@ -5,6 +5,34 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-15 · Plant/mushroom operating mode
+
+### decision · single top-level `mode` key drives optional component wiring
+
+Added `DEVICE_CONFIG["mode"]` with two values: `"plant"` enables the
+MCP4725-dimmed grow light path and constructs the soil-moisture
+logger on GP28; `"mushroom"` runs the relay-only grow light and
+skips `SoilLogger` entirely (no task, no ADC init). The mode is
+validated at boot and is the sole switch — operators flip one key
+and reboot. Default is `"mushroom"` per user preference.
+
+### deviation · `growlight.mode` is no longer consulted at runtime
+
+The previous `growlight.mode` key (`"dimmed"` vs `"relay_only"`) is
+shadowed by the new top-level `mode`: plant ⇒ dimmed, mushroom ⇒
+relay-only. The growlight.mode field still validates so existing
+configs don't fail, but `main.py` derives the wiring purely from the
+top-level mode. Kept the field rather than deleting it to avoid
+churning every test fixture; future cleanup can remove it.
+
+### note · disabled components are not constructed at all
+
+Per user direction the disabled-in-mushroom path is "skip
+construction" rather than "construct then idle". This keeps RAM
+free on the Pico and means a mushroom-mode boot leaves GP28 as a
+plain GPIO and skips MCP4725 I2C probing — both visible in the
+startup log lines.
+
 ## 2026-05-15 · Relay diagnostic tool added
 
 ### issue · relays behave randomly across restarts — needs bench probe

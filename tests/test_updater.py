@@ -174,6 +174,35 @@ class TestUpdaterUnit:
         assert u._is_path_allowed("../etc/passwd") is False
         assert u._is_path_allowed("/etc/passwd") is False
 
+    def test_log_creates_parent_dir(self, updater_factory, sd_root):
+        nested_log = sd_root / "logs" / "updates.log"
+        u = updater_factory(log_path=str(nested_log))
+        u.log("start", "v1", detail="x")
+        assert nested_log.exists()
+        assert "start" in nested_log.read_text()
+
+    def test_log_rotates_when_threshold_exceeded(self, updater_factory, sd_root):
+        log_path = sd_root / "updates.log"
+        log_path.write_text("x" * 200)  # pre-existing log past threshold
+        u = updater_factory(log_path=str(log_path), log_max_size=100)
+        u.log("apply_ok", "v2", detail="post-rotation entry")
+
+        rotated = sorted(p for p in sd_root.iterdir() if p.name.startswith("updates_") and p.suffix == ".log")
+        assert len(rotated) == 1
+        assert rotated[0].read_text() == "x" * 200
+        assert "apply_ok" in log_path.read_text()
+        assert "x" * 200 not in log_path.read_text()
+
+    def test_log_max_size_zero_disables_rotation(self, updater_factory, sd_root):
+        log_path = sd_root / "updates.log"
+        log_path.write_text("x" * 200)
+        u = updater_factory(log_path=str(log_path), log_max_size=0)
+        u.log("apply_ok", "v2", detail="appended")
+        # No rotated file produced
+        rotated = [p for p in sd_root.iterdir() if p.name.startswith("updates_") and p.suffix == ".log"]
+        assert rotated == []
+        assert log_path.read_text().startswith("x" * 200)
+
 
 class TestRunPendingUpdate:
     """End-to-end boot-time hook behaviour."""

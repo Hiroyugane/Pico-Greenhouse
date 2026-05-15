@@ -370,7 +370,8 @@ DEVICE_CONFIG = {
         "enabled": True,
         "update_dir": "/sd/update",
         "applied_dir": "/sd/applied",
-        "log_path": "/sd/updates.log",
+        "log_path": "/sd/logs/updates.log",
+        "log_max_size": 50000,  # Bytes; rotate to <name>_<ts>.log past this
         "max_retries": 3,  # Per-file write retry count on apply failure
         "retry_delay_ms": 200,  # Delay between write retries (ms)
         "allowed_paths": ["main.py", "config.py", "config.mpy", "lib/"],  # Whitelist; anything outside fails verify
@@ -571,6 +572,7 @@ def validate_config():
             "update_dir",
             "applied_dir",
             "log_path",
+            "log_max_size",
             "max_retries",
             "retry_delay_ms",
             "allowed_paths",
@@ -834,6 +836,8 @@ def validate_config():
         v = upd_cfg[path_key]
         if not isinstance(v, str) or not v.startswith("/"):
             raise ValueError(f"updater.{path_key} must be an absolute path string")
+    if not isinstance(upd_cfg["log_max_size"], int) or upd_cfg["log_max_size"] < 0:
+        raise ValueError("updater.log_max_size must be an int >= 0")
     if not isinstance(upd_cfg["max_retries"], int) or upd_cfg["max_retries"] < 1:
         raise ValueError("updater.max_retries must be an int >= 1")
     if not isinstance(upd_cfg["retry_delay_ms"], int) or upd_cfg["retry_delay_ms"] < 0:

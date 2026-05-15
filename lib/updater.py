@@ -163,6 +163,7 @@ class Updater:
         wdt=None,
         time_provider=None,
         feedback=None,
+        log_max_size=50000,
     ):
         self.update_dir = update_dir.rstrip("/").rstrip("\\")
         self.applied_dir = applied_dir.rstrip("/").rstrip("\\")
@@ -173,6 +174,7 @@ class Updater:
         self.wdt = wdt
         self.time_provider = time_provider
         self.feedback = feedback
+        self.log_max_size = int(log_max_size)
 
     # --- Public API --------------------------------------------------
 
@@ -278,12 +280,36 @@ class Updater:
 
     def log(self, status, version, detail=""):
         try:
+            parent = _dirname(self.log_path)
+            if parent:
+                _makedirs(parent)
+            self._maybe_rotate_log()
             ts = _timestamp_iso()
             line = "%s\t%s\t%s\t%s\n" % (ts, status, version, detail)
             with open(self.log_path, "a") as f:
                 f.write(line)
         except Exception:
             # Logging is best-effort; never block boot continuation.
+            pass
+
+    def _maybe_rotate_log(self):
+        """Rename current log to ``<base>_<ts>.log`` once it crosses ``log_max_size``."""
+        if self.log_max_size <= 0:
+            return
+        try:
+            size = os.stat(self.log_path)[6]
+        except OSError:
+            return
+        if size < self.log_max_size:
+            return
+        ts = _timestamp_iso().replace(":", "").replace(" ", "_")
+        if self.log_path.endswith(".log"):
+            rotated = self.log_path[:-4] + "_" + ts + ".log"
+        else:
+            rotated = self.log_path + "_" + ts
+        try:
+            os.rename(self.log_path, rotated)
+        except OSError:
             pass
 
     # --- Internal helpers -------------------------------------------
@@ -384,6 +410,7 @@ def run_pending_update(config, hardware, wdt=None):
         max_retries=upd_cfg.get("max_retries", 3),
         retry_delay_ms=upd_cfg.get("retry_delay_ms", 200),
         wdt=wdt,
+        log_max_size=upd_cfg.get("log_max_size", 50000),
     )
 
     if not updater.has_pending_update():

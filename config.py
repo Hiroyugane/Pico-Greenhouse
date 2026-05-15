@@ -341,9 +341,9 @@ DEVICE_CONFIG = {
         "health_check_interval_s": 60,  # Normal health-check loop interval
         "sd_recovery_interval_s": 10,  # Fast retry interval when SD is unavailable
         "i2c_freq": 400000,  # I2C bus frequency in Hz (100 kHz standard, 400 kHz fast)
-        "sd_power_up_ms": 250,  # SD card power-up stabilization delay (ms)
+        "sd_power_up_ms": 1500,  # SD card power-up stabilization delay (ms); cheap cards may need >1s cold
         "sd_mount_retries": 3,  # Number of SD mount attempts at cold boot
-        "sd_retry_delay_ms": 500,  # Delay between SD mount retries (ms)
+        "sd_retry_delay_ms": 1000,  # Delay between SD mount retries (ms)
         "rtc_sync_interval_s": 3600,  # RTC-to-Pico clock sync interval (seconds)
         "button_poll_ms": 50,  # Button ISR flag polling interval (ms)
         "watchdog_timeout_ms": 8000,  # Watchdog timeout (ms); RP2040 max is ~8388ms

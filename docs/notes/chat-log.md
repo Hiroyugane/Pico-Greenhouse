@@ -5,6 +5,51 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-15 · Cold-boot SD mount — timing + is_mounted fallback
+
+### issue · SPI reinit alone did not unblock cold-boot mount
+
+After landing the SPI-reinit-between-retries fix and the
+`require_sd_startup` hard-fail wiring, on-hardware test still showed
+boot mount failing — the new sd_led+error_led countdown was firing
+correctly and the Pico kept cycling. Manual menu remount continued to
+work. That ruled out SPI bus state as the dominant cause and pointed
+at total elapsed time: by the time the operator can press the menu
+button, the card has had many seconds to settle; at boot, the retry
+loop gave it ~1.75 s before declaring failure.
+
+### decision · longer cold-boot waits + is_mounted as final fallback
+
+`_init_sd` now:
+
+- feeds the injected WDT inside the retry loop so longer waits don't
+  trip the watchdog (HardwareFactory now takes a `wdt=` constructor
+  arg, wired from `main.py`),
+- `_safe_umount()`s the mount point between attempts to clear any
+  half-mounted node a previous attempt left behind,
+- after all `mount_sd` attempts fail, runs one more pass via
+  `lib.sd_integration.is_mounted(None, None, return_instances=True)`
+  — the exact code path the menu remount uses, which builds a fresh
+  SPI/SDCard pair and has its own MBR-read retry,
+- prints `[HardwareFactory] SD mount attempt N/M...` and the
+  fallback line so the operator can capture the failing step from
+  the USB console.
+
+Config defaults bumped: `system.sd_power_up_ms` 250 → 1500 and
+`system.sd_retry_delay_ms` 500 → 1000. Total cold-boot budget is
+now ~5.5 s, still well under the 8 s WDT (which is fed mid-loop).
+
+### note · why "just call is_mounted" works
+
+`is_mounted(sd=None, spi=None)` builds a brand-new SPI bus inside
+its own `_init_sd_local` helper, attempts `os.mount`, falls back to
+a `umount → deinit → sleep 200 ms → re-init → re-read MBR`
+sequence on MBR-read failure, and only returns True after the MBR
+has actually been read. That second-chance MBR retry is the bit the
+`mount_sd` retry loop doesn't have. Folding it in as the boot
+path's final attempt closes that gap without having to duplicate
+the recovery code into `mount_sd` itself.
+
 ## 2026-05-15 · Boot SD mount recovery + hard-fail
 
 ### issue · SD failed to mount on cold boot but worked from menu remount

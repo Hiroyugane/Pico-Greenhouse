@@ -5,6 +5,36 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-15 · Boot SD diagnostics tee'd to /boot.log
+
+### decision · mirror HardwareFactory pre-EventLogger output to flash file
+
+Standalone Pico has no USB serial reader attached, so the diagnostic
+prints that explain *why* the boot SD mount failed
+(`[HardwareFactory] SD mount attempt N/M...`, the `mount_sd` error
+line, the `is_mounted fallback` step) were invisible when the system
+entered the `require_sd_startup` reset loop. New
+[lib/boot_log.py](../../lib/boot_log.py) tees those lines into a file
+on internal flash so the operator can read them over USB MSC after
+power-cycling out of the loop.
+
+Defaults: `/boot.log`, 10 KB cap, truncated on the first write per
+process so each boot starts fresh. `boot_log_path` and
+`boot_log_max_kb` live in `DEVICE_CONFIG["system"]` with the usual
+validator+test plumbing. `main.py` calls `boot_log.configure()`
+immediately after `validate_config()` so HardwareFactory's first
+`_debug` / explicit `boot_log.log` calls land in the configured
+file.
+
+### note · boot_log only routes when no EventLogger is wired
+
+`HardwareFactory._debug` falls through to `boot_log.log` only when
+neither a logger nor a debug_callback is attached — i.e. during
+boot, before `EventLogger` is constructed. Once the logger is wired,
+every debug call goes there and the boot log stops growing. This
+keeps the helper scoped to the diagnostic gap it was created for and
+avoids overlap with `system.log` rotation.
+
 ## 2026-05-15 · Cold-boot SD mount — timing + is_mounted fallback
 
 ### issue · SPI reinit alone did not unblock cold-boot mount

@@ -5,6 +5,39 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-15 · /boot.log captures SD diagnostics without USB serial
+
+**Branch:** `main`
+**Why hardware-only:** `lib/boot_log.py` writes to the Pico's
+internal flash; the only way to read it back is to mount the Pico as
+USB MSC (or open Thonny's file browser) after a boot. Pytest covers
+the write logic but not the over-USB retrieval path.
+**Pre-flight:** Pico flashed with the latest `lib/`, `main.py`,
+`config.py`. Defaults in play (`boot_log_path=/boot.log`,
+`boot_log_max_kb=10`).
+
+### /boot.log appears and contains SD-diagnostic lines
+
+- [ ] Power-cycle the Pico with NO SD inserted (hard-fail loop).
+  After a few reset cycles, unplug from power, plug into a host as
+  USB MSC, open `boot.log` at the device root.
+- [ ] File contains `[HardwareFactory] SD mount attempt 1/3...`,
+  the `reset SPI/mount and retry` lines, `All mount_sd attempts
+  failed; trying is_mounted fallback`, and the final `[SD] Mount
+  failed at /sd: <reason>` line (the actual error string).
+- [ ] File size ≤ 10 KB.
+
+### /boot.log truncates per boot
+
+- [ ] Read `/boot.log` after one failed boot (e.g. 6 lines).
+- [ ] Power-cycle without SD again. Read `/boot.log` after the new
+  boot — the file is again ~6 lines (NOT 12). First write per boot
+  truncates.
+
+### Notes (post-test) — boot_log
+
+> Fill in here.
+
 ## 2026-05-15 · Boot SD mount recovery + hard-fail behavior
 
 **Branch:** `main`

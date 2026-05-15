@@ -174,7 +174,7 @@ DEVICE_CONFIG = {
         "adc_dry_raw": 850,  # Raw 10-bit reading for 0% moisture (in-air)
         "adc_wet_raw": 350,  # Raw 10-bit reading for 100% moisture (saturated)
         "warn_pct_below": 20,  # Trigger warning LED when soil < this %
-        "filename_base": "soil_log",  # Becomes /sd/soil_log_YYYY-MM-DD.csv
+        "sensor_type": "soil",  # Folder + filename prefix under paths.sensor_root
     },
     # CO2 Sensor Logger Configuration (SenseAir S8 / equivalent on UART0)
     #
@@ -491,7 +491,7 @@ def validate_config():
             "adc_dry_raw",
             "adc_wet_raw",
             "warn_pct_below",
-            "filename_base",
+            "sensor_type",
         ],
         "growlight": [
             "mode",
@@ -722,8 +722,8 @@ def validate_config():
         raise ValueError("soil_logger.adc_dry_raw must be > adc_wet_raw")
     if not (0 <= soil_cfg["warn_pct_below"] <= 100):
         raise ValueError("soil_logger.warn_pct_below must be 0-100")
-    if not isinstance(soil_cfg["filename_base"], str) or not soil_cfg["filename_base"]:
-        raise ValueError("soil_logger.filename_base must be a non-empty string")
+    if not isinstance(soil_cfg["sensor_type"], str) or not soil_cfg["sensor_type"]:
+        raise ValueError("soil_logger.sensor_type must be a non-empty string")
 
     disp_cfg = DEVICE_CONFIG["display"]
     for delay_key in ("startup_banner_s", "vram_clear_delay_s", "invert_delay_s"):

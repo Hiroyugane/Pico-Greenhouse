@@ -475,7 +475,8 @@ async def main():
                 adc_dry_raw=soil_config.get("adc_dry_raw", 850),
                 adc_wet_raw=soil_config.get("adc_wet_raw", 350),
                 warn_pct_below=soil_config.get("warn_pct_below", 20),
-                filename_base=soil_config.get("filename_base", "soil_log"),
+                sensor_root=DEVICE_CONFIG["paths"]["sensor_root"],
+                sensor_type=soil_config.get("sensor_type", "soil"),
                 write_queue=write_queue,
                 status_manager=status_manager,
             )

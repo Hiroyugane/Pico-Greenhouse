@@ -45,7 +45,8 @@ def soil_logger(time_provider, buffer_manager, mock_event_logger, fake_adc):
         adc_dry_raw=850,
         adc_wet_raw=350,
         warn_pct_below=20,
-        filename_base="soil_log",
+        sensor_root="/sd/sensors",
+        sensor_type="soil",
     )
 
 
@@ -105,8 +106,9 @@ class TestPollOnce:
         self._run(soil_logger._poll_once())
         from pathlib import Path
 
-        sd_files = list(Path(buffer_manager.sd_mount_point).glob("soil_log_*.csv"))
+        sd_files = list(Path(buffer_manager.sd_mount_point).rglob("soil_*.csv"))
         assert len(sd_files) == 1
+        assert sd_files[0].parent.parent.name == "soil"
         content = sd_files[0].read_text()
         # CSV format: Timestamp,Raw,Percent
         assert "Timestamp,Raw,Percent" in content
@@ -174,10 +176,8 @@ class TestLogLoop:
 
 
 class TestFilenameRollover:
-    def test_filename_includes_date(self, soil_logger):
-        assert soil_logger.filename.startswith("/sd/soil_log_")
-        assert soil_logger.filename.endswith(".csv")
-        assert "2026-01-29" in soil_logger.filename
+    def test_filename_includes_date_under_sensor_tree(self, soil_logger):
+        assert soil_logger.filename == "/sd/sensors/soil/2026/soil_2026-01-29.csv"
 
 
 class TestGetState:

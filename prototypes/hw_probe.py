@@ -1102,7 +1102,9 @@ def write_results():
     json_str = json.dumps(payload)
 
     paths_tried = []
-    for path in ["/sd/diagnostics/hw_probe_{}.json".format(_ts().replace(" ", "_").replace(":", "")), "/local/hw_probe.json"]:
+    ts_slug = _ts().replace(" ", "_").replace(":", "")
+    sd_path = "/sd/diagnostics/hw_probe_{}.json".format(ts_slug)
+    for path in [sd_path, "/local/hw_probe.json"]:
         try:
             dir_path = "/".join(path.split("/")[:-1])
             if dir_path:

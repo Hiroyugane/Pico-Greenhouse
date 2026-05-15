@@ -5,6 +5,22 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-15 · SD-update version string scheme
+
+### decision · use UTC datetime + git short hash, drop per-day bump
+
+`tools/build_update_payload.py` previously generated versions of the
+form `YYYY-MM-DD.N` and tried to bump `N` per day. Two bugs made `N`
+always 1: the lookup path was `out_dir.parent` instead of `out_dir`
+(stat'd `build/manifest.json`, which never exists), and `_clean_out_dir`
+wiped the directory before the bump logic ran. Rather than fix the
+bump, the format now embeds the build identity directly:
+`YYYYMMDDTHHMMSSZ-<shorthash>` (UTC, ISO 8601 basic, FAT32-safe — no
+colons). Hash comes from `git rev-parse --short HEAD`; falls back to
+`nogit` when git is unavailable. `lib/updater.py` treats version as an
+opaque string, so no consumer changes were needed and all 55 updater
+tests still pass.
+
 ## 2026-05-15 · SD-update loading-screen feedback
 
 ### decision · standalone UpdateFeedback, built only when an update fires

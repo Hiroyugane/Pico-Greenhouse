@@ -5,6 +5,35 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-15 · OLED warmup delays now configurable
+
+**Branch:** `main`
+**Why hardware-only:** the warmup sequence (`vram_clear_delay_s`,
+`invert_delay_s`, `startup_banner_s`) exists to mask SSD1306 power-on
+garbage pixels and to show the "Pi Greenhouse / Ready!" banner.
+Host pytest can't tell whether shorter delays leave visible artifacts
+or whether the banner is readable.
+**Pre-flight:** Pico powered cold, OLED visible, `config.py` at
+defaults (banner 2.0 s, vram delay 0.05 s, invert delay 0.1 s).
+
+### Default delays (regression check)
+
+- [ ] Cold-boot the Pico. Banner "Pi Greenhouse / Ready!" appears
+      and stays visible for ~2 s before the first menu renders.
+- [ ] No garbage pixels persist past the boot sequence.
+
+### Tuned-down delays
+
+- [ ] Set `display.startup_banner_s = 0.5` in `config.py`, redeploy,
+      cold-boot. Banner flashes briefly, menu still renders cleanly.
+- [ ] Set all three delays to `0`, redeploy, cold-boot. Note in
+      Notes whether garbage pixels are visible (this is the failure
+      mode the delays were originally added to mask).
+
+### Notes (post-test)
+
+> Fill in.
+
 ## 2026-05-15 · Compiled SD-update payload (.mpy) end-to-end
 
 **Branch:** `main`

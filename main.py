@@ -138,6 +138,10 @@ async def main():
         print(f"[STARTUP ERROR] Config validation failed: {e}")
         return
 
+    device_mode = DEVICE_CONFIG["mode"]
+    is_plant_mode = device_mode == "plant"
+    print(f"[STARTUP] Operating mode: {device_mode}")
+
     # Step 1b: Initialize watchdog timer (early, before any other hardware)
     # If the system freezes during init or runtime, the watchdog will reset it.
     global _wdt
@@ -346,11 +350,12 @@ async def main():
         fan_names=str([f.name for f in fans]),
     )
 
-    # Step 7b: Create grow light controller (relay master + MCP4725 dimming)
+    # Step 7b: Create grow light controller (relay master + MCP4725 dimming).
+    # Plant mode runs the MCP4725 dimming path; mushroom mode runs the basic
+    # relay-only path. growlight.mode in DEVICE_CONFIG is no longer consulted.
     light_config = DEVICE_CONFIG.get("growlight", {})
     grow_dac = None
-    growlight_mode = light_config.get("mode", "relay_only")
-    if growlight_mode == "dimmed":
+    if is_plant_mode:
         try:
             grow_dac = MCP4725(
                 i2c=hardware.get_i2c(),
@@ -360,7 +365,7 @@ async def main():
         except Exception as e:
             logger.warning("MAIN", f"MCP4725 init failed (falling back to relay-only growlight): {e}")
     else:
-        logger.info("MAIN", "growlight.mode=relay_only — MCP4725 init skipped")
+        logger.info("MAIN", "mushroom mode — growlight runs relay-only, MCP4725 init skipped")
     growlight = GrowlightController(
         pin=DEVICE_CONFIG["pins"]["relay_growlight"],
         time_provider=time_provider,
@@ -451,36 +456,40 @@ async def main():
         co2_logger_obj = None
 
     # Step 7b4: Create SoilLogger (GP28 ADC2 single-probe).
+    # Plant mode only — mushroom mode skips construction entirely.
     # Calibration constants live in config; use prototypes via the
     # `print_raw()` REPL helper in lib/soil_logger.py to retune them
     # per sensor + soil pot. Warning LED flips when % < warn_pct_below.
     soil_config = DEVICE_CONFIG.get("soil_logger", {})
     soil_logger_obj = None
-    try:
-        soil_adc = ADC(Pin(DEVICE_CONFIG["pins"]["adc_input"]))
-        soil_logger_obj = SoilLogger(
-            adc=soil_adc,
-            time_provider=time_provider,
-            buffer_manager=buffer_manager,
-            logger=logger,
-            interval_s=soil_config.get("interval_s", 60),
-            adc_dry_raw=soil_config.get("adc_dry_raw", 850),
-            adc_wet_raw=soil_config.get("adc_wet_raw", 350),
-            warn_pct_below=soil_config.get("warn_pct_below", 20),
-            filename_base=soil_config.get("filename_base", "soil_log"),
-            write_queue=write_queue,
-            status_manager=status_manager,
-        )
-        logger.info(
-            "MAIN",
-            f"SoilLogger on GP{DEVICE_CONFIG['pins']['adc_input']} "
-            f"(dry={soil_config.get('adc_dry_raw', 850)}, "
-            f"wet={soil_config.get('adc_wet_raw', 350)}, "
-            f"warn<{soil_config.get('warn_pct_below', 20)}%)",
-        )
-    except Exception as e:
-        logger.warning("MAIN", f"SoilLogger init failed (non-critical): {e}")
-        soil_logger_obj = None
+    if is_plant_mode:
+        try:
+            soil_adc = ADC(Pin(DEVICE_CONFIG["pins"]["adc_input"]))
+            soil_logger_obj = SoilLogger(
+                adc=soil_adc,
+                time_provider=time_provider,
+                buffer_manager=buffer_manager,
+                logger=logger,
+                interval_s=soil_config.get("interval_s", 60),
+                adc_dry_raw=soil_config.get("adc_dry_raw", 850),
+                adc_wet_raw=soil_config.get("adc_wet_raw", 350),
+                warn_pct_below=soil_config.get("warn_pct_below", 20),
+                filename_base=soil_config.get("filename_base", "soil_log"),
+                write_queue=write_queue,
+                status_manager=status_manager,
+            )
+            logger.info(
+                "MAIN",
+                f"SoilLogger on GP{DEVICE_CONFIG['pins']['adc_input']} "
+                f"(dry={soil_config.get('adc_dry_raw', 850)}, "
+                f"wet={soil_config.get('adc_wet_raw', 350)}, "
+                f"warn<{soil_config.get('warn_pct_below', 20)}%)",
+            )
+        except Exception as e:
+            logger.warning("MAIN", f"SoilLogger init failed (non-critical): {e}")
+            soil_logger_obj = None
+    else:
+        logger.info("MAIN", "mushroom mode — SoilLogger not constructed")
 
     wdt.feed()  # Feed before buzzer (startup melody takes time)
 

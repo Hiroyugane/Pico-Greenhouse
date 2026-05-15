@@ -30,6 +30,45 @@ the [configurability.md](../../.claude/rules/ecc/common/configurability.md)
 rule targets the runtime path, not tooling. Adjust by editing the
 script.
 
+### finding · relay-diag bench run — runtime path clean, boot transient is the cause
+
+Bench run of `tools/relay_diag.py` (2026-05-15) confirmed three
+distinct symptoms and split them by root cause:
+
+1. **GP27 floats LOW persistently** (raw=0 in Phase 1) — explains
+   `reserved_4` (REL_CON 8) clicking on at every reset.
+2. **GP26 latches transiently during 3V3_EN reset** — Phase 1 reports
+   raw=1 because by the time MicroPython probes, the line has
+   drifted back HIGH. The relay still fires because the boot-window
+   dip is long enough to latch the coil.
+3. **REPL idle dim-LED on all 7 channels** — canonical floating-input
+   signature; the GPIOs are high-Z whenever MicroPython hasn't taken
+   ownership.
+
+Phases 2–5 (Pico actively driving the pins) all passed: single
+clicks per channel, no neighbour activity, no brownout under
+simultaneous all-on stress. **The firmware path is healthy; the
+problem is exclusively pre-MicroPython and REPL-idle, both of which
+are windows the firmware cannot reach.** Full notes recorded in the
+hw-test-log entry for the same date.
+
+### decision · fix is hardware-only — track in dedicated PCB-revision doc
+
+Software can't close the reset transient (the window between 3V3_EN
+release and `Pin(gp, Pin.OUT, value=1)` executing) — by then the
+relay has already latched. The correct fix is an external 10 kΩ
+pull-up from each REL_CON IN line to the relay module's VCC rail.
+That holds the line HIGH even with the Pico unpowered or in REPL
+idle.
+
+Created [pcb-revision-changes.md](pcb-revision-changes.md) as the
+rolling source of truth for changes that require a PCB spin
+(separate from [2026-05-14-pcb-codebase-gap-plan.md](2026-05-14-pcb-codebase-gap-plan.md),
+which covers firmware gaps against the *current* board). Filed two
+entries: (a) pull-ups on REL_CON pins 2–8, (b) decision on the
+unwired 8th channel (pull-up vs. wire to spare GPIO — needs DMM
+check of the existing 3V3 strap first).
+
 ## 2026-05-15 · Capacitive soil sensor unresponsive — NE555 unit, replace
 
 ### decision · require TLC555/7555-class chip; this unit was dead

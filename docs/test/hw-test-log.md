@@ -20,49 +20,79 @@ for the click and watching the indicator LEDs is sufficient.
 
 ### Pre-bring-up: upload script
 
-- [ ] `tools/relay_diag.py` uploaded to Pico via Thonny.
-- [ ] Run it standalone (not via `main.py`).
+- [x] `tools/relay_diag.py` uploaded to Pico via Thonny.
+- [x] Run it standalone (not via `main.py`).
 
 ### Phase 1 — float-state probe
 
-- [ ] Note which GPIOs report `raw=0` in the printout — those are
-  the lines floating LOW at boot and most likely the cause of the
-  "random click on restart" symptom.
-- [ ] Record observations next to each GP line below for the
-  follow-up.
+- [x] **GP27 reads raw=0** — floats LOW persistently. All other six
+  GPIOs read raw=1. GP27 is the cause of `reserved_4` (REL_CON 8)
+  clicking on at every reset.
+- [x] Observations recorded per-pin below in Notes.
 
 ### Phase 2 — drive all HIGH
 
-- [ ] All relay module indicator LEDs go dark (or stay dark) after
-  the phase-2 banner prints.
+- [x] All relay module indicator LEDs go dark immediately after the
+  phase-2 banner prints. Confirms that once MicroPython drives the
+  pins, every channel is held off correctly.
 
 ### Phase 3 — per-relay sweep
 
-- [ ] GP18 fan_1     — single click on, single click off, no
-  neighbour activity.
-- [ ] GP19 fan_2     — same.
-- [ ] GP20 growlight — same.
-- [ ] GP21 reserved_1 — same.
-- [ ] GP22 reserved_2 — same.
-- [ ] GP26 reserved_3 — same.
-- [ ] GP27 reserved_4 — same.
+- [x] GP18 fan_1     — clean single click on/off.
+- [x] GP19 fan_2     — clean.
+- [x] GP20 growlight — clean.
+- [x] GP21 reserved_1 — clean.
+- [x] GP22 reserved_2 — clean.
+- [x] GP26 reserved_3 — clean.
+- [x] GP27 reserved_4 — clean.
 
 ### Phase 4 — all-on stress
 
-- [ ] All 7 LEDs energize together. No Pico reset, no brownout
-  re-enumeration on USB, no spurious extra clicks during the 2s
-  window.
+- [x] All 7 LEDs energize together. No Pico reset, no USB
+  re-enumeration, no spurious extra clicks. Power rail holds under
+  full coil load.
 
 ### Phase 5 — settle
 
-- [ ] All relays off at end. Tree left clean.
+- [x] All relays off at end. Tree clean.
 
 ### Notes (post-test)
 
-> Fill in here. Flag any pin that floats LOW, any relay that fails
-> to switch, any neighbour-activity (one channel's transition causing
-> another to twitch — points at shared-rail or trace coupling), and
-> whether the all-on stress holds the rail.
+The runtime path (Phases 2–5) is healthy — when MicroPython is
+actively driving the pins, every relay behaves correctly. **All
+remaining issues are in the un-driven windows: hardware reset
+transient and REPL idle.**
+
+- `[!]` **GP27 / REL_CON 8 / `reserved_4`** — Phase 1 shows
+  persistent `raw=0`. The line floats LOW out of reset, fires the
+  relay every restart. Cannot be fixed in firmware (window is
+  pre-MicroPython). Needs external pull-up — tracked in
+  [`pcb-revision-changes.md`](../notes/pcb-revision-changes.md).
+- `[!]` **GP26 / REL_CON 7 / `reserved_3`** — user observed it
+  activating during 3V3_EN reset, but Phase 1 reports raw=1.
+  Interpretation: the line dips low transiently during the boot
+  window and latches the relay, then drifts back high before
+  MicroPython runs the probe. Same fix as GP27.
+- `[!]` **REL_CON 8 channel (the unwired 8th)** — user observed it
+  enabling on 3V3_EN reset despite (intended) 3V3 tie. Either the
+  3V3 strap is not actually connected or the module variant on the
+  bench is active-HIGH on that channel. Needs metering on next
+  bench session; entry in `pcb-revision-changes.md` to either pull
+  it up explicitly or wire it to a GPIO.
+- `[~]` **REPL idle dim-LED on all 7 channels** — classic
+  high-impedance floating-input signature. The Pico's GPIOs are
+  inputs (high-Z) whenever MicroPython hasn't taken ownership; the
+  relay module's IN line sits in the ~0.8–2.0V band, half-lights
+  the indicator LED but is above the coil threshold. External
+  pull-ups eliminate this entirely.
+- `[x]` **Runtime path** — Phases 2–5 fully passed. No
+  neighbour-activity (no channel transition disturbing another),
+  no brownout under all-on stress. Confirms the firmware-side
+  inverted-relay handling in [`lib/relay.py`](../../lib/relay.py)
+  and [`config.py:296-304`](../../config.py#L296-L304) is correct.
+- **Action items:** see
+  [`docs/notes/pcb-revision-changes.md`](../notes/pcb-revision-changes.md)
+  for the two PCB-revision entries opened from this session.
 
 ## 2026-05-15 · Capacitive soil sensor replacement bring-up
 

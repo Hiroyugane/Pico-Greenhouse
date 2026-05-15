@@ -82,17 +82,14 @@ def updater_factory(sd_root):
 class TestUpdaterUnit:
     """Direct method-level tests for the Updater class."""
 
-    @pytest.mark.xfail(strict=True, reason="scaffold: has_pending_update not implemented")
     def test_has_pending_update_true_when_manifest_present(self, updater_factory, good_payload):
         u = updater_factory()
         assert u.has_pending_update() is True
 
-    @pytest.mark.xfail(strict=True, reason="scaffold: has_pending_update not implemented")
     def test_has_pending_update_false_when_no_manifest(self, updater_factory, sd_root):
         u = updater_factory()
         assert u.has_pending_update() is False
 
-    @pytest.mark.xfail(strict=True, reason="scaffold: load_manifest not implemented")
     def test_load_manifest_parses_json(self, updater_factory, good_payload):
         manifest, _ = good_payload
         u = updater_factory()
@@ -100,7 +97,6 @@ class TestUpdaterUnit:
         assert loaded["version"] == manifest["version"]
         assert len(loaded["files"]) == len(manifest["files"])
 
-    @pytest.mark.xfail(strict=True, reason="scaffold: load_manifest not implemented")
     def test_load_manifest_raises_on_bad_json(self, updater_factory, sd_root):
         from lib.updater import UpdateError
 
@@ -109,13 +105,11 @@ class TestUpdaterUnit:
         with pytest.raises(UpdateError):
             u.load_manifest()
 
-    @pytest.mark.xfail(strict=True, reason="scaffold: verify_payload not implemented")
     def test_verify_payload_clean(self, updater_factory, good_payload):
         manifest, _ = good_payload
         u = updater_factory()
         assert u.verify_payload(manifest) == []
 
-    @pytest.mark.xfail(strict=True, reason="scaffold: verify_payload not implemented")
     def test_verify_payload_detects_corrupt_file(self, updater_factory, good_payload, sd_root):
         manifest, _ = good_payload
         # Corrupt one file's bytes without updating manifest.
@@ -124,7 +118,6 @@ class TestUpdaterUnit:
         errors = u.verify_payload(manifest)
         assert any("main.py" in e for e in errors)
 
-    @pytest.mark.xfail(strict=True, reason="scaffold: verify_payload not implemented")
     def test_verify_payload_rejects_path_outside_whitelist(self, updater_factory, sd_root):
         # Manifest claims a file outside the whitelist.
         manifest = {
@@ -135,7 +128,6 @@ class TestUpdaterUnit:
         errors = u.verify_payload(manifest)
         assert any("docs/secrets.md" in e or "allowed" in e.lower() for e in errors)
 
-    @pytest.mark.xfail(strict=True, reason="scaffold: verify_payload not implemented")
     def test_verify_payload_rejects_traversal(self, updater_factory, sd_root):
         manifest = {
             "version": "x",
@@ -145,7 +137,6 @@ class TestUpdaterUnit:
         errors = u.verify_payload(manifest)
         assert errors  # any non-empty list is acceptable
 
-    @pytest.mark.xfail(strict=True, reason="scaffold: apply not implemented")
     def test_apply_copies_files_to_flash_root(self, updater_factory, good_payload, sd_root, monkeypatch):
         # Point 'flash root' at a tmp dir by monkeypatching the updater's
         # write target. Exact mechanism TBD by implementation — this test
@@ -159,7 +150,6 @@ class TestUpdaterUnit:
         for rel, content in files:
             assert (flash_root / rel).read_bytes() == content
 
-    @pytest.mark.xfail(strict=True, reason="scaffold: finalize not implemented")
     def test_finalize_moves_payload_to_applied(self, updater_factory, good_payload, sd_root):
         manifest, _ = good_payload
         u = updater_factory()
@@ -169,7 +159,6 @@ class TestUpdaterUnit:
         assert (applied / "manifest.json").exists()
         assert not (sd_root / "update" / "manifest.json").exists()
 
-    @pytest.mark.xfail(strict=True, reason="scaffold: log not implemented")
     def test_log_appends_line(self, updater_factory, sd_root):
         u = updater_factory()
         u.log("apply_ok", "2026-05-15.1", detail="files=3")
@@ -177,7 +166,6 @@ class TestUpdaterUnit:
         assert "apply_ok" in contents
         assert "2026-05-15.1" in contents
 
-    @pytest.mark.xfail(strict=True, reason="scaffold: _is_path_allowed not implemented")
     def test_is_path_allowed_matches_exact_and_prefix(self, updater_factory):
         u = updater_factory()
         assert u._is_path_allowed("main.py") is True
@@ -190,7 +178,6 @@ class TestUpdaterUnit:
 class TestRunPendingUpdate:
     """End-to-end boot-time hook behaviour."""
 
-    @pytest.mark.xfail(strict=True, reason="scaffold: run_pending_update not implemented")
     def test_no_payload_returns_silently(self, sd_root, monkeypatch):
         from lib import updater as upd_mod
 
@@ -215,7 +202,6 @@ class TestRunPendingUpdate:
         upd_mod.run_pending_update(cfg, _HW())
         assert reset_called == []
 
-    @pytest.mark.xfail(strict=True, reason="scaffold: run_pending_update not implemented")
     def test_disabled_in_config_short_circuits(self, sd_root, good_payload, monkeypatch):
         from lib import updater as upd_mod
 
@@ -242,7 +228,6 @@ class TestRunPendingUpdate:
         assert reset_called == []
         assert (sd_root / "update" / "manifest.json").exists()
 
-    @pytest.mark.xfail(strict=True, reason="scaffold: run_pending_update not implemented")
     def test_good_payload_applies_and_resets(self, sd_root, good_payload, monkeypatch):
         from lib import updater as upd_mod
 

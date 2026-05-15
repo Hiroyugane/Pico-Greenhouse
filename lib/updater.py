@@ -19,15 +19,112 @@
 # - No backup of live code (per design decision 2026-05-15).
 # - Post-apply: payload is renamed to <applied_dir>/<version>/, then
 #   machine.reset() is called so the new code runs cleanly.
-#
-# This is a SCAFFOLD. Method bodies raise NotImplementedError; tests are
-# expected to drive the implementation (TDD).
+
+import binascii
+import hashlib
+import json
+import os
 
 MANIFEST_FILENAME = "manifest.json"
+
+# Root that apply() writes into. Defaults to "/" on the Pico (flash root).
+# Tests monkeypatch this to redirect writes into a tmp_path.
+_FLASH_ROOT = "/"
+
+_HASH_CHUNK = 1024
 
 
 class UpdateError(Exception):
     """Raised when the updater cannot safely apply a payload."""
+
+
+def _norm(path):
+    """Normalize separators to forward-slash for whitelist matching."""
+    return path.replace("\\", "/") if path else path
+
+
+def _exists(path):
+    try:
+        os.stat(path)
+        return True
+    except OSError:
+        return False
+
+
+def _is_dir(path):
+    try:
+        return (os.stat(path)[0] & 0o40000) != 0
+    except OSError:
+        return False
+
+
+def _dirname(path):
+    norm = _norm(path)
+    if "/" not in norm:
+        return ""
+    return norm.rsplit("/", 1)[0]
+
+
+def _makedirs(path):
+    """Recursively create directories; idempotent. Works on MicroPython."""
+    if not path or _exists(path):
+        return
+    parent = _dirname(path)
+    # On Windows the volume root (e.g. "L:") has no parent and exists.
+    if parent and parent != path and not _exists(parent) and not (len(parent) == 2 and parent.endswith(":")):
+        _makedirs(parent)
+    try:
+        os.mkdir(path)
+    except OSError:
+        if not _exists(path):
+            raise
+
+
+def _rmtree(path):
+    """Recursive remove; best-effort, swallows OSError on per-entry failures."""
+    try:
+        entries = os.listdir(path)
+    except OSError:
+        return
+    for entry in entries:
+        sub = path + "/" + entry
+        try:
+            if _is_dir(sub):
+                _rmtree(sub)
+            else:
+                os.remove(sub)
+        except OSError:
+            pass
+    try:
+        os.rmdir(path)
+    except OSError:
+        pass
+
+
+def _sleep_ms(ms):
+    """Portable millisecond sleep."""
+    if ms <= 0:
+        return
+    try:
+        import time
+
+        if hasattr(time, "sleep_ms"):
+            time.sleep_ms(ms)
+        else:
+            time.sleep(ms / 1000.0)
+    except Exception:
+        pass
+
+
+def _timestamp_iso():
+    """Best-effort ISO-like timestamp; falls back to '?' on failure."""
+    try:
+        import time
+
+        t = time.localtime()
+        return "%04d-%02d-%02dT%02d:%02d:%02d" % (t[0], t[1], t[2], t[3], t[4], t[5])
+    except Exception:
+        return "?"
 
 
 class Updater:
@@ -40,9 +137,6 @@ class Updater:
         has_pending_update -> load_manifest -> verify_payload -> apply
         -> finalize -> machine.reset()
 
-    Each method is independently testable; tests under tests/test_updater.py
-    inject a temp-dir 'SD root' to exercise the full flow on host.
-
     Attributes:
         update_dir (str): Path operator drops payload into (e.g. /sd/update)
         applied_dir (str): Path successful payloads are renamed under
@@ -54,148 +148,263 @@ class Updater:
         max_retries (int): Per-file write retry count
         retry_delay_ms (int): Sleep between retries
         wdt: Optional WDT instance; fed between file copies
+        time_provider: Optional time provider (currently unused; reserved
+            for future structured log timestamps)
     """
 
     def __init__(
         self,
-        update_dir: str,
-        applied_dir: str,
-        log_path: str,
-        allowed_paths: list,
-        max_retries: int = 3,
-        retry_delay_ms: int = 200,
+        update_dir,
+        applied_dir,
+        log_path,
+        allowed_paths,
+        max_retries=3,
+        retry_delay_ms=200,
         wdt=None,
         time_provider=None,
     ):
-        self.update_dir = update_dir.rstrip("/")
-        self.applied_dir = applied_dir.rstrip("/")
+        self.update_dir = update_dir.rstrip("/").rstrip("\\")
+        self.applied_dir = applied_dir.rstrip("/").rstrip("\\")
         self.log_path = log_path
         self.allowed_paths = list(allowed_paths)
-        self.max_retries = max_retries
-        self.retry_delay_ms = retry_delay_ms
+        self.max_retries = int(max_retries)
+        self.retry_delay_ms = int(retry_delay_ms)
         self.wdt = wdt
         self.time_provider = time_provider
 
     # --- Public API --------------------------------------------------
 
-    def has_pending_update(self) -> bool:
-        """
-        Return True iff <update_dir>/<MANIFEST_FILENAME> exists.
+    def has_pending_update(self):
+        return _exists(self.update_dir + "/" + MANIFEST_FILENAME)
 
-        Does NOT validate the manifest contents; that's load_manifest().
-        """
-        raise NotImplementedError("Updater.has_pending_update")
+    def load_manifest(self):
+        path = self.update_dir + "/" + MANIFEST_FILENAME
+        if not _exists(path):
+            raise UpdateError("manifest missing: %s" % path)
+        try:
+            with open(path, "r") as f:
+                data = json.loads(f.read())
+        except (OSError, ValueError) as e:
+            raise UpdateError("manifest unreadable: %s" % e)
+        if not isinstance(data, dict):
+            raise UpdateError("manifest must be a JSON object")
+        if "version" not in data or "files" not in data:
+            raise UpdateError("manifest missing required keys (version, files)")
+        if not isinstance(data["files"], list):
+            raise UpdateError("manifest.files must be a list")
+        return data
 
-    def load_manifest(self) -> dict:
-        """
-        Read and JSON-parse <update_dir>/manifest.json.
+    def verify_payload(self, manifest):
+        errors = []
+        files = manifest.get("files", [])
+        if not files:
+            errors.append("manifest.files is empty")
+            return errors
+        for entry in files:
+            try:
+                rel = entry["path"]
+                expected_hash = entry["sha256"]
+                expected_size = int(entry["bytes"])
+            except (KeyError, TypeError, ValueError):
+                errors.append("manifest entry malformed: %r" % entry)
+                continue
 
-        Returns the parsed dict. Raises UpdateError if the file is missing,
-        unreadable, malformed JSON, or missing required top-level keys
-        (version, files).
-        """
-        raise NotImplementedError("Updater.load_manifest")
+            if not self._is_path_allowed(rel):
+                errors.append("path not allowed: %s" % rel)
+                continue
 
-    def verify_payload(self, manifest: dict) -> list:
-        """
-        Walk manifest["files"], hash each on disk, and verify against the
-        manifest. Return a list of error strings; an empty list means the
-        payload is safe to apply.
+            abs_path = self.update_dir + "/" + rel
+            if not _exists(abs_path):
+                errors.append("missing file: %s" % rel)
+                continue
+            try:
+                actual_size = os.stat(abs_path)[6]
+            except OSError as e:
+                errors.append("stat failed for %s: %s" % (rel, e))
+                continue
+            if actual_size != expected_size:
+                errors.append("size mismatch for %s: %d != %d" % (rel, actual_size, expected_size))
+                continue
+            try:
+                actual_hash = self._hash_file(abs_path)
+            except OSError as e:
+                errors.append("hash failed for %s: %s" % (rel, e))
+                continue
+            if actual_hash.lower() != expected_hash.lower():
+                errors.append("sha256 mismatch for %s" % rel)
+        return errors
 
-        Checks performed:
-        - Every entry path passes _is_path_allowed()
-        - Every entry path is normalized (no '..', no absolute paths)
-        - The corresponding file exists under <update_dir>/
-        - The file's byte length matches entry["bytes"]
-        - The file's SHA-256 matches entry["sha256"]
-        """
-        raise NotImplementedError("Updater.verify_payload")
+    def apply(self, manifest):
+        flash_root = _FLASH_ROOT
+        flash_root_clean = flash_root.rstrip("/").rstrip("\\")
+        for entry in manifest["files"]:
+            rel = entry["path"]
+            src = self.update_dir + "/" + rel
+            if flash_root_clean:
+                dst = flash_root_clean + "/" + rel
+            else:
+                dst = "/" + rel
+            parent = _dirname(dst)
+            last_err = None
+            for _attempt in range(self.max_retries):
+                try:
+                    if parent:
+                        _makedirs(parent)
+                    self._copy_file(src, dst)
+                    last_err = None
+                    break
+                except OSError as e:
+                    last_err = e
+                    _sleep_ms(self.retry_delay_ms)
+            if last_err is not None:
+                raise UpdateError("apply: %s failed after %d retries: %s" % (rel, self.max_retries, last_err))
+            self._feed_wdt()
 
-    def apply(self, manifest: dict) -> None:
-        """
-        Copy each verified file from <update_dir>/ to its target location
-        on flash. Retry per-file up to self.max_retries on OSError.
+    def finalize(self, manifest):
+        version = manifest.get("version") or "unknown"
+        # Sanitize version for filesystem use (replace slashes/backslashes).
+        safe_version = str(version).replace("/", "_").replace("\\", "_")
+        if not _exists(self.applied_dir):
+            _makedirs(self.applied_dir)
+        dst = self.applied_dir + "/" + safe_version
+        # Stale leftover from a prior interrupted finalize → remove first.
+        if _exists(dst):
+            _rmtree(dst)
+        os.rename(self.update_dir, dst)
 
-        Raises UpdateError if any file exhausts its retries; live code is
-        left in whatever partial state the loop reached, and the payload
-        is left in place so the next boot can retry.
-        """
-        raise NotImplementedError("Updater.apply")
-
-    def finalize(self, manifest: dict) -> None:
-        """
-        Rename <update_dir> to <applied_dir>/<manifest['version']>/ so the
-        trigger is cleared and the next boot doesn't re-apply. Creates
-        <applied_dir>/ if missing.
-        """
-        raise NotImplementedError("Updater.finalize")
-
-    def log(self, status: str, version: str, detail: str = "") -> None:
-        """
-        Append a single line to self.log_path:
-
-            <iso_timestamp>  <status>  <version>  <detail>
-
-        status is one of: "start", "verify_fail", "apply_fail",
-        "apply_ok". Best-effort; swallows IO errors so a logging
-        failure can't prevent boot continuation.
-        """
-        raise NotImplementedError("Updater.log")
+    def log(self, status, version, detail=""):
+        try:
+            ts = _timestamp_iso()
+            line = "%s\t%s\t%s\t%s\n" % (ts, status, version, detail)
+            with open(self.log_path, "a") as f:
+                f.write(line)
+        except Exception:
+            # Logging is best-effort; never block boot continuation.
+            pass
 
     # --- Internal helpers -------------------------------------------
 
-    def _is_path_allowed(self, rel_path: str) -> bool:
-        """
-        True iff rel_path is whitelisted by self.allowed_paths.
+    def _is_path_allowed(self, rel_path):
+        if not rel_path or not isinstance(rel_path, str):
+            return False
+        if rel_path.startswith("/") or rel_path.startswith("\\"):
+            return False
+        norm = _norm(rel_path)
+        parts = norm.split("/")
+        for part in parts:
+            if part in ("", "..", "."):
+                return False
+        for entry in self.allowed_paths:
+            entry_norm = _norm(entry)
+            if entry_norm.endswith("/"):
+                if norm.startswith(entry_norm):
+                    return True
+            else:
+                if norm == entry_norm:
+                    return True
+        return False
 
-        - Exact match against any non-slash-terminated entry, OR
-        - rel_path starts with any slash-terminated entry (prefix match).
-        - Rejects '..' segments and absolute paths.
-        """
-        raise NotImplementedError("Updater._is_path_allowed")
+    def _hash_file(self, abs_path):
+        h = hashlib.sha256()
+        with open(abs_path, "rb") as f:
+            while True:
+                chunk = f.read(_HASH_CHUNK)
+                if not chunk:
+                    break
+                h.update(chunk)
+                self._feed_wdt()
+        return binascii.hexlify(h.digest()).decode("ascii")
 
-    def _hash_file(self, abs_path: str) -> str:
-        """
-        Return the SHA-256 hex digest of the file at abs_path.
+    def _copy_file(self, src, dst):
+        """Byte-for-byte copy with bounded buffer (MicroPython-friendly)."""
+        with open(src, "rb") as fin:
+            with open(dst, "wb") as fout:
+                while True:
+                    chunk = fin.read(_HASH_CHUNK)
+                    if not chunk:
+                        break
+                    fout.write(chunk)
+                    self._feed_wdt()
 
-        Reads in chunks so a large file doesn't blow MicroPython memory.
-        Feeds self.wdt between chunks when present.
-        """
-        raise NotImplementedError("Updater._hash_file")
+    def _feed_wdt(self):
+        if self.wdt is None:
+            return
+        try:
+            self.wdt.feed()
+        except Exception:
+            pass
 
 
 # --- Boot-time entry point -----------------------------------------
 
 
-def run_pending_update(config: dict, hardware, wdt=None) -> None:
+def run_pending_update(config, hardware, wdt=None):
     """
     Boot-time hook called from main.py BEFORE EventLogger init.
 
     Returns silently when there is no pending update or the updater is
     disabled in config. On a successful apply, calls machine.reset() and
     does not return.
-
-    Args:
-        config: DEVICE_CONFIG dict (we read config["updater"]).
-        hardware: HardwareFactory instance (used to confirm SD is mounted).
-        wdt: Optional WDT instance to feed during the apply loop.
-
-    Flow:
-        1. Skip if config["updater"]["enabled"] is False.
-        2. Skip if SD is not mounted (no payload possible).
-        3. Construct Updater from config["updater"].
-        4. updater.has_pending_update() -> if False, return.
-        5. updater.log("start", ...)
-        6. manifest = updater.load_manifest()
-           on UpdateError: updater.log("verify_fail", ...) and return.
-        7. errors = updater.verify_payload(manifest)
-           on errors: updater.log("verify_fail", ...) and return.
-        8. try updater.apply(manifest)
-           on UpdateError: updater.log("apply_fail", ...) and return
-           (live code may be partially overwritten; next boot will
-           re-attempt because /sd/update/ still exists).
-        9. updater.finalize(manifest)
-        10. updater.log("apply_ok", ...)
-        11. machine.reset()
     """
-    raise NotImplementedError("run_pending_update")
+    upd_cfg = config.get("updater", {}) if isinstance(config, dict) else {}
+    if not upd_cfg.get("enabled", False):
+        return
+
+    try:
+        sd_ok = bool(hardware.is_sd_mounted())
+    except Exception:
+        sd_ok = False
+    if not sd_ok:
+        return
+
+    updater = Updater(
+        update_dir=upd_cfg["update_dir"],
+        applied_dir=upd_cfg["applied_dir"],
+        log_path=upd_cfg["log_path"],
+        allowed_paths=upd_cfg.get("allowed_paths", []),
+        max_retries=upd_cfg.get("max_retries", 3),
+        retry_delay_ms=upd_cfg.get("retry_delay_ms", 200),
+        wdt=wdt,
+    )
+
+    if not updater.has_pending_update():
+        return
+
+    updater.log("start", "?", detail="payload detected")
+
+    try:
+        manifest = updater.load_manifest()
+    except UpdateError as e:
+        updater.log("verify_fail", "?", detail="load_manifest: %s" % e)
+        return
+
+    version = str(manifest.get("version", "?"))
+    errors = updater.verify_payload(manifest)
+    if errors:
+        # Keep log line bounded so a long error list can't blow the file.
+        detail = "; ".join(errors)
+        if len(detail) > 240:
+            detail = detail[:237] + "..."
+        updater.log("verify_fail", version, detail=detail)
+        return
+
+    try:
+        updater.apply(manifest)
+    except UpdateError as e:
+        updater.log("apply_fail", version, detail=str(e)[:240])
+        return
+
+    try:
+        updater.finalize(manifest)
+    except Exception as e:
+        # Apply already succeeded; finalize failure leaves the trigger in
+        # place but the new code is live. Log it and proceed to reset so
+        # the next boot sees applied code; the operator can clean up
+        # /sd/update manually.
+        updater.log("apply_ok", version, detail="finalize warn: %s" % str(e)[:200])
+    else:
+        updater.log("apply_ok", version, detail="files=%d" % len(manifest.get("files", [])))
+
+    import machine
+
+    machine.reset()

@@ -5,6 +5,37 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-15 · POST LED walk follows physical row order
+
+**Branch:** `main`
+**Why hardware-only:** the walk order is purely a visual matter — the
+sequence the operator sees on the LED_CON row at boot. `pytest`
+verifies the configured order maps to the right LED instances, but
+not that the physical sweep looks like a left-to-right scan.
+**Pre-flight:** Pico powered cold, all five status LEDs visible in
+the row, `config.py` at defaults (`status_leds.walk_order =
+["activity", "sd", "reminder", "warning", "error"]`).
+
+### Default order
+
+- [ ] Cold-boot the Pico. The status LEDs light one at a time, left
+      to right, in order: green (activity) → blue (sd) → white
+      (reminder) → yellow (warning) → red (error), then the on-board
+      heartbeat LED pulses last.
+- [ ] After the walk, all status LEDs flash on together, then go
+      dark.
+
+### Reordered walk
+
+- [ ] Set `status_leds.walk_order = ["error", "warning", "reminder",
+      "sd", "activity"]` in `config.py`, redeploy, cold-boot. The
+      walk now runs right-to-left across the row; heartbeat still
+      pulses last.
+
+### Notes (post-test) — POST walk
+
+> Fill in here.
+
 ## 2026-05-15 · OLED warmup delays now configurable
 
 **Branch:** `main`

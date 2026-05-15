@@ -5,6 +5,25 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-15 · POST LED walk follows physical row order
+
+### decision · Drive POST walk from `status_leds.walk_order`
+
+The five status LEDs on LED_CON sit in one row, left-to-right: green
+(activity, GP4), blue (sd, GP5), white (reminder, GP8), yellow
+(warning, GP6), red (error, GP7). `run_post()` previously walked them
+in GPIO-instantiation order (activity → reminder → sd → warning →
+error), which visually jumps across the row instead of sweeping
+along it. Added a new `status_leds.walk_order` config entry — a list
+of role names — that `run_post()` resolves to LED instances at boot,
+with the on-board heartbeat LED always appended last so it's still
+verified. Stored as role names rather than GPIO numbers so the
+physical layout is readable in `config.py` without cross-referencing
+the pin map. Validator rejects empty lists, unknown roles, and
+duplicates; matching tests cover the new ordering and a missing-
+reminder fallback. Operator can rewire the LED row and re-tune the
+walk by editing one config line, no code change.
+
 ## 2026-05-15 · OLED warmup delays moved to config
 
 ### decision · Promote SSD1306 init sleeps to DEVICE_CONFIG["display"]

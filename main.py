@@ -20,7 +20,7 @@
 # HOW TO RUN:
 # 1. First time only: run rtc_set_time.py to sync RTC
 # 2. Run this main.py via Thonny
-# 3. Check /sd/th_log_YYYY-MM-DD.csv for data
+# 3. Check /sd/sensors/th/YYYY/th_YYYY-MM-DD.csv for data
 
 import gc
 import os
@@ -282,7 +282,6 @@ async def main():
 
     # Step 6: Create SHT31 sensor and TempHumidityLogger
     th_config = DEVICE_CONFIG.get("temp_humidity_logger", {})
-    files_config = DEVICE_CONFIG.get("files", {})
     sht31_config = DEVICE_CONFIG.get("sht31", {})
     sht31 = SHT31(
         i2c=hardware.get_i2c(),
@@ -295,7 +294,8 @@ async def main():
             buffer_manager=buffer_manager,
             logger=logger,
             interval=th_config.get("interval_s", 30),
-            filename=f"/sd/{files_config.get('th_log_base', 'th_log.csv')}",
+            sensor_root=DEVICE_CONFIG["paths"]["sensor_root"],
+            sensor_type=th_config.get("sensor_type", "th"),
             max_retries=th_config.get("max_retries", 3),
             status_manager=status_manager,
             th_warn_threshold=status_led_config.get("th_warn_threshold", 3),
@@ -312,7 +312,8 @@ async def main():
             buffer_manager=buffer_manager,
             logger=logger,
             interval=th_config.get("interval_s", 30),
-            filename=f"/sd/{files_config.get('th_log_base', 'th_log.csv')}",
+            sensor_root=DEVICE_CONFIG["paths"]["sensor_root"],
+            sensor_type=th_config.get("sensor_type", "th"),
             max_retries=th_config.get("max_retries", 3),
             retry_delay_s=th_config.get("retry_delay_s", 0.5),
             write_queue=write_queue,

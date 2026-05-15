@@ -40,7 +40,6 @@ class TempHumidityLogger:
     Attributes:
         sensor: Injected temperature/humidity sensor instance
         interval: Logging interval in seconds
-        filename_base: CSV filename base
         time_provider: TimeProvider instance
         buffer_manager: BufferManager instance
         write_queue: WriteQueueManager instance (optional for async writes)
@@ -59,7 +58,8 @@ class TempHumidityLogger:
         buffer_manager,
         logger,
         interval=60,
-        filename="th_log.csv",
+        sensor_root: str = "/sd/sensors",
+        sensor_type: str = "th",
         max_retries=3,
         status_manager=None,
         th_warn_threshold=3,
@@ -79,7 +79,8 @@ class TempHumidityLogger:
             buffer_manager: BufferManager instance
             logger: EventLogger instance
             interval (int): Logging interval in seconds (default: 60)
-            filename (str): CSV filename (default: 'th_log.csv')
+            sensor_root (str): Absolute root for sensor data (default: '/sd/sensors')
+            sensor_type (str): Folder + filename prefix (default: 'th')
             max_retries (int): Sensor read retries (default: 3)
             status_manager: StatusManager instance for LED feedback (optional)
             th_warn_threshold (int): Consecutive failures before warning (default: 3)
@@ -90,7 +91,8 @@ class TempHumidityLogger:
         """
         self.sensor = sensor
         self.interval = interval
-        self.filename_base = filename if filename.startswith("/sd/") else f"/sd/{filename}"
+        self._sensor_root = sensor_root
+        self._sensor_type = sensor_type
         self.time_provider = time_provider
         self.buffer_manager = buffer_manager
         self.write_queue = write_queue
@@ -142,15 +144,16 @@ class TempHumidityLogger:
         """
         Update log filename based on current RTC date.
 
-        Format: th_log_YYYY-MM-DD.csv (auto date-based rollover).
+        Builds <sensor_root>/<sensor_type>/YYYY/<sensor_type>_YYYY-MM-DD.csv.
         """
+        from lib.sensor_paths import daily_csv_path
+
         try:
             date_tuple = self.time_provider.now_date_tuple()
             year, month, day = date_tuple[0], date_tuple[1], date_tuple[2]
             self.current_date = (year, month, day)
 
-            base = self.filename_base.replace(".csv", "")
-            self.filename = f"{base}_{year:04d}-{month:02d}-{day:02d}.csv"
+            self.filename = daily_csv_path(self._sensor_root, self._sensor_type, year, month, day)
             self.logger.debug(
                 "TempHumidityLogger",
                 "filename updated",
@@ -159,7 +162,7 @@ class TempHumidityLogger:
             )
         except Exception as e:
             self.logger.error("TempHumidityLogger", f"Error updating filename: {e}")
-            self.filename = self.filename_base
+            self.filename = f"{self._sensor_root.rstrip('/')}/{self._sensor_type}/{self._sensor_type}.csv"
 
     def _file_exists(self) -> bool:
         """Check if CSV data for this file already exists (primary, fallback, or buffer)."""

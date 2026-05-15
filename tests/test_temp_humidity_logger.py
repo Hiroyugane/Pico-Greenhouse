@@ -75,8 +75,9 @@ class TestTempHumidityLoggerInit:
 
         sensor = _make_sensor()
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            relpath = "th_log_2026-01-29.csv"
+            relpath = "sensors/th/2026/th_2026-01-29.csv"
             primary_path = tmp_path / "sd" / relpath
+            primary_path.parent.mkdir(parents=True, exist_ok=True)
             primary_path.write_text("Timestamp,Temperature,Humidity\n")
 
             with patch.object(buffer_manager, "write") as write_mock:
@@ -175,13 +176,13 @@ class TestTempHumidityLoggerDateRollover:
     """Tests for date-based file rollover."""
 
     def test_update_filename_for_date(self, time_provider, buffer_manager, mock_event_logger):
-        """Filename includes date in th_log_YYYY-MM-DD.csv format."""
+        """Filename uses sensors/th/YYYY/th_YYYY-MM-DD.csv layout."""
         from lib.temp_humidity_logger import TempHumidityLogger
 
         sensor = _make_sensor()
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
             th = TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger)
-        assert "2026-01-29" in th.filename
+        assert th.filename == "/sd/sensors/th/2026/th_2026-01-29.csv"
 
     def test_check_date_changed_detects_rollover(self, time_provider, buffer_manager, mock_event_logger):
         """_check_date_changed returns True when date changes."""
@@ -208,7 +209,7 @@ class TestTempHumidityLoggerDateRollover:
         assert changed is False
 
     def test_update_filename_error_fallback(self, time_provider, buffer_manager, mock_event_logger):
-        """If now_date_tuple raises, filename falls back to base."""
+        """If now_date_tuple raises, filename falls back to undated default."""
         from lib.temp_humidity_logger import TempHumidityLogger
 
         sensor = _make_sensor()
@@ -219,7 +220,7 @@ class TestTempHumidityLoggerDateRollover:
         th.time_provider.now_date_tuple = Mock(side_effect=OSError("fail"))
         th.logger = mock_event_logger
         th._update_filename_for_date()
-        assert th.filename == th.filename_base
+        assert th.filename == "/sd/sensors/th/th.csv"
 
 
 class TestTempHumidityLoggerFileOps:
@@ -296,7 +297,7 @@ class TestTempHumidityLoggerFileOps:
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
             th = TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger)
 
-        th.filename = "/sd/th_log_2026-01-30.csv"
+        th.filename = "/sd/sensors/th/2026/th_2026-01-30.csv"
         with patch.object(buffer_manager, "has_data_for", return_value=False):
             assert th._file_exists() is False
 

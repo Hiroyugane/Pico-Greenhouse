@@ -101,7 +101,6 @@ DEVICE_CONFIG = {
     },
     # File Paths
     "files": {
-        "th_log_base": "th_log",  # Will become th_log_YYYY-MM-DD.csv
         "system_log": "/sd/system.log",
         "fallback_path": "/local/fallback.csv",  # Fallback when SD unavailable
     },
@@ -127,6 +126,7 @@ DEVICE_CONFIG = {
         "max_retries": 3,  # Sensor read retries
         "max_buffer_size": 200,  # Max in-memory readings
         "retry_delay_s": 0.5,  # Delay between sensor read retries (seconds)
+        "sensor_type": "th",  # Folder + filename prefix under paths.sensor_root
     },
     # Fan Control - Fan 1 (Time-based + Thermostat)
     "fan_1": {
@@ -444,7 +444,7 @@ def validate_config():
             "adc_input",
         ],
         "spi": ["id", "baudrate", "sck", "mosi", "miso", "cs", "mount_point"],
-        "files": ["th_log_base", "system_log", "fallback_path"],
+        "files": ["system_log", "fallback_path"],
         "paths": [
             "sensor_root",
             "logs_dir",
@@ -453,7 +453,7 @@ def validate_config():
             "diagnostics_dir",
         ],
         "sht31": ["i2c_address"],
-        "temp_humidity_logger": ["interval_s", "max_retries", "max_buffer_size", "retry_delay_s"],
+        "temp_humidity_logger": ["interval_s", "max_retries", "max_buffer_size", "retry_delay_s", "sensor_type"],
         "fan_1": [
             "interval_s",
             "on_time_s",

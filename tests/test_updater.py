@@ -260,3 +260,349 @@ class TestRunPendingUpdate:
             assert (flash_root / rel).read_bytes() == content
         assert (sd_root / "applied" / manifest["version"]).exists()
         assert reset_called == [True]
+
+
+class TestUpdaterErrorPaths:
+    """Cover the failure / fallback branches that boot-time relies on."""
+
+    def test_load_manifest_missing_required_keys(self, updater_factory, sd_root):
+        from lib.updater import UpdateError
+
+        (sd_root / "update" / "manifest.json").write_text('{"version": "x"}')
+        u = updater_factory()
+        with pytest.raises(UpdateError):
+            u.load_manifest()
+
+    def test_load_manifest_non_object_root(self, updater_factory, sd_root):
+        from lib.updater import UpdateError
+
+        (sd_root / "update" / "manifest.json").write_text("[]")
+        u = updater_factory()
+        with pytest.raises(UpdateError):
+            u.load_manifest()
+
+    def test_load_manifest_files_not_a_list(self, updater_factory, sd_root):
+        from lib.updater import UpdateError
+
+        (sd_root / "update" / "manifest.json").write_text('{"version": "x", "files": "no"}')
+        u = updater_factory()
+        with pytest.raises(UpdateError):
+            u.load_manifest()
+
+    def test_load_manifest_missing_file_raises(self, updater_factory):
+        from lib.updater import UpdateError
+
+        u = updater_factory()
+        with pytest.raises(UpdateError):
+            u.load_manifest()
+
+    def test_verify_payload_empty_files(self, updater_factory):
+        u = updater_factory()
+        errors = u.verify_payload({"version": "x", "files": []})
+        assert errors and any("empty" in e.lower() for e in errors)
+
+    def test_verify_payload_malformed_entry(self, updater_factory):
+        u = updater_factory()
+        errors = u.verify_payload({"version": "x", "files": [{"path": "main.py"}]})
+        assert errors and any("malformed" in e.lower() for e in errors)
+
+    def test_verify_payload_missing_file_on_disk(self, updater_factory):
+        u = updater_factory()
+        errors = u.verify_payload(
+            {"version": "x", "files": [{"path": "main.py", "sha256": "0" * 64, "bytes": 0}]}
+        )
+        assert errors and any("missing" in e.lower() for e in errors)
+
+    def test_verify_payload_size_mismatch(self, updater_factory, sd_root):
+        _write(sd_root / "update" / "main.py", b"hello")
+        u = updater_factory()
+        errors = u.verify_payload(
+            {"version": "x", "files": [{"path": "main.py", "sha256": "0" * 64, "bytes": 999}]}
+        )
+        assert errors and any("size" in e.lower() for e in errors)
+
+    def test_is_path_allowed_non_string(self, updater_factory):
+        u = updater_factory()
+        assert u._is_path_allowed(None) is False
+        assert u._is_path_allowed("") is False
+        assert u._is_path_allowed(123) is False  # type: ignore[arg-type]
+
+    def test_is_path_allowed_dot_segment(self, updater_factory):
+        u = updater_factory()
+        assert u._is_path_allowed("./main.py") is False
+        assert u._is_path_allowed("lib//x.py") is False
+
+    def test_log_format_columns(self, updater_factory, sd_root):
+        u = updater_factory()
+        u.log("verify_fail", "v1", detail="sha256 mismatch for main.py")
+        text = (sd_root / "updates.log").read_text()
+        cols = text.strip().split("\t")
+        assert len(cols) == 4
+        assert cols[1] == "verify_fail"
+        assert cols[2] == "v1"
+
+    def test_log_swallows_io_error(self, updater_factory, sd_root):
+        # Point log_path at a directory that doesn't exist; should not raise.
+        u = updater_factory(log_path=str(sd_root / "missing_dir" / "updates.log"))
+        u.log("start", "v1")  # would raise without best-effort guard
+
+    def test_apply_retries_then_succeeds(self, updater_factory, good_payload, sd_root, monkeypatch):
+        import lib.updater as upd_mod
+
+        manifest, files = good_payload
+        flash_root = sd_root / "flash"
+        flash_root.mkdir()
+        monkeypatch.setattr(upd_mod, "_FLASH_ROOT", str(flash_root), raising=False)
+
+        # Make _copy_file fail twice then succeed.
+        calls = {"n": 0}
+        real_copy = upd_mod.Updater._copy_file
+
+        def flaky_copy(self, src, dst):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise OSError("simulated transient")
+            return real_copy(self, src, dst)
+
+        monkeypatch.setattr(upd_mod.Updater, "_copy_file", flaky_copy)
+        u = updater_factory(max_retries=5, retry_delay_ms=0)
+        u.apply(manifest)
+        # First file took 3 attempts; remaining files succeed first try each.
+        assert calls["n"] >= 3
+        for rel, content in files:
+            assert (flash_root / rel).read_bytes() == content
+
+    def test_apply_exhausts_retries(self, updater_factory, good_payload, sd_root, monkeypatch):
+        import lib.updater as upd_mod
+        from lib.updater import UpdateError
+
+        manifest, _ = good_payload
+        flash_root = sd_root / "flash"
+        flash_root.mkdir()
+        monkeypatch.setattr(upd_mod, "_FLASH_ROOT", str(flash_root), raising=False)
+
+        def always_fail(self, src, dst):
+            raise OSError("permanent")
+
+        monkeypatch.setattr(upd_mod.Updater, "_copy_file", always_fail)
+        u = updater_factory(max_retries=2, retry_delay_ms=0)
+        with pytest.raises(UpdateError):
+            u.apply(manifest)
+
+    def test_finalize_creates_applied_dir(self, updater_factory, good_payload, sd_root):
+        manifest, _ = good_payload
+        # Remove pre-existing applied/ to force creation.
+        (sd_root / "applied").rmdir()
+        u = updater_factory()
+        u.finalize(manifest)
+        assert (sd_root / "applied" / manifest["version"] / "manifest.json").exists()
+
+    def test_finalize_clears_stale_prior_dest(self, updater_factory, good_payload, sd_root):
+        manifest, _ = good_payload
+        # Pre-seed a stale applied/<version>/ with junk.
+        stale = sd_root / "applied" / manifest["version"]
+        stale.mkdir(parents=True)
+        (stale / "old.txt").write_text("from prior run")
+        u = updater_factory()
+        u.finalize(manifest)
+        assert (stale / "manifest.json").exists()
+        assert not (stale / "old.txt").exists()
+
+    def test_verify_sha256_mismatch_same_size(self, updater_factory, sd_root):
+        # Same size, different bytes → size check passes, sha256 check fails.
+        good = b"X" * 16
+        bad = b"Y" * 16
+        _write(sd_root / "update" / "main.py", bad)
+        manifest = {
+            "version": "x",
+            "files": [
+                {"path": "main.py", "sha256": _sha256_bytes(good), "bytes": len(good)},
+            ],
+        }
+        u = updater_factory()
+        errors = u.verify_payload(manifest)
+        assert errors and any("sha256" in e.lower() for e in errors)
+
+    def test_feed_wdt_swallows_exception(self, updater_factory):
+        u = updater_factory()
+
+        class _WDT:
+            def feed(self):
+                raise RuntimeError("simulated wdt fault")
+
+        u.wdt = _WDT()
+        # Should not raise.
+        u._feed_wdt()
+
+    def test_helpers_handle_edge_inputs(self):
+        from lib import updater as upd_mod
+
+        assert upd_mod._norm("") == ""
+        assert upd_mod._norm(None) is None
+        assert upd_mod._exists("/no/such/path/zzz") is False
+        # _is_dir on a file should return False.
+        assert upd_mod._is_dir(upd_mod.__file__) is False
+        # _dirname when no separator present.
+        assert upd_mod._dirname("main.py") == ""
+        # _makedirs is a no-op on empty path.
+        upd_mod._makedirs("")
+        # _sleep_ms returns immediately on non-positive input.
+        upd_mod._sleep_ms(0)
+        upd_mod._sleep_ms(-5)
+
+    def test_rmtree_handles_missing_path(self):
+        from lib import updater as upd_mod
+
+        # Should not raise.
+        upd_mod._rmtree("/no/such/path/zzz")
+
+    def test_hash_file_feeds_wdt(self, updater_factory, sd_root):
+        u = updater_factory()
+        fed = {"n": 0}
+
+        class _WDT:
+            def feed(self):
+                fed["n"] += 1
+
+        u.wdt = _WDT()
+        # Force >1 chunk so the loop body runs multiple times.
+        big = sd_root / "update" / "big.bin"
+        big.write_bytes(b"x" * 4096)
+        digest = u._hash_file(str(big))
+        assert len(digest) == 64
+        assert fed["n"] >= 1
+
+
+class TestRunPendingUpdateBranches:
+    """Cover boot-time branches not exercised by the happy/disabled paths."""
+
+    def _base_cfg(self, sd_root):
+        return {
+            "updater": {
+                "enabled": True,
+                "update_dir": str(sd_root / "update"),
+                "applied_dir": str(sd_root / "applied"),
+                "log_path": str(sd_root / "updates.log"),
+                "max_retries": 3,
+                "retry_delay_ms": 0,
+                "allowed_paths": ["main.py", "config.py", "lib/"],
+            }
+        }
+
+    class _HW:
+        def __init__(self, sd_ok=True, raise_on_check=False):
+            self._sd_ok = sd_ok
+            self._raise = raise_on_check
+
+        def is_sd_mounted(self):
+            if self._raise:
+                raise RuntimeError("hw fault")
+            return self._sd_ok
+
+    def test_sd_not_mounted_returns(self, sd_root, good_payload, monkeypatch):
+        from lib import updater as upd_mod
+
+        cfg = self._base_cfg(sd_root)
+        reset_called = []
+        monkeypatch.setattr("machine.reset", lambda: reset_called.append(True), raising=False)
+        upd_mod.run_pending_update(cfg, self._HW(sd_ok=False))
+        assert reset_called == []
+        # Payload untouched.
+        assert (sd_root / "update" / "manifest.json").exists()
+
+    def test_sd_check_raises_returns(self, sd_root, good_payload, monkeypatch):
+        from lib import updater as upd_mod
+
+        cfg = self._base_cfg(sd_root)
+        reset_called = []
+        monkeypatch.setattr("machine.reset", lambda: reset_called.append(True), raising=False)
+        upd_mod.run_pending_update(cfg, self._HW(raise_on_check=True))
+        assert reset_called == []
+
+    def test_load_manifest_failure_logs_and_returns(self, sd_root, monkeypatch):
+        from lib import updater as upd_mod
+
+        (sd_root / "update" / "manifest.json").write_text("{not json")
+        cfg = self._base_cfg(sd_root)
+        reset_called = []
+        monkeypatch.setattr("machine.reset", lambda: reset_called.append(True), raising=False)
+        upd_mod.run_pending_update(cfg, self._HW())
+        assert reset_called == []
+        log_text = (sd_root / "updates.log").read_text()
+        assert "verify_fail" in log_text
+
+    def test_verify_errors_log_and_return(self, sd_root, monkeypatch):
+        from lib import updater as upd_mod
+
+        # Manifest references a file that doesn't exist on disk.
+        manifest = {
+            "version": "v1",
+            "files": [{"path": "main.py", "sha256": "0" * 64, "bytes": 5}],
+        }
+        (sd_root / "update" / "manifest.json").write_text(json.dumps(manifest))
+        cfg = self._base_cfg(sd_root)
+        reset_called = []
+        monkeypatch.setattr("machine.reset", lambda: reset_called.append(True), raising=False)
+        upd_mod.run_pending_update(cfg, self._HW())
+        assert reset_called == []
+        assert "verify_fail" in (sd_root / "updates.log").read_text()
+
+    def test_verify_error_detail_truncated(self, sd_root, monkeypatch):
+        from lib import updater as upd_mod
+
+        # Build a manifest with many missing files so the joined detail string > 240 chars.
+        files = [{"path": f"lib/x{i}.py", "sha256": "0" * 64, "bytes": 0} for i in range(40)]
+        manifest = {"version": "v1", "files": files}
+        (sd_root / "update" / "manifest.json").write_text(json.dumps(manifest))
+        cfg = self._base_cfg(sd_root)
+        monkeypatch.setattr("machine.reset", lambda: None, raising=False)
+        upd_mod.run_pending_update(cfg, self._HW())
+        log_text = (sd_root / "updates.log").read_text()
+        assert "..." in log_text  # truncation marker
+
+    def test_apply_failure_logs_apply_fail(self, sd_root, good_payload, monkeypatch):
+        from lib import updater as upd_mod
+
+        flash_root = sd_root / "flash"
+        flash_root.mkdir()
+        monkeypatch.setattr(upd_mod, "_FLASH_ROOT", str(flash_root), raising=False)
+
+        def always_fail(self, src, dst):
+            raise OSError("simulated apply failure")
+
+        monkeypatch.setattr(upd_mod.Updater, "_copy_file", always_fail)
+        cfg = self._base_cfg(sd_root)
+        cfg["updater"]["max_retries"] = 1
+        reset_called = []
+        monkeypatch.setattr("machine.reset", lambda: reset_called.append(True), raising=False)
+        upd_mod.run_pending_update(cfg, self._HW())
+        assert reset_called == []
+        assert "apply_fail" in (sd_root / "updates.log").read_text()
+
+    def test_finalize_warn_still_resets(self, sd_root, good_payload, monkeypatch):
+        from lib import updater as upd_mod
+
+        flash_root = sd_root / "flash"
+        flash_root.mkdir()
+        monkeypatch.setattr(upd_mod, "_FLASH_ROOT", str(flash_root), raising=False)
+
+        def boom(self, manifest):
+            raise RuntimeError("simulated finalize fault")
+
+        monkeypatch.setattr(upd_mod.Updater, "finalize", boom)
+        cfg = self._base_cfg(sd_root)
+        reset_called = []
+        monkeypatch.setattr("machine.reset", lambda: reset_called.append(True), raising=False)
+        upd_mod.run_pending_update(cfg, self._HW())
+        assert reset_called == [True]
+        log_text = (sd_root / "updates.log").read_text()
+        assert "apply_ok" in log_text and "finalize warn" in log_text
+
+    def test_missing_config_returns_silently(self, sd_root, monkeypatch):
+        from lib import updater as upd_mod
+
+        reset_called = []
+        monkeypatch.setattr("machine.reset", lambda: reset_called.append(True), raising=False)
+        upd_mod.run_pending_update({}, self._HW())
+        upd_mod.run_pending_update("not a dict", self._HW())  # type: ignore[arg-type]
+        assert reset_called == []

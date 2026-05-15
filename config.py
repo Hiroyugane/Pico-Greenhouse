@@ -336,6 +336,8 @@ DEVICE_CONFIG = {
     "system": {
         "require_sd_startup": True,  # If True, SD mount failure at boot lights sd+error LEDs and resets after sd_fail_reset_s # noqa: E501
         "sd_fail_reset_s": 10,  # Countdown (s) the boot path waits with sd+error LEDs lit before machine.reset()
+        "boot_log_path": "/boot.log",  # Internal-flash file that mirrors HardwareFactory SD diagnostics; readable over USB MSC after a reset # noqa: E501
+        "boot_log_max_kb": 10,  # Cap (KB) for boot_log_path; oldest content is truncated when exceeded
         "button_debounce_ms": 60,  # Debounce delay for button presses
         "long_press_ms": 3000,  # Long-press threshold for menu action button
         "health_check_interval_s": 60,  # Normal health-check loop interval
@@ -589,6 +591,8 @@ def validate_config():
         "system": [
             "require_sd_startup",
             "sd_fail_reset_s",
+            "boot_log_path",
+            "boot_log_max_kb",
             "button_debounce_ms",
             "long_press_ms",
             "health_check_interval_s",
@@ -776,6 +780,12 @@ def validate_config():
 
     if not isinstance(sys_cfg["sd_fail_reset_s"], (int, float)) or sys_cfg["sd_fail_reset_s"] < 1:
         raise ValueError("system.sd_fail_reset_s must be >= 1")
+
+    if not isinstance(sys_cfg["boot_log_path"], str) or not sys_cfg["boot_log_path"].startswith("/"):
+        raise ValueError("system.boot_log_path must be an absolute path string")
+
+    if not isinstance(sys_cfg["boot_log_max_kb"], int) or sys_cfg["boot_log_max_kb"] < 1:
+        raise ValueError("system.boot_log_max_kb must be an int >= 1")
 
     if sys_cfg["rtc_sync_interval_s"] <= 0:
         raise ValueError("system.rtc_sync_interval_s must be > 0")

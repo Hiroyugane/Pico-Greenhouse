@@ -232,6 +232,37 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["system"]["sd_fail_reset_s"] = original
 
+    def test_boot_log_path_relative_raises(self):
+        """system.boot_log_path must be absolute."""
+        import config
+
+        original = config.DEVICE_CONFIG["system"]["boot_log_path"]
+        config.DEVICE_CONFIG["system"]["boot_log_path"] = "boot.log"
+        try:
+            with pytest.raises(ValueError, match="system.boot_log_path"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["system"]["boot_log_path"] = original
+
+    def test_boot_log_max_kb_zero_raises(self):
+        """system.boot_log_max_kb must be >= 1."""
+        import config
+
+        original = config.DEVICE_CONFIG["system"]["boot_log_max_kb"]
+        config.DEVICE_CONFIG["system"]["boot_log_max_kb"] = 0
+        try:
+            with pytest.raises(ValueError, match="system.boot_log_max_kb"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["system"]["boot_log_max_kb"] = original
+
+    def test_boot_log_keys_present_by_default(self):
+        """Default config includes boot_log_path and boot_log_max_kb."""
+        from config import DEVICE_CONFIG
+
+        assert DEVICE_CONFIG["system"]["boot_log_path"] == "/boot.log"
+        assert DEVICE_CONFIG["system"]["boot_log_max_kb"] >= 1
+
     def test_updater_zero_retries_raises(self):
         """updater.max_retries < 1 raises ValueError."""
         import config

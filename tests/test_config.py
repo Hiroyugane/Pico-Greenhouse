@@ -31,6 +31,7 @@ class TestConfigStructure:
             "display",
             "system",
             "updater",
+            "updater_feedback",
         ]
         for key in required:
             assert key in DEVICE_CONFIG, f"Missing section: {key}"
@@ -147,6 +148,54 @@ class TestValidateConfig:
                 config.validate_config()
         finally:
             config.DEVICE_CONFIG["updater"]["allowed_paths"] = original
+
+    def test_updater_feedback_non_bool_enabled_raises(self):
+        """updater_feedback.enabled must be a bool."""
+        import config
+
+        original = config.DEVICE_CONFIG["updater_feedback"]["enabled"]
+        config.DEVICE_CONFIG["updater_feedback"]["enabled"] = "yes"
+        try:
+            with pytest.raises(ValueError, match="updater_feedback.enabled"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["updater_feedback"]["enabled"] = original
+
+    def test_updater_feedback_zero_tick_freq_raises(self):
+        """updater_feedback.tick_freq_hz <= 0 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["updater_feedback"]["tick_freq_hz"]
+        config.DEVICE_CONFIG["updater_feedback"]["tick_freq_hz"] = 0
+        try:
+            with pytest.raises(ValueError, match="updater_feedback.tick_freq_hz"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["updater_feedback"]["tick_freq_hz"] = original
+
+    def test_updater_feedback_empty_success_pattern_raises(self):
+        """updater_feedback.success_pattern must be non-empty."""
+        import config
+
+        original = config.DEVICE_CONFIG["updater_feedback"]["success_pattern"]
+        config.DEVICE_CONFIG["updater_feedback"]["success_pattern"] = []
+        try:
+            with pytest.raises(ValueError, match="updater_feedback.success_pattern"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["updater_feedback"]["success_pattern"] = original
+
+    def test_updater_feedback_malformed_fail_pattern_raises(self):
+        """updater_feedback.fail_pattern entries must be (freq, dur, pause) triples."""
+        import config
+
+        original = config.DEVICE_CONFIG["updater_feedback"]["fail_pattern"]
+        config.DEVICE_CONFIG["updater_feedback"]["fail_pattern"] = [(400, 200)]
+        try:
+            with pytest.raises(ValueError, match="updater_feedback.fail_pattern"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["updater_feedback"]["fail_pattern"] = original
 
     def test_zero_fan2_interval_raises(self):
         """fan_2.interval_s = 0 raises ValueError."""

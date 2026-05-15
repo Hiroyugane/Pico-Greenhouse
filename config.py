@@ -346,6 +346,29 @@ DEVICE_CONFIG = {
         "retry_delay_ms": 200,  # Delay between write retries (ms)
         "allowed_paths": ["main.py", "config.py", "config.mpy", "lib/"],  # Whitelist; anything outside fails verify
     },
+    # Updater Feedback (loading-screen LEDs + buzzer ticks during SD-payload update)
+    #
+    # LED chase uses status_leds.walk_order to drive a cylon-style sweep across
+    # the LED row while verify/apply runs. Buzzer chirps on each per-file step
+    # for audible activity. Success/failure play distinct jingles before the
+    # post-apply machine.reset(). All values feed lib/updater_feedback.py
+    # constructor; the boot-time hook builds the controller from config["pins"]
+    # + config["status_leds"]["walk_order"] when enabled=True.
+    "updater_feedback": {
+        "enabled": True,
+        "tick_freq_hz": 1500,  # Per-step buzzer chirp frequency (Hz)
+        "tick_duration_ms": 25,  # Per-step buzzer chirp duration (ms)
+        "step_delay_ms": 0,  # Min ms between chase steps (0 = bound by work)
+        "success_pattern": [  # 3-note rising arpeggio on apply_ok
+            (1047, 120, 40),  # C6
+            (1319, 120, 40),  # E6
+            (1568, 200, 0),  # G6
+        ],
+        "fail_pattern": [  # Descending 2-note on verify/apply failure
+            (400, 200, 80),
+            (250, 400, 0),
+        ],
+    },
 }
 
 
@@ -511,6 +534,14 @@ def validate_config():
             "max_retries",
             "retry_delay_ms",
             "allowed_paths",
+        ],
+        "updater_feedback": [
+            "enabled",
+            "tick_freq_hz",
+            "tick_duration_ms",
+            "step_delay_ms",
+            "success_pattern",
+            "fail_pattern",
         ],
         "system": [
             "require_sd_startup",
@@ -749,5 +780,26 @@ def validate_config():
     for entry in upd_cfg["allowed_paths"]:
         if not isinstance(entry, str) or not entry:
             raise ValueError("updater.allowed_paths entries must be non-empty strings")
+
+    # Validate updater_feedback configuration
+    fb_cfg = DEVICE_CONFIG["updater_feedback"]
+    if not isinstance(fb_cfg["enabled"], bool):
+        raise ValueError("updater_feedback.enabled must be a bool")
+    if not isinstance(fb_cfg["tick_freq_hz"], int) or fb_cfg["tick_freq_hz"] <= 0:
+        raise ValueError("updater_feedback.tick_freq_hz must be a positive int")
+    if not isinstance(fb_cfg["tick_duration_ms"], int) or fb_cfg["tick_duration_ms"] < 0:
+        raise ValueError("updater_feedback.tick_duration_ms must be an int >= 0")
+    if not isinstance(fb_cfg["step_delay_ms"], int) or fb_cfg["step_delay_ms"] < 0:
+        raise ValueError("updater_feedback.step_delay_ms must be an int >= 0")
+    for pattern_key in ("success_pattern", "fail_pattern"):
+        pat = fb_cfg[pattern_key]
+        if not isinstance(pat, list) or not pat:
+            raise ValueError(f"updater_feedback.{pattern_key} must be a non-empty list")
+        for step in pat:
+            if not isinstance(step, (list, tuple)) or len(step) != 3:
+                raise ValueError(f"updater_feedback.{pattern_key} entries must be (freq, dur, pause) triples")
+            for v in step:
+                if not isinstance(v, int) or v < 0:
+                    raise ValueError(f"updater_feedback.{pattern_key} entries must contain non-negative ints")
 
     return True

@@ -5,6 +5,30 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-15 · OLED warmup delays moved to config
+
+### decision · Promote SSD1306 init sleeps to DEVICE_CONFIG["display"]
+
+`OLEDDisplay._init_display()` ran a fixed `time.sleep(2.0)` startup
+banner plus several smaller VRAM-clear / invert sleeps totalling ~2.4 s
+per construction. Under host pytest this was ~150 s of the 155 s
+suite (~50 fixture builds + ~14 `test_main` runs that build a real
+OLEDDisplay). Promoted to three config keys — `startup_banner_s`
+(2.0), `vram_clear_delay_s` (0.05), `invert_delay_s` (0.1) — with
+validator entries and `test_config` rows. Tests pass 0 to skip the
+sleeps; production defaults are unchanged. `test_main` additionally
+stubs `OLEDDisplay` with `Mock()` since those tests don't exercise
+the display. Full suite: 155 s → 9.5 s.
+
+### note · Two construction sites in test_oled_display
+
+Both the `oled_display` conftest fixture and the local
+`_make_display` helper / `test_init_failure_is_non_fatal` /
+`test_long_press_no_remount_cb_safe` direct constructions had to be
+updated to pass `startup_banner_s=0`. If a future OLED test
+constructs `OLEDDisplay` directly without those kwargs, it will be
+~2.4 s slow — fixture this in the test if it spreads.
+
 ## 2026-05-15 · SD-update payload now ships compiled .mpy
 
 ### decision · Compile config and lib for SD-update payloads, keep main.py raw

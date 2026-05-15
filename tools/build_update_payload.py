@@ -8,7 +8,7 @@ into a destination folder on the SD card (e.g. `G:/update`).
 Usage:
     python tools/build_update_payload.py
     python tools/build_update_payload.py --out build/update_payload
-    python tools/build_update_payload.py --version 2026-05-15.2
+    python tools/build_update_payload.py --version 20260515T143052Z-c8a3a11
     python tools/build_update_payload.py --copy-to G:/update
     python tools/build_update_payload.py --copy-to G:/update --no-confirm
     python tools/build_update_payload.py --compiled --copy-to G:/update --no-confirm
@@ -23,7 +23,7 @@ The payload layout matches what `lib/updater.py` expects:
 The manifest format:
 
     {
-        "version": "YYYY-MM-DD.N",
+        "version": "YYYYMMDDTHHMMSSZ-<shorthash>",
         "created_at": "YYYY-MM-DDTHH:MM:SSZ",
         "files": [
             {"path": "main.py", "sha256": "<hex>", "bytes": <int>},
@@ -47,8 +47,8 @@ import argparse
 import datetime as _dt
 import hashlib
 import json
-import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -144,22 +144,29 @@ def _collect_sources_compiled(build_dir: Path) -> list[tuple[str, Path]]:
     return sources
 
 
-def _auto_version(out_dir: Path) -> str:
-    """Pick a version string YYYY-MM-DD.N where N increments per-day if needed."""
-    today = _dt.date.today().isoformat()
-    n = 1
-    # If the out dir already has a manifest from today, bump N past it.
-    manifest_path = out_dir / "manifest.json"
-    if manifest_path.is_file():
-        try:
-            existing = json.loads(manifest_path.read_text())
-            prev = str(existing.get("version", ""))
-            m = re.match(rf"^{re.escape(today)}\.(\d+)$", prev)
-            if m:
-                n = int(m.group(1)) + 1
-        except Exception:
-            pass
-    return f"{today}.{n}"
+def _git_short_hash() -> str:
+    """Return the short hash of HEAD, or 'nogit' if git/repo is unavailable."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            short = result.stdout.strip()
+            if short:
+                return short
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return "nogit"
+
+
+def _auto_version() -> str:
+    """Version string: YYYYMMDDTHHMMSSZ-<shorthash> (UTC, FAT32-safe)."""
+    now = _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return f"{now}-{_git_short_hash()}"
 
 
 def _clean_out_dir(out_dir: Path) -> None:
@@ -223,7 +230,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--version",
         default=None,
-        help="Version string for the manifest (default: YYYY-MM-DD.N auto-bumped)",
+        help="Version string for the manifest (default: YYYYMMDDTHHMMSSZ-<shorthash>)",
     )
     parser.add_argument(
         "--copy-to",
@@ -254,7 +261,7 @@ def main(argv: list[str] | None = None) -> int:
         sources = _collect_sources()
     _clean_out_dir(out_dir)
     files_meta = _copy_payload(sources, out_dir)
-    version = args.version or _auto_version(out_dir.parent)
+    version = args.version or _auto_version()
     manifest_path = _write_manifest(out_dir, version, files_meta)
 
     total_bytes = sum(entry["bytes"] for entry in files_meta)

@@ -368,8 +368,8 @@ DEVICE_CONFIG = {
     # machine.reset(). Set enabled=False to skip the boot-time check entirely.
     "updater": {
         "enabled": True,
-        "update_dir": "/sd/update",
-        "applied_dir": "/sd/applied",
+        "update_dir": "/sd/ota/pending",
+        "applied_dir": "/sd/ota/applied",
         "log_path": "/sd/logs/updates.log",
         "log_max_size": 50000,  # Bytes; rotate to <name>_<ts>.log past this
         "max_retries": 3,  # Per-file write retry count on apply failure

@@ -242,7 +242,7 @@ async def main():
     logger = EventLogger(
         time_provider,
         buffer_manager,
-        logfile=logger_config.get("logfile", "/sd/system.log"),
+        logfile=logger_config.get("logfile", "/sd/logs/system.log"),
         max_size=logger_config.get("max_size", 50000),
         debug_max_size=logger_config.get("debug_max_size", 25000),
         status_manager=status_manager,

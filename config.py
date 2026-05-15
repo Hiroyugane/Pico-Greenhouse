@@ -101,7 +101,7 @@ DEVICE_CONFIG = {
     },
     # File Paths
     "files": {
-        "system_log": "/sd/system.log",
+        "system_log": "/sd/logs/system.log",
         "fallback_path": "/local/fallback.csv",  # Fallback when SD unavailable
     },
     # SD card directory layout. Sensor-first tree under sensor_root keeps
@@ -263,7 +263,7 @@ DEVICE_CONFIG = {
     },
     # Event Logger Configuration
     "event_logger": {
-        "logfile": "/sd/system.log",
+        "logfile": "/sd/logs/system.log",
         "max_size": 1000000,  # Max log file size (bytes) before rotation
         "info_flush_threshold": 5,  # Flush after N info-level entries buffered
         "warn_flush_threshold": 1,  # Flush after N warning-level entries (1=immediate, like ERROR)

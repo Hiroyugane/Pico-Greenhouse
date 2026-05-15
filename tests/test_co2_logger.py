@@ -65,7 +65,8 @@ def co2_logger(time_provider, buffer_manager, mock_event_logger, fake_uart):
         max_retries=3,
         override_ppm_on=1000,
         override_ppm_off=800,
-        filename_base="co2_log",
+        sensor_root="/sd/sensors",
+        sensor_type="co2",
     )
 
 
@@ -177,8 +178,9 @@ class TestPollOnce:
         # (real BufferManager backed by tmp_path)
         from pathlib import Path
 
-        sd_files = list(Path(buffer_manager.sd_mount_point).glob("co2_log_*.csv"))
+        sd_files = list(Path(buffer_manager.sd_mount_point).rglob("co2_*.csv"))
         assert len(sd_files) == 1
+        assert sd_files[0].parent.parent.name == "co2"
         content = sd_files[0].read_text()
         assert "723" in content
 
@@ -233,11 +235,8 @@ class TestLogLoop:
 
 
 class TestFilenameRollover:
-    def test_filename_includes_date(self, co2_logger):
-        assert co2_logger.filename.startswith("/sd/co2_log_")
-        assert co2_logger.filename.endswith(".csv")
-        # Date from FAKE_LOCALTIME (2026-01-29)
-        assert "2026-01-29" in co2_logger.filename
+    def test_filename_includes_date_under_sensor_tree(self, co2_logger):
+        assert co2_logger.filename == "/sd/sensors/co2/2026/co2_2026-01-29.csv"
 
 
 class TestGetState:

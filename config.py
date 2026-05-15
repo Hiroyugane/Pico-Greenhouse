@@ -192,7 +192,7 @@ DEVICE_CONFIG = {
         "override_ppm_on": 1000,  # Trip threshold (ppm)
         "override_ppm_off": 800,  # Release threshold (ppm), must be < on
         "override_fan": "fan_2",  # Which fan key to force-on (fan_1 or fan_2)
-        "filename_base": "co2_log",  # Becomes /sd/co2_log_YYYY-MM-DD.csv
+        "sensor_type": "co2",  # Folder + filename prefix under paths.sensor_root
     },
     # Grow Light Configuration
     "growlight": {
@@ -484,7 +484,7 @@ def validate_config():
             "override_ppm_on",
             "override_ppm_off",
             "override_fan",
-            "filename_base",
+            "sensor_type",
         ],
         "soil_logger": [
             "interval_s",
@@ -708,8 +708,8 @@ def validate_config():
         raise ValueError("co2_logger.override_ppm_off must be >= 0")
     if co2_cfg["override_fan"] not in ("fan_1", "fan_2"):
         raise ValueError("co2_logger.override_fan must be 'fan_1' or 'fan_2'")
-    if not isinstance(co2_cfg["filename_base"], str) or not co2_cfg["filename_base"]:
-        raise ValueError("co2_logger.filename_base must be a non-empty string")
+    if not isinstance(co2_cfg["sensor_type"], str) or not co2_cfg["sensor_type"]:
+        raise ValueError("co2_logger.sensor_type must be a non-empty string")
 
     soil_cfg = DEVICE_CONFIG["soil_logger"]
     if soil_cfg["interval_s"] <= 0:

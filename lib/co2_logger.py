@@ -68,7 +68,8 @@ class CO2Logger:
         max_retries: int = 3,
         override_ppm_on: int = 1000,
         override_ppm_off: int = 800,
-        filename_base: str = "co2_log",
+        sensor_root: str = "/sd/sensors",
+        sensor_type: str = "co2",
         retry_delay_ms: int = 50,
         write_queue=None,
         status_manager=None,
@@ -92,7 +93,8 @@ class CO2Logger:
         self.read_failures = 0
         self.write_failures = 0
         self._started_ms = _ticks_ms()
-        self._filename_base = filename_base if filename_base.startswith("/sd/") else f"/sd/{filename_base}"
+        self._sensor_root = sensor_root
+        self._sensor_type = sensor_type
         self.current_date = None
         self._update_filename_for_date()
         self._ensure_header()
@@ -110,14 +112,15 @@ class CO2Logger:
     # ------------------------------------------------------------------ filename
 
     def _update_filename_for_date(self) -> None:
+        from lib.sensor_paths import daily_csv_path
+
         try:
             year, month, day = self.time_provider.now_date_tuple()[:3]
             self.current_date = (year, month, day)
-            base = self._filename_base.replace(".csv", "")
-            self.filename = f"{base}_{year:04d}-{month:02d}-{day:02d}.csv"
+            self.filename = daily_csv_path(self._sensor_root, self._sensor_type, year, month, day)
         except Exception as exc:
             self.logger.error("CO2Logger", f"filename rollover failed: {exc}")
-            self.filename = self._filename_base
+            self.filename = f"{self._sensor_root.rstrip('/')}/{self._sensor_type}/{self._sensor_type}.csv"
 
     def _check_date_changed(self) -> None:
         try:

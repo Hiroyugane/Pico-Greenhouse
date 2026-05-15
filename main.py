@@ -438,7 +438,8 @@ async def main():
             max_retries=co2_config.get("max_retries", 3),
             override_ppm_on=co2_config.get("override_ppm_on", 1000),
             override_ppm_off=co2_config.get("override_ppm_off", 800),
-            filename_base=co2_config.get("filename_base", "co2_log"),
+            sensor_root=DEVICE_CONFIG["paths"]["sensor_root"],
+            sensor_type=co2_config.get("sensor_type", "co2"),
             write_queue=write_queue,
             status_manager=status_manager,
         )

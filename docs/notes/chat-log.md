@@ -5,6 +5,46 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-15 · SD-update loading-screen feedback
+
+### decision · standalone UpdateFeedback, built only when an update fires
+
+The updater runs at `main.py:175` BEFORE EventLogger and BEFORE the
+full `StatusManager` / `BuzzerController` are wired (per the
+comments at `main.py:168-181`). To keep that ordering intact, the
+loading-screen feedback ships as `lib/updater_feedback.UpdateFeedback`
+— a self-contained class that owns its own `machine.Pin` row and
+`machine.PWM` buzzer, with no dependency on `StatusManager` or
+`BuzzerController`. `run_pending_update` only constructs it after
+`has_pending_update()` returns True, so a boot with no payload leaves
+the LED row dark and the buzzer silent.
+
+### decision · reuse `status_leds.walk_order` for the chase direction
+
+The chase LEDs are driven from `pins.{activity,sd,reminder,warning,
+error}_led` resolved through `config["status_leds"]["walk_order"]`
+rather than a new pin list under `updater_feedback`. That keeps the
+POST sweep and the update sweep visually consistent — reorder the row
+in one place and both follow.
+
+### decision · per-file ticks audible, per-chunk steps silent
+
+`Updater._step_feedback(audio=True)` fires once per file in
+`verify_payload` and in `apply` so the buzzer chirps at honest "one
+file done" intervals. The per-chunk calls inside `_hash_file` and
+`_copy_file` pass `audio=False` so the chase keeps moving on big
+payloads without turning the buzzer into a buzzsaw. A user
+`step_delay_ms` knob throttles the visible chase when chunks come
+faster than the row can read.
+
+### decision · success/fail jingles play before `machine.reset()`
+
+On `apply_ok` the success jingle plays while all five LEDs are lit,
+then `finish()` clears outputs and `machine.reset()` reboots into the
+new code. On verify/apply/load-manifest failure, the failure jingle
+plays and the function returns normally so the rest of boot can
+continue with the still-installed code.
+
 ## 2026-05-15 · Button debounce: no caps, external pull-up only (this rev)
 
 ### decision · RES_BTN direct short; MEN_BTN with 10 kΩ external pull-up, no cap

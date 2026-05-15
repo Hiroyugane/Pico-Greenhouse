@@ -5,6 +5,48 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-15 · SD-update loading screen LEDs + buzzer jingles
+
+**Branch:** `main`
+**Why hardware-only:** the loading animation and end-state jingles are
+purely sensory — `pytest` proves the feedback hooks fire at the right
+points, but only eyes/ears verify the chase is visible, the ticks are
+audible, and the success/fail tones are distinguishable.
+**Pre-flight:** Pico powered cold; a valid signed payload staged under
+`/sd/update/` with `manifest.json` (use `tools/build_update_payload.py`);
+`updater.enabled=True` and `updater_feedback.enabled=True` in
+`config.py`. Have a deliberately corrupt manifest on hand for the
+failure run.
+
+### Successful update
+
+- [ ] Cold-boot with the valid payload present. While verify + apply
+      runs, the LED row sweeps left↔right in a cylon chase across
+      activity → sd → reminder → warning → error, with a short chirp
+      audible on each per-file step.
+- [ ] On `apply_ok`, all five status LEDs light briefly while the
+      buzzer plays a rising 3-note arpeggio (≈ C6 → E6 → G6), then the
+      Pico reboots into the new code.
+
+### Failed verify
+
+- [ ] Cold-boot with a payload whose `manifest.json` has a sha256 that
+      doesn't match its file. The chase runs through the verify phase,
+      stops, and the buzzer plays a descending 2-note fail tone
+      (≈ 400 Hz → 250 Hz). The Pico does **not** reboot; normal boot
+      proceeds and the next health-check log line shows the failure.
+
+### Disabled feedback
+
+- [ ] Set `updater_feedback.enabled = False`, redeploy, cold-boot with
+      a valid payload. The update still applies and the Pico reboots,
+      but the LED row stays dark and the buzzer is silent during the
+      whole update window.
+
+### Notes (post-test) — updater feedback
+
+> Fill in here.
+
 ## 2026-05-15 · POST LED walk follows physical row order
 
 **Branch:** `main`

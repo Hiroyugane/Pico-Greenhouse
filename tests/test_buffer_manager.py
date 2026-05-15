@@ -30,6 +30,14 @@ class TestBufferManagerPrimaryWrite:
         buffer_manager.write("/sd/test.csv", "data\n")
         assert (tmp_path / "sd" / "test.csv").exists()
 
+    def test_write_creates_nested_parent_dirs(self, buffer_manager, tmp_path):
+        """Writing to a nested relpath auto-creates the missing parent dirs."""
+        result = buffer_manager.write("sensors/co2/2026/co2_2026-05-15.csv", "row\n")
+        assert result is True
+        nested = tmp_path / "sd" / "sensors" / "co2" / "2026" / "co2_2026-05-15.csv"
+        assert nested.exists()
+        assert nested.read_text() == "row\n"
+
 
 class TestBufferManagerFallback:
     """Tests for fallback writing when primary is unavailable."""

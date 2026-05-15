@@ -289,6 +289,49 @@ class BufferManager:
             return self._path_join(os.getcwd(), "local", self._path_basename(path))
         return path
 
+    def _ensure_parent_dir(self, file_path: str) -> None:
+        """Create parent directories of *file_path* if missing (idempotent).
+
+        Required for nested SD layouts (e.g. sensors/co2/2026/...) where
+        ``open(path, "a")`` would otherwise raise on the missing year dir.
+        """
+        if not file_path:
+            return
+        norm = file_path.replace("\\", "/")
+        if "/" not in norm:
+            return
+        parent = norm.rsplit("/", 1)[0]
+        if not parent:
+            return
+        if self._is_host():
+            try:
+                os.makedirs(parent, exist_ok=True)
+            except Exception:
+                pass
+            return
+        self._mkdir_recursive(parent)
+
+    @staticmethod
+    def _mkdir_recursive(path: str) -> None:
+        """MicroPython-friendly recursive ``os.mkdir`` (no ``os.makedirs``)."""
+        if not path:
+            return
+        try:
+            os.stat(path)
+            return
+        except OSError:
+            pass
+        grand = path.rsplit("/", 1)[0] if "/" in path else ""
+        if grand and grand != path:
+            BufferManager._mkdir_recursive(grand)
+        try:
+            os.mkdir(path)
+        except OSError:
+            try:
+                os.stat(path)
+            except OSError:
+                raise
+
     def _has_fallback_entries(self) -> bool:
         """
         Check if fallback file has any entries (non-blocking).
@@ -443,6 +486,7 @@ class BufferManager:
         # Try primary first
         if primary_ok:
             try:
+                self._ensure_parent_dir(primary_path)
                 with open(primary_path, "a") as f:
                     f.write(data)
                 self.writes_to_primary += 1
@@ -573,6 +617,7 @@ class BufferManager:
                 clean = path[4:] if path.startswith("/sd/") else path
                 primary_path = f"{self.sd_mount_point}/{clean}"
                 try:
+                    self._ensure_parent_dir(primary_path)
                     with open(primary_path, "a") as f:
                         for entry in self._buffers[path]:
                             f.write(entry)
@@ -667,6 +712,7 @@ class BufferManager:
                     primary_path = f"{self.sd_mount_point}/{relpath}"
                     self._log_debug(f"Migrating to {primary_path}: {data.strip()}")
 
+                    self._ensure_parent_dir(primary_path)
                     with open(primary_path, "a") as f:
                         f.write(data)
 

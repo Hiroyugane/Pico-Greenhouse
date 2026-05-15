@@ -5,6 +5,52 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-15 · Capacitive soil sensor unresponsive — NE555 unit, replace
+
+### decision · require TLC555/7555-class chip; this unit was dead
+
+Operator reported the soil sensor on GP28 returning random low values
+that didn't move when the probe was submerged in water and only
+"changed on restart". Bench-trace:
+
+1. Initial wiring had sensor VCC tied to ADC_VREF (Pico pin 35) instead
+   of 3V3 (pin 36). ADC_VREF is an RC-filtered reference, not a power
+   rail; loading it with the sensor's ~5 mA draw dragged the reference
+   itself, corrupting every ADC read on the Pico. Rewired VCC to 3V3.
+2. After rewire, `print_raw()` returned 0–14 and AOUT-to-GND sat at
+   ~0.3 V. Chip on the sensor PCB confirmed as **NE555** (bipolar,
+   ≥4.5 V to oscillate), not TLC555 / 7555 / LMC555 (CMOS, run at 2 V).
+   3.3 V is below the NE555's start threshold, so the oscillator never
+   ran and AOUT floated.
+3. Moved VCC to VBUS (Pico pin 40, measured 4.7 V) and added a 6.8 kΩ
+   top + 10 kΩ bottom divider on AOUT → GP28 (ratio 0.595; worst-case
+   5 V → 2.98 V at GP28, safely under the 3.3 V ADC ceiling, source
+   impedance ~4 kΩ within the RP2040's recommended <10 kΩ window).
+4. AOUT-to-GND still read 0 V at the sensor header even with the
+   divider lifted (one resistor leg disconnected to rule out loading).
+   The NE555 is dead — likely a damaged passive on the oscillator or
+   the chip itself. 0.2 V residual is leakage, not a real signal.
+
+Decision: replace with a TLC555-class capacitive sensor (DFRobot
+SEN0193, Adafruit #4026, or any board where the seller confirms the
+timer chip is CMOS — TLC555 / 7555 / ICM7555 / LMC555). With a
+TLC555 unit the wiring reverts to VCC → 3V3 (pin 36), GND → any GND,
+AOUT → GP28 with **no divider**. Keep the 6.8 k + 10 k pair for the
+next project. Calibration values in `config.py` (`adc_dry_raw=850`,
+`adc_wet_raw=350`) stay until the replacement arrives and a fresh
+three-point `print_raw()` (air / moist soil / water) gives real
+numbers; the eyes-on verification lives in
+[docs/test/hw-test-log.md](../test/hw-test-log.md).
+
+### note · ADC_VREF is not a power rail
+
+For future reference on this board: Pico pin 35 (ADC_VREF) is filtered
+3V3 meant to feed the ADC's reference voltage, not source current to
+external loads. Anything that draws more than a few µA must come from
+3V3 OUT (pin 36) or VBUS (pin 40), never ADC_VREF. Mis-wiring VCC to
+ADC_VREF corrupts **every** ADC channel on the Pico, not just the
+sensor's own pin.
+
 ## 2026-05-15 · Reserved relay GPIOs floated, parked HIGH
 
 ### decision · park GP21/22/26/27 HIGH via output_pins, not Pin.IN+PULL_UP

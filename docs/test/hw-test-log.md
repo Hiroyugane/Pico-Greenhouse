@@ -5,6 +5,74 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-15 · Capacitive soil sensor replacement bring-up
+
+**Branch:** `main`
+**Why hardware-only:** verifying a real moisture probe requires
+physically moving the probe through air → soil → water and reading
+GP28; `pytest` cannot exercise the ADC, the 555 oscillator, or the
+sensor's capacitive plate.
+**Pre-flight:** Replacement TLC555/7555-class capacitive sensor in
+hand (NE555 units do not start at 3V3 — see chat-log entry of this
+date). 6.8 k + 10 k divider from the previous attempt **removed**.
+Pico powered cold via USB; Thonny REPL connected; multimeter on
+hand. Confirm the silkscreen chip marking before powering up — if it
+reads `NE555` / `LM555` / plain `555`, stop and source a different
+unit.
+
+### Wiring verification (before first power-up)
+
+- [ ] Sensor VCC → Pico pin 36 (3V3 OUT). **Not** pin 35 (ADC_VREF);
+      ADC_VREF cannot source a sensor's load and corrupts every ADC
+      channel.
+- [ ] Sensor GND → any Pico GND (pin 33 / 38 / 23 / etc.).
+- [ ] Sensor AOUT → Pico pin 34 (GP28 / ADC2) directly. No divider.
+- [ ] DMM between VCC and GND at the sensor header reads
+      3.30 V ± 0.05 V after the Pico boots.
+- [ ] DMM between AOUT and GND at the sensor header reads roughly
+      2.0–2.5 V with the probe held in dry air. If it reads ~0 V,
+      stop — the new sensor is also bad or wired wrong.
+
+### `print_raw()` calibration sweep
+
+Run each step from the Thonny REPL with
+`from lib.soil_logger import print_raw; print_raw()`. Wait ~5 s
+between moves so the RC filter on the sensor settles.
+
+- [ ] **Air (dry reference):** probe held in still air, away from
+      hands. Record raw value: __________. Expected: 700–900 range.
+- [ ] **Moist soil:** probe inserted into a freshly watered potting
+      mix up to the printed fill line. Record: __________. Expected:
+      400–600 range, clearly below the air value.
+- [ ] **Tap water:** white PCB blade submerged to (but not past) the
+      printed line. Record: __________. Expected: 300–450 range,
+      clearly below the moist-soil value.
+- [ ] All three readings differ by ≥ 100 raw counts between
+      neighbouring states (otherwise calibration won't be useful).
+- [ ] With the probe stationary in any one state, repeated
+      `print_raw()` calls vary by ≤ 5 counts (no floating-pin jitter).
+
+### Config + system verification
+
+- [ ] Update [config.py:151-152](../../config.py#L151-L152):
+      `adc_dry_raw` ← air reading, `adc_wet_raw` ← water reading.
+- [ ] `pytest tests/test_config.py -v` passes after the edit (validator
+      still happy with the new values).
+- [ ] Reboot the Pico into `main.py`. Within 60 s a new row appears
+      in `/sd/soil_log_YYYY-MM-DD.csv` (or the BufferManager fallback)
+      with a plausible `Raw,Percent` pair.
+- [ ] Pour water into the pot near the probe; the next logged row
+      shows `Percent` rising toward 100. Withhold water for several
+      cycles; `Percent` falls.
+- [ ] When `Percent < warn_pct_below` (default 20), the warning LED
+      lights via `StatusManager`; clearing the condition turns it off.
+
+### Notes (post-test) — soil sensor replacement
+
+> Fill in here. Record the three calibration raw values, any
+> per-state jitter observed, and the sensor model + chip marking of
+> the unit that finally worked.
+
 ## 2026-05-15 · Reserved relay GPIOs parked HIGH + REL_CON 3V3 fault
 
 **Branch:** `main`

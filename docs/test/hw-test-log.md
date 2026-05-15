@@ -5,6 +5,66 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-15 · SD-payload software-update scaffold
+
+**Branch:** `main`
+**Why hardware-only:** The updater rewrites flash from SD before
+`EventLogger` is up and ends in `machine.reset()`. Host tests cover
+the file/manifest/hash logic, but real SD timing, watchdog feeding
+during copies, and the post-reset clean-boot path can only be
+confirmed on the Pico. Note: `run_pending_update` is wired into
+`main.py` behind a `try/except` guard, but the implementation is a
+stub (xfailed tests pin the contract). Until the real implementation
+lands, on-device boots will print `[STARTUP] Updater raised
+(non-fatal): Updater.has_pending_update` and continue normally — the
+checks below activate once the stub is replaced.
+**Pre-flight:** Working `/sd` mount; SD card formatted FAT32; current
+`main.py` flashed via Thonny. Pull a known-good backup of `/lib/`,
+`/main.py`, `/config.py` off the Pico before testing destructive paths.
+
+### Trigger detection
+
+- [ ] With no `/sd/update/` folder: boot proceeds normally; nothing
+      appended to `/sd/updates.log`.
+- [ ] With `updater.enabled = False` in config and a valid `/sd/update/`
+      present: boot proceeds normally; payload is untouched; no reset.
+- [ ] With `/sd/update/manifest.json` present and `enabled = True`:
+      boot enters the updater (visible via console prints before the
+      reset).
+
+### Verification gating
+
+- [ ] Manifest with a corrupted file hash → `verify_fail` line in
+      `/sd/updates.log`, `/sd/update/` left in place, no files
+      overwritten, boot continues with old code.
+- [ ] Manifest naming a path outside whitelist (e.g. `docs/x.md`) →
+      same outcome: `verify_fail`, no writes.
+- [ ] Manifest with a traversal entry (`../etc/passwd`) → rejected
+      before any write.
+
+### Apply + reset
+
+- [ ] Good payload that changes `main.py` (e.g. a startup print): on
+      boot, console shows updater activity, files are copied,
+      `machine.reset()` fires, post-reset boot prints the new startup
+      banner. `/sd/applied/<version>/` exists. `/sd/update/` is gone.
+- [ ] Good payload that adds a file under `/lib/`: post-reset boot
+      imports it successfully.
+- [ ] Good payload that replaces `config.py` with a value change
+      (e.g. `fan_1.on_time_s`): observed at runtime after reset.
+
+### Failure / retry
+
+- [ ] Pull SD card mid-apply (carefully, only after first file copy):
+      updater logs `apply_fail`; `/sd/update/` still present on
+      re-insert; next reboot re-attempts and completes.
+- [ ] Watchdog: a full apply of N files completes without a WDT
+      reset (i.e. updater feeds `wdt` between files).
+
+### Notes (post-test)
+
+> Fill in here. Add `[!]` items with failure mode and a short repro.
+
 ## 2026-05-15 · Growlight `mode` flag
 
 **Branch:** `main`

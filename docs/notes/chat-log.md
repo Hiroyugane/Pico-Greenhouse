@@ -5,6 +5,62 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-15 · SD-payload software-update scaffold
+
+### decision · Boot-time SD-payload updater replaces lib/, main.py, config.py
+
+New `lib/updater.py` (scaffold) implements an operator workflow: drop a
+payload tree under `/sd/update/` with a `manifest.json` listing per-file
+SHA-256 hashes, power-cycle the Pico, and the device replaces its own
+code without Thonny. Wire-in lives in `main.py` between
+`HardwareFactory.setup()` (SD must be mounted) and `EventLogger` init
+(so logging code can itself be replaced). On success the updater renames
+`/sd/update/` to `/sd/applied/<version>/`, appends to `/sd/updates.log`,
+and calls `machine.reset()`.
+
+### decision · Full code+config replacement (overwrites config.py)
+
+The payload is allowed to replace `main.py`, `config.py`, and any file
+under `lib/`. Operator-tuned values in `config.py` are NOT preserved
+across updates — the payload's `config.py` wins. The whitelist is
+enforced by `Updater._is_path_allowed` and configured via
+`updater.allowed_paths`. Anything outside the whitelist is a
+verification failure and live code is never touched.
+
+### decision · Integrity = per-file SHA-256 in manifest.json
+
+Every file in the payload has a SHA-256 hash and byte count in
+`manifest.json`. `verify_payload()` checks all files before any write;
+a single hash mismatch or path-whitelist violation aborts the apply
+with `/sd/update/` left untouched, so the next boot can retry after
+the operator fixes the payload.
+
+### decision · No backup of live code; retry-on-failure recovery
+
+Per the 2026-05-15 clarifying round, the updater does NOT snapshot the
+current `/lib/` before writing. If a write fails mid-loop, the updater
+retries each file up to `updater.max_retries` (default 3). If retries
+exhaust, the apply halts and logs `apply_fail`; live code may be in a
+partial state, but `/sd/update/` is left in place so the next reboot
+re-attempts. Recovery from a fundamentally bad payload is the
+operator's responsibility — fix the SD card and reboot.
+
+### note · Wire-in is live but guarded against the scaffold stub
+
+`main.py` calls `run_pending_update(DEVICE_CONFIG, hardware, wdt)`
+inside a `try/except Exception` so the current `NotImplementedError`
+from the stub is caught and printed without blocking boot. Once the
+real implementation lands, the same call site continues to work; the
+guard remains as the documented "updater failures must never block
+normal boot" policy.
+
+### issue · Operator tooling not in scaffold
+
+A helper (`tools/build_update_payload.py`) that walks a source tree
+and emits `manifest.json` with computed hashes is out of scope for the
+scaffold. Operator currently has to assemble the payload by hand.
+Open follow-up.
+
 ## 2026-05-15 · Growlight mode flag (relay_only vs dimmed)
 
 ### decision · Add `growlight.mode` config flag, default `relay_only`

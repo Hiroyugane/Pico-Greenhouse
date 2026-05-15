@@ -5,6 +5,54 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-15 · Boot SD mount recovery + hard-fail behavior
+
+**Branch:** `main`
+**Why hardware-only:** the cold-boot SD mount path is exactly what
+pytest cannot exercise — `sdcard.SDCard()` over real SPI to a real
+FAT32 card with a real power-up sequence. The SPI-reinit-between-retries
+fix only proves itself on the bench, and the new sd+error LED hold +
+`machine.reset()` countdown is observable only on hardware.
+**Pre-flight:** Pico booted standalone (USB power, no Thonny), SD
+card inserted before power-on, `system.require_sd_startup=True`
+(default), `system.sd_fail_reset_s=10` (default).
+
+### Cold-boot mount succeeds on a normal card
+
+- [ ] Power-cycle with a healthy card seated. Console prints
+  `[HardwareFactory] SD mounted` on attempt 1 (or, at worst, attempt
+  2 with a `reinit SPI and retry` line in between).
+- [ ] After POST walk, the sd_led (GP5) is **off** and stays off.
+
+### Cold-boot mount recovers via SPI reinit on a flaky card
+
+- [ ] Reseat the SD connector loosely (or use the known-slow card)
+  and power-cycle. Watch console: first mount attempt fails, a
+  `reinit SPI and retry` line appears, then a later attempt succeeds.
+- [ ] sd_led off after POST.
+
+### Hard-fail path: SD missing at boot
+
+- [ ] Power-cycle with no SD inserted. After ~1-2s of setup, sd_led
+  (GP5) **and** error_led (GP7) light SOLID. Console prints
+  `[STARTUP ERROR] SD card required but not mounted. Resetting in 10s...`.
+- [ ] The two LEDs stay lit for ~10s, then the Pico resets (POST
+  walk re-runs from the top). No watchdog reset before the countdown
+  expires.
+
+### Hard-fail path: SD missing with require_sd_startup=False
+
+- [ ] Edit `config.py` to set `system.require_sd_startup=False`,
+  reflash, power-cycle without SD. System boots all the way through
+  POST and into the menu loop. sd_led is solid (SD missing) but
+  error_led is OFF (no hard-fail).
+- [ ] Insert SD, long-press the menu button → SD remount succeeds,
+  sd_led goes dark, normal operation resumes.
+
+### Notes (post-test) — SD mount recovery
+
+> Fill in here.
+
 ## 2026-05-15 · SD card layout refactor — verify writes land in new tree
 
 **Branch:** `main`

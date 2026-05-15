@@ -5,6 +5,65 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-15 · Boot SD mount recovery + hard-fail
+
+### issue · SD failed to mount on cold boot but worked from menu remount
+
+User reported that since the SD layout refactor landed, the card no
+longer mounts at boot — yet a long-press menu remount succeeded every
+time. Investigation found three problems compounding rather than one
+clean regression:
+
+1. `HardwareFactory._init_sd` reused the same `self.spi` across its
+   three retries. A failed `sdcard.SDCard(spi, cs)` call can leave the
+   SPI bus in a half-init state that every subsequent retry on the
+   same bus inherits, so the loop never recovered. `is_mounted()`
+   (the menu remount path) builds a fresh `SPI()` each call, which is
+   why manual remount worked.
+2. `StatusManager.run_post()` drives every owned LED OFF at the end
+   of the walk. `main.py` called `set_sd_status()` *before* POST, so
+   even when boot mount failed the visual walk masked the LED.
+3. `system.require_sd_startup` existed in config but was never read
+   anywhere — there was no path that turned SD failure into a hard
+   stop.
+
+### decision · cold-boot SD mount reinits SPI between retries
+
+`_init_sd` now calls a new `_reinit_spi()` helper between attempts,
+which `deinit()`s the existing bus (best-effort) and rebuilds it via
+`_init_spi()`. Matches the implicit fresh-bus behavior of
+`is_mounted()` on the menu path. Retry count and delay are unchanged
+(3 × 500 ms with a 250 ms power-up); the bus reinit is the change
+that makes retries meaningful rather than free.
+
+### decision · require_sd_startup now defaults True, drives hard-fail
+
+`system.require_sd_startup` defaults to `True` and is consumed in
+`main.py` right after `status_manager.set_sd_status()`. On failure
+the new helper `_enter_sd_failure_state()` lights sd_led + error_led,
+feeds the WDT in 0.5 s ticks for `system.sd_fail_reset_s` seconds
+(default 10), then calls `machine.reset()`. The visible countdown
+gives the operator a chance to see *why* the Pico cycled, which is
+the key difference from a watchdog-induced reset. Cold-boot SD
+failures are usually transient (connector seating, brown-out, slow
+card), so a bounded reset loop tends to recover on its own.
+
+### note · POST now reasserts SD state after the walk
+
+After `run_post()` returns, `main.py` re-calls
+`status_manager.set_sd_status(hardware.is_sd_mounted())` so the SD
+LED reflects reality once the walk is over. Currently only SD state
+gets this treatment because it is the only condition raised before
+POST; warnings/errors raised later are unaffected.
+
+### deviation · no compatibility shim for the old behavior
+
+Per `coding-style.md` and the user's prior preference, no flag was
+added to preserve the old "boot continues silently on SD failure"
+default. Operators who want that path set
+`system.require_sd_startup=False` explicitly — that branch is still
+wired and tested.
+
 ## 2026-05-15 · SD card layout refactor
 
 ### decision · sensor-first tree under `/sd/sensors/<type>/YYYY/`

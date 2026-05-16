@@ -5,6 +5,58 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-16 · OLED debug actions sub-menu
+
+### decision · separate "debug" entry menu, long-press opens sub-menu, short=cycle, long=execute
+
+Added a tenth top-level OLED menu (`debug`) instead of overloading an
+existing one. From the entry view, a long press flips the display
+into a sub-menu mode where short-press cycles actions and long-press
+executes the highlighted one. This keeps every other menu's
+long-press semantics (clear history, reset reminder, remount SD)
+untouched — an operator cannot accidentally trigger a destructive
+action by holding the button on the wrong screen.
+
+Shipped actions: `wipe_logs`, `cycle_relays`, `test_heater` (5 s),
+`test_growlight` (relay pulse), `test_growlight_dim` (DAC sweep, only
+listed when MCP4725 is wired). Per-fan PWM is intentionally **out**
+until the PCA9685 revision lands; see
+[[project_fan_hardware_revision]] for the planned hardware that
+makes per-fan duty meaningful.
+
+### decision · wipe_logs needs two-step confirm; scope = buffers + fallback + system.log
+
+`wipe_logs` is the only destructive action. First long-press arms a
+`CONFIRM?` prompt; second long-press inside `confirm_timeout_s`
+(default 8 s) wipes. A short press cancels. Wipe scope is
+deliberately narrow: BufferManager in-memory ring buffer, fallback
+CSV (via `clear_fallback_startup`), and the EventLogger file. Sensor
+CSVs under `/sd/sensors/**` are **never** removed — those are
+scientific data, and an operator who needs a full reset can format
+the card.
+
+### decision · debug actions spawn async tasks; OLED stays event-loop friendly
+
+`long_press_action()` runs from the button-poll task. Multi-second
+actions (heater 5 s, dim sweep, cycle relays) would block the WDT
+feeder if executed inline, so each handler is a coroutine and the
+dispatcher schedules it with `asyncio.create_task()`. While an
+action runs, `_debug_running=True` suppresses further button input
+and the OLED shows `RUNNING...`. On completion, a `done`/`FAIL`
+status line stays on screen for `status_show_ms` (3 s) and the
+reminder LED plays a brief feedback blink so the operator gets
+confirmation even at arm's length.
+
+### note · per-fan PWM 0-100% deferred to PCA9685 revision
+
+The user asked about individually testable fan PWM, but on the
+current PCB fans are bare on/off relays — duty cycle isn't a
+meaningful concept. The cycle_relays test pulses each fan ON for
+~1 s in sequence so an operator can hear the relay click and confirm
+wiring. Per-fan dim sweeps will be added in the same change that
+introduces `AlwaysOnFanController` /
+`HeaterFollowerFanController` on top of the PCA9685.
+
 ## 2026-05-16 · Fan control policies for PCA9685 hardware revision
 
 ### decision · case fan = always-on constant duty; heater-distribution fan = follows heater + afterrun

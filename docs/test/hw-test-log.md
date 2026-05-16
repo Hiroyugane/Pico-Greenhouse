@@ -5,6 +5,83 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-16 · OLED debug actions sub-menu
+
+**Branch:** `main`
+**Why hardware-only:** Each action drives a real relay, MOSFET gate,
+or DAC and is observed by ear (relay click), thermometer (heater
+gate), or eye (growlight on/off, dim ramp). Wipe also affects the
+mounted SD card.
+**Pre-flight:** SD card mounted with at least one fallback row in
+`/local/fallback.csv` (let the device run with the card briefly
+ejected and reinserted to populate). System.log file present at
+`/sd/logs/system.log`. Heater MOSFET wired to GP3. Growlight relay
+on GP20; MCP4725 at 0x60 if the dim-sweep action is to be tested.
+RTC + I2C0 healthy (POST passes).
+
+### Navigation into the debug sub-menu
+
+- [ ] Short-press the menu button until the OLED shows the `DEBUG`
+  header with `Hold to enter` / `[HOLD]=open` hint.
+- [ ] Long-press (≥3 s). Display switches to `> Wipe logs` with
+  `1/N` page indicator and `[HOLD]=run` hint.
+- [ ] Short-press cycles through every entry: `Wipe logs`, `Cycle
+  relays`, `Heater 5s`, `Light pulse`, and `Dim sweep` (only if
+  MCP4725 is wired). Page indicator updates each press.
+- [ ] Stop pressing for `menu_timeout_s` (default 30 s); display
+  returns to the temperature menu and the debug sub-menu state is
+  cleared (next entry restarts at action index 0).
+
+### Wipe logs — two-step confirm
+
+- [ ] Long-press while on `Wipe logs`. Display shows `CONFIRM?` and
+  `TAP=cancel`; the `[HOLD]` hint reads `[HOLD]=YES`.
+- [ ] Short-press; confirm clears, status line shows `cancelled`,
+  fallback.csv and system.log untouched.
+- [ ] Long-press again, long-press a second time within ~8 s. Status
+  briefly shows `RUNNING...`, then `done`, reminder LED plays the
+  feedback blink pattern.
+- [ ] After wipe: `/sd/logs/system.log` is gone (or recreated empty
+  by the next EventLogger flush), `/local/fallback.csv` is gone, and
+  any in-memory buffered sensor entries are dropped. Sensor CSVs
+  under `/sd/sensors/**` are untouched.
+
+### Cycle relays — audible click on each output
+
+- [ ] Long-press `Cycle relays`. Listen: relay 1 clicks ON, ~1 s
+  later clicks OFF; relay 2 clicks ON, then OFF; growlight relay
+  clicks ON, then OFF. Each fan scheduler resumes its normal state
+  on its next poll (≤ poll_interval_s).
+- [ ] Reminder LED plays the feedback blink at completion; OLED
+  status shows `done`.
+
+### Heater 5 s
+
+- [ ] Long-press `Heater 5s`. Heater MOSFET gate goes HIGH for
+  5 s; heating element warms perceptibly (or measure with a probe).
+- [ ] After 5 s, gate returns LOW; OLED status shows `done`.
+
+### Growlight tests
+
+- [ ] Long-press `Light pulse`. Growlight relay closes for 2 s, then
+  opens. If MCP4725 is wired, brightness is `default_level_pct`
+  during the pulse.
+- [ ] (DAC builds only) Long-press `Dim sweep`. Growlight ramps
+  through 0 → 25 → 50 → 75 → 100 → 0 % with ~1 s dwell at each
+  step. Final state: relay open, DAC at 0.
+
+### Resilience
+
+- [ ] During any action (e.g. heater 5 s), press the button. Display
+  shows `RUNNING...` and ignores the press; no second action starts.
+- [ ] During an action, leave the system idle past
+  `menu_timeout_s`. The display does NOT exit debug mode mid-action;
+  it only exits once the action has finished.
+
+### Notes (post-test)
+
+> Fill in here. Add `[!]` items with failure mode and a short repro.
+
 ## 2026-05-16 · Updater legacy update_dir fallback applies
 
 **Branch:** `main`

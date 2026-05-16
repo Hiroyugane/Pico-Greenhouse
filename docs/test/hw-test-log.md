@@ -5,6 +5,62 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-17 · Updater same-version short-circuit (noop jingle)
+
+**Branch:** `main`
+**Why hardware-only:** The noop short-circuit hashes every manifest
+file against the live flash. Host pytest covers the logic but only
+real MicroPython + a mounted SD card prove that (a) the hash path
+on `_FLASH_ROOT = "/"` reads the bytes the Pico will actually
+execute, (b) the new `noop` log entry lands in
+`/sd/logs/updates.log`, and (c) the operator hears the new
+two-blip 880 Hz chime instead of the failure descend.
+**Pre-flight:** Pico flashed via `flash-mpremote` from the
+current commit. SD card with payload built from the SAME commit
+via `deploy-update-to-sdcard` (so `/sd/update/manifest.json`
+exists and every file's SHA-256 matches what's on flash). `/sd/`
+otherwise empty under `ota/`.
+
+### Same-content payload short-circuits cleanly
+
+- [ ] Power on. `[updater]` lines now print on USB serial: one
+  `start` and one `noop`, both with the new
+  `2026-05-17T<HH:MM:SS>` (or whatever the RTC says) timestamp.
+- [ ] Buzzer plays the new two-blip 880 Hz noop chime — distinct
+  from the success 3-note rising arpeggio and the failure 2-note
+  descending tone.
+- [ ] Every other LED in the chase row (positions 0, 2, 4) lights
+  during the chime, not all five (success) or just the first one
+  (failure).
+- [ ] Pico does **not** reset — boot continues directly into
+  normal operation, OLED comes up, sensors start logging.
+- [ ] After boot: `/sd/update/` is gone. `/sd/ota/applied/<version>/`
+  contains the payload (manifest + files).
+- [ ] `/sd/logs/updates.log` last two lines: `start ...` then
+  `noop <version> already up to date; files=<N>`.
+
+### Real update (modified source) still applies + resets
+
+- [ ] Touch a comment in `main.py`, rebuild payload via
+  `deploy-update-to-sdcard` (gets new version string), insert SD,
+  reboot. Success jingle plays (3-note rising), Pico resets,
+  `/sd/logs/updates.log` ends with `apply_ok`. Confirms the
+  short-circuit only fires on byte-identical content, not on
+  every reboot.
+
+### Diagnostic stdout fallback visible on USB
+
+- [ ] Pull the SD card mid-boot AFTER the manifest is read but
+  BEFORE finalize (tricky timing — easier: pre-fill
+  `/sd/logs/updates.log` to ~50 KB so rotation can mask a write
+  fault, then trigger any update). USB serial should still show
+  `[updater] ...\tverify_fail\t...` even if the SD log doesn't
+  capture it.
+
+### Notes (post-test)
+
+> Fill in here. Add `[!]` items with failure mode and a short repro.
+
 ## 2026-05-16 · Fan-control refactor (FanOutput + fans dict, pre-PCB)
 
 **Branch:** `main`

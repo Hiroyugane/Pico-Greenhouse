@@ -5,6 +5,53 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-17 · Updater short-circuits when payload already on flash
+
+### issue · same-version SD update failed with only "start" line and failure jingle
+
+Operator boots Pico with payload at `/sd/update/` whose contents
+already match what's on flash (e.g. Pico just flashed via
+`flash-mpremote`, SD payload built from same git commit via
+`deploy-update-to-sdcard`). Symptom: failure jingle plays,
+`/sd/logs/updates.log` contains only the `start` line — no
+`verify_fail` / `apply_fail` entry — and `/sd/update/` is still in
+place. Root cause not fully pinned on host (host repro succeeds);
+hypothesis is a MicroPython-side write-during-overwrite quirk when
+apply rewrites `/lib/updater.mpy` or another in-use module, with
+the subsequent `log()` call also silently failing, masking the
+real error.
+
+### decision · add `Updater.is_already_applied(manifest)` short-circuit before apply
+
+After `verify_payload` passes, `run_pending_update` now hashes
+every manifest file at `_FLASH_ROOT` and compares to the manifest
+entry. If all hashes match, the apply step is skipped entirely,
+`finalize()` still runs (so the trigger is consumed and the
+payload is renamed under `applied/<version>/`), a new `noop`
+log line is written, and a distinct `already_applied` jingle
+plays. **No `machine.reset()`** — the live code is unchanged, so
+boot just continues. Eliminates the failure jingle on
+idempotent payloads and avoids unnecessary flash writes.
+
+### decision · `Updater.log()` mirrors every entry to stdout
+
+The bare `except Exception: pass` in `log()` previously hid the
+real failure when the SD-side append broke (the exact bug the
+operator just hit). `log()` now `print("[updater]", line)`s
+before the file write so the verify_fail / apply_fail message is
+visible over USB serial even when the SD log is unwritable. Print
+is itself try-wrapped — logging stays best-effort.
+
+### decision · new `updater_feedback.noop_pattern` + `UpdateFeedback.already_applied()`
+
+Two-blip 880 Hz pattern (`[(880, 80, 60), (880, 80, 0)]`),
+distinct from success (3-note rising) and failure (2-note
+descending). LED row shows every other LED lit while the chime
+plays so the operator can distinguish "no-op apply" from "real
+apply" at a glance without listening. Wired through
+`build_from_config` like the existing patterns; new validator
+entry in `config.py` rejects an empty `noop_pattern`.
+
 ## 2026-05-16 · Fan-control pre-PCB refactor (FanOutput + fans dict + new policies)
 
 ### decision · land all six pre-hardware build steps in one session as a clean six-commit series

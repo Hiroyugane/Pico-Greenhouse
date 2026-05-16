@@ -378,6 +378,11 @@ DEVICE_CONFIG = {
         "max_retries": 3,  # Per-file write retry count on apply failure
         "retry_delay_ms": 200,  # Delay between write retries (ms)
         "allowed_paths": ["main.py", "config.py", "config.mpy", "lib/"],  # Whitelist; anything outside fails verify
+        # Legacy update_dir locations checked when the canonical update_dir
+        # holds no manifest. Lets payloads dropped at the pre-2026-05-15
+        # path (/sd/update) still apply without re-copying. Empty the list
+        # to disable the fallback once all field cards are migrated.
+        "legacy_update_dirs": ["/sd/update"],
     },
     # Updater Feedback (loading-screen LEDs + buzzer ticks during SD-payload update)
     #
@@ -579,6 +584,7 @@ def validate_config():
             "max_retries",
             "retry_delay_ms",
             "allowed_paths",
+            "legacy_update_dirs",
         ],
         "updater_feedback": [
             "enabled",
@@ -865,6 +871,11 @@ def validate_config():
     for entry in upd_cfg["allowed_paths"]:
         if not isinstance(entry, str) or not entry:
             raise ValueError("updater.allowed_paths entries must be non-empty strings")
+    if not isinstance(upd_cfg["legacy_update_dirs"], list):
+        raise ValueError("updater.legacy_update_dirs must be a list")
+    for entry in upd_cfg["legacy_update_dirs"]:
+        if not isinstance(entry, str) or not entry.startswith("/"):
+            raise ValueError("updater.legacy_update_dirs entries must be absolute path strings")
 
     # Validate updater_feedback configuration
     fb_cfg = DEVICE_CONFIG["updater_feedback"]

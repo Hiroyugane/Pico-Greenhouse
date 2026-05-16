@@ -287,6 +287,41 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["updater"]["allowed_paths"] = original
 
+    def test_updater_legacy_update_dirs_non_list_raises(self):
+        """updater.legacy_update_dirs must be a list."""
+        import config
+
+        original = config.DEVICE_CONFIG["updater"]["legacy_update_dirs"]
+        config.DEVICE_CONFIG["updater"]["legacy_update_dirs"] = "/sd/update"
+        try:
+            with pytest.raises(ValueError, match="updater.legacy_update_dirs"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["updater"]["legacy_update_dirs"] = original
+
+    def test_updater_legacy_update_dirs_relative_entry_raises(self):
+        """updater.legacy_update_dirs entries must be absolute paths."""
+        import config
+
+        original = config.DEVICE_CONFIG["updater"]["legacy_update_dirs"]
+        config.DEVICE_CONFIG["updater"]["legacy_update_dirs"] = ["sd/update"]
+        try:
+            with pytest.raises(ValueError, match="updater.legacy_update_dirs"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["updater"]["legacy_update_dirs"] = original
+
+    def test_updater_legacy_update_dirs_empty_list_allowed(self):
+        """Empty legacy_update_dirs list disables the fallback (no error)."""
+        import config
+
+        original = config.DEVICE_CONFIG["updater"]["legacy_update_dirs"]
+        config.DEVICE_CONFIG["updater"]["legacy_update_dirs"] = []
+        try:
+            assert config.validate_config() is True
+        finally:
+            config.DEVICE_CONFIG["updater"]["legacy_update_dirs"] = original
+
     def test_updater_feedback_non_bool_enabled_raises(self):
         """updater_feedback.enabled must be a bool."""
         import config

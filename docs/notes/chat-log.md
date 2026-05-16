@@ -5,6 +5,52 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-16 · Fan control policies for PCA9685 hardware revision
+
+### decision · case fan = always-on constant duty; heater-distribution fan = follows heater + afterrun
+
+The next hardware revision (IRLZ44N MOSFETs on a PCA9685 PWM driver,
+replacing the current 2-relay fan path) expands the fan roster to
+five: exhaust, growroom_walls, growroom_center, heater_distribution,
+case. Three of these inherit the existing schedule + SHT31
+thermostat behavior of the current `FanController`. The two new
+roles get their own control policies:
+
+- **Case fan** runs at a constant, configurable PWM duty cycle
+  whenever the system is up. No thermostat, no schedule — its job
+  is steady airflow over the electronics. Implemented as a thin
+  `AlwaysOnFanController` that calls `output.set_duty(duty_pct)`
+  once at startup. RP2040 internal temp sensing is intentionally
+  deferred until there's measured evidence the constant-duty
+  approach is wrong.
+- **Heater distribution fan** runs whenever the heater MOSFET is
+  on, plus a configurable post-run / afterrun window so residual
+  heat in the element gets purged into the room instead of
+  back-soaking the device. Implemented as a new
+  `HeaterFollowerFanController` that polls
+  `HeaterController.is_on()` and tracks an afterrun timer.
+  Polling (rather than callbacks on `HeaterController`) keeps the
+  coupling to the existing codebase's polling idiom; up to one
+  poll interval of lag is fine for airflow.
+
+The cross-cutting seam for the whole revision is a `FanOutput`
+abstraction (`RelayFanOutput` today, `Pca9685FanOutput` post-PCB)
+so policy classes don't know whether they're driving a relay or a
+PWM channel. Build steps 1–4 (output abstraction, PCA9685 driver,
+config migration to a role-keyed `fans` dict with per-mode
+validator dispatch) are valuable before the hardware revision;
+steps 5–6 add the two new controller classes; step 7 is the
+one-line per-fan wiring flip when the new PCB lands.
+
+### note · grow-room fan variable-speed mode left open
+
+Whether the three `thermostat_schedule` grow-room fans should grow
+a true variable-speed PWM mode (duty proportional to temperature
+delta above setpoint) — or stay binary on/off through
+`set_duty(0)` / `set_duty(default_duty_pct)` — is not yet decided.
+Worth a clarifying round when the config migration (build step 4)
+lands, since that's when the per-fan duty schema crystallizes.
+
 ## 2026-05-16 · .gitignore refactor
 
 ### decision · trimmed 676-line .gitignore to ~80 lines of project-relevant rules

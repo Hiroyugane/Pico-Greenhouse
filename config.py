@@ -501,6 +501,10 @@ DEVICE_CONFIG = {
             (400, 200, 80),
             (250, 400, 0),
         ],
+        "noop_pattern": [  # Two short blips on "already up to date" no-op
+            (880, 80, 60),  # A5
+            (880, 80, 0),  # A5
+        ],
     },
 }
 
@@ -771,6 +775,7 @@ def validate_config():
             "step_delay_ms",
             "success_pattern",
             "fail_pattern",
+            "noop_pattern",
         ],
         "system": [
             "require_sd_startup",
@@ -1103,7 +1108,7 @@ def validate_config():
         raise ValueError("updater_feedback.tick_duration_ms must be an int >= 0")
     if not isinstance(fb_cfg["step_delay_ms"], int) or fb_cfg["step_delay_ms"] < 0:
         raise ValueError("updater_feedback.step_delay_ms must be an int >= 0")
-    for pattern_key in ("success_pattern", "fail_pattern"):
+    for pattern_key in ("success_pattern", "fail_pattern", "noop_pattern"):
         pat = fb_cfg[pattern_key]
         if not isinstance(pat, list) or not pat:
             raise ValueError(f"updater_feedback.{pattern_key} must be a non-empty list")

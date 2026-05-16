@@ -358,6 +358,19 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["updater_feedback"]["fail_pattern"] = original
 
+    def test_updater_feedback_noop_pattern_present_and_validated(self):
+        """updater_feedback.noop_pattern must exist and be a non-empty list of triples."""
+        import config
+
+        assert "noop_pattern" in config.DEVICE_CONFIG["updater_feedback"]
+        original = config.DEVICE_CONFIG["updater_feedback"]["noop_pattern"]
+        config.DEVICE_CONFIG["updater_feedback"]["noop_pattern"] = []
+        try:
+            with pytest.raises(ValueError, match="updater_feedback.noop_pattern"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["updater_feedback"]["noop_pattern"] = original
+
     def test_display_debug_section_present(self):
         """display.debug must exist with all expected tunables."""
         from config import DEVICE_CONFIG

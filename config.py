@@ -941,7 +941,13 @@ def validate_config():
             raise ValueError(f"Missing config key: display.debug.{key}")
     if not isinstance(debug_cfg["enabled"], bool):
         raise ValueError("display.debug.enabled must be a bool")
-    for s_key in ("confirm_timeout_s", "test_heater_s", "test_growlight_pulse_s", "test_growlight_dim_step_s", "test_relay_pulse_s"):
+    for s_key in (
+        "confirm_timeout_s",
+        "test_heater_s",
+        "test_growlight_pulse_s",
+        "test_growlight_dim_step_s",
+        "test_relay_pulse_s",
+    ):
         v = debug_cfg[s_key]
         if not isinstance(v, (int, float)) or v <= 0:
             raise ValueError(f"display.debug.{s_key} must be > 0")

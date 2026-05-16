@@ -279,15 +279,21 @@ class Updater:
         os.rename(self.update_dir, dst)
 
     def log(self, status, version, detail=""):
+        ts = _timestamp_iso()
+        line = "%s\t%s\t%s\t%s" % (ts, status, version, detail)
+        # Mirror to stdout so a Pico on USB serial still sees verify_fail
+        # / apply_fail entries when the SD-side append silently fails.
+        try:
+            print("[updater]", line)
+        except Exception:
+            pass
         try:
             parent = _dirname(self.log_path)
             if parent:
                 _makedirs(parent)
             self._maybe_rotate_log()
-            ts = _timestamp_iso()
-            line = "%s\t%s\t%s\t%s\n" % (ts, status, version, detail)
             with open(self.log_path, "a") as f:
-                f.write(line)
+                f.write(line + "\n")
         except Exception:
             # Logging is best-effort; never block boot continuation.
             pass

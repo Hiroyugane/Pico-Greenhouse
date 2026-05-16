@@ -5,6 +5,71 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-16 · Fan-control refactor (FanOutput + fans dict, pre-PCB)
+
+**Branch:** `main`
+**Why hardware-only:** Existing `exhaust` and `growroom_walls` fans
+moved from the old `fan_1` / `fan_2` config keys to a role-keyed
+`fans` dict, with the wiring loop in `main.py` rewritten to dispatch
+on `mode` and `output`. Behavior on current PCB is intended to be
+identical — these checks confirm that.
+**Pre-flight:** Current-rev PCB (no PCA9685 yet). `pca9685.enabled
+= False` (default). Both relay fans wired to GP18 / GP19 via
+REL_CON. RTC + SD healthy. CO2 sensor connected if you want to
+verify the override path.
+
+### Boot sanity
+
+- [ ] Boot the device. Console logs `[STARTUP] Configuration
+  validated` (no `co2_logger.override_fan` complaint about
+  `exhaust`).
+- [ ] `system.log` shows `Fan controllers initialized` and a
+  `Step 7a fans` debug line listing `['exhaust', 'growroom_walls']`
+  (the three pca9685 fans skipped with `fan disabled in config`
+  debug lines).
+- [ ] No `Fan ... uses pca9685 but driver unavailable` warning
+  (the three pca9685 fans are `enabled: false`, so the wiring loop
+  skips them before reaching the pca9685 check).
+
+### Relay behavior unchanged
+
+- [ ] Force `exhaust` thermostat by warming the SHT31 above
+  `max_temp` (23.8 °C). REL_CON pin 2 (GP18) clicks ON within
+  `poll_interval_s` (5 s). Log entry: `FanController exhaust
+  THERMOSTAT ON at ...`.
+- [ ] Cool back below the hysteresis threshold (23.3 °C). Same fan
+  clicks back to schedule control inside one poll. Log entry:
+  `THERMOSTAT RESUME SCHEDULE`.
+- [ ] Repeat for `growroom_walls` (REL_CON pin 3 / GP19,
+  max_temp 27.0 °C).
+
+### CO2 override (only if sensor connected)
+
+- [ ] Breathe on / cover the CO2 sensor until ppm > 1000. The
+  `exhaust` fan force-on event lands in `system.log` as
+  `EXTERNAL OVERRIDE ON`. REL_CON pin 2 stays closed for the full
+  override window even when the thermostat is idle.
+- [ ] When ppm drops below 800, log shows `EXTERNAL OVERRIDE
+  RELEASE` and the fan returns to schedule control. Verify on
+  REL_CON pin 2.
+
+### Future PCA9685 turn-on (defer until new PCB)
+
+- [ ] Wire PCA9685 to I2C0 at 0x40 alongside RTC/OLED/MCP4725.
+- [ ] Flip `DEVICE_CONFIG["pca9685"]["enabled"] = True`.
+- [ ] Flip per-fan `enabled` to True for `growroom_center`,
+  `heater_distribution`, `case`.
+- [ ] Flip `exhaust` / `growroom_walls` `output` from `"relay"` to
+  `"pca9685"` and add `pca9685_ch` entries.
+- [ ] Confirm: each fan responds to its assigned channel at
+  configured duty; case fan holds 60 % from boot; heater
+  distribution kicks on the heater MOSFET and stays on for
+  `post_run_s` (60 s default) after the heater drops.
+
+### Notes (post-test)
+
+> Fill in here. Add `[!]` items with failure mode and a short repro.
+
 ## 2026-05-16 · OLED debug actions sub-menu
 
 **Branch:** `main`

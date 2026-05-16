@@ -5,6 +5,103 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-16 · Fan-control pre-PCB refactor (FanOutput + fans dict + new policies)
+
+### decision · land all six pre-hardware build steps in one session as a clean six-commit series
+
+User said "implement everything that can be implemented before making
+physical changes to the hardware". Steps 1-6 from
+[[project_fan_hardware_revision]] all run on the current relay PCB
+because the relay path stays live until the PCA9685 PCB lands. Each
+step shipped as its own logical commit per
+[.claude/rules/ecc/common/commit-granularity.md](../../.claude/rules/ecc/common/commit-granularity.md);
+tests stay green at every commit (901 -> 989). Step 7 (flipping the
+per-fan output from relay to PCA9685) is the only remaining item and
+needs the new PCB.
+
+### decision · FanController composes a FanOutput instead of inheriting RelayController
+
+`FanController` no longer extends `RelayController`. It takes an
+`output: FanOutput` argument and routes `turn_on()`/`turn_off()`
+through `output.on()`/`output.off()`. `RelayFanOutput` wraps a
+`RelayController` (binary), `Pca9685FanOutput` wraps a PCA9685 PWM
+channel (variable). Policy code stays identical; the next-rev PCB
+swap is one-line per-fan wiring in `main.py`. `.pin` exposed as a
+backward-compat property for tests and OLED diagnostics.
+
+### decision · fans dict ships all 5 roles up front, disabled-by-default for the three not yet wired
+
+`DEVICE_CONFIG["fan_1"]` / `["fan_2"]` are gone. The new
+`DEVICE_CONFIG["fans"]` dict keys by role: `exhaust`,
+`growroom_walls`, `growroom_center`, `heater_distribution`, `case`.
+The first two stay relay-backed and enabled today. The three
+PCA9685-backed roles ship with `enabled: false` so the validator
+can keep them honest and `main.py` skips them at construct time.
+When the chip lands: flip `pca9685.enabled` and the three fan
+`enabled` flags; no code change needed. Chosen over "migrate only
+existing 2 fans now" because it makes the eventual hardware
+turn-on a config-only change.
+
+### decision · validator dispatches on mode + output rather than one-size-fits-all required-keys
+
+`_validate_fans()` runs after the bulk required-keys pass. It
+enforces: enabled bool, mode in {thermostat_schedule, always_on,
+heater_follower}, output in {relay, pca9685}, no duplicate relay
+pins, no duplicate PCA9685 channels, plus the per-mode required
+tunables. Keeps the validator strict without coupling to one fan
+shape; matches the `growlight.mode` dispatch pattern already in the
+codebase.
+
+### decision · co2_logger.override_fan switches from "fan_2" -> "exhaust", validated against fans dict keys
+
+The CO2 override target is now a role name resolved by `main.py`
+walking the constructed `fans` list looking for matching `.name`.
+Validator rejects any value not present as a key in the `fans`
+dict, regardless of `enabled`. Exhaust is the natural CO2 vent
+target - keeping the override pointed at the highest-airflow role
+survives future re-tuning of the other fans.
+
+### decision · AlwaysOnFanController re-asserts duty every refresh_interval_s as cheap insurance
+
+Constructor calls `output.set_duty(duty_pct)` once. `start_cycle()`
+sleeps for `refresh_interval_s` (configurable, default 300 s in the
+`case` entry) and re-issues the same `set_duty`. PCA9685 registers
+are persistent across normal operation but I2C bus glitches happen
+in long runs - a re-assert every 5 minutes is cheap and means a
+hung-fan investigation has one fewer suspect. `refresh_interval_s`
+is a per-fan tunable per [.claude/rules/ecc/common/configurability.md](../../.claude/rules/ecc/common/configurability.md).
+
+### decision · HeaterFollowerFanController tracks afterrun in a per-tick countdown
+
+Heater on -> fan on + afterrun budget set to `post_run_s`. Heater
+off with budget > 0 -> fan stays on, budget decrements by
+`poll_interval_s` per tick. Heater on again -> budget resets to
+full. Budget reaches 0 -> fan off. Simple integer countdown rather
+than monotonic-time deadline because MicroPython `time.ticks_ms()`
+semantics differ across host and Pico - counting ticks is
+platform-neutral and matches the existing thermostat pattern in
+`FanController`.
+
+### decision · move HeaterController construction before the fan loop in main.py
+
+`HeaterFollowerFanController` takes the heater instance as a
+constructor arg (no late wiring). The heater was constructed at
+step 7b2 (after the fans loop); moved to step 6b (before the fans
+loop) so the heater_follower dispatch in the loop has the reference
+available. Heater depends only on time_provider/th_logger/logger
+which already exist by step 6, so the move is safe.
+
+### note · per-fan PWM proportional mode deferred
+
+The clarifying question on whether `thermostat_schedule` should
+grow a true variable-speed PWM mode was answered "binary via
+`set_duty(0)/set_duty(default)` for now, revisit later". Implemented
+as binary: thermostat_schedule fans call `output.set_duty(default)`
+when on and `output.set_duty(0)` when off. Adding a proportional
+mode later is additive - new `mode: "thermostat_proportional"`
+value with its own controller class, no breaking changes to the
+existing mode.
+
 ## 2026-05-16 · OLED debug actions sub-menu
 
 ### decision · separate "debug" entry menu, long-press opens sub-menu, short=cycle, long=execute

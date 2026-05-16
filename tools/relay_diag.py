@@ -40,8 +40,9 @@ this board. If you have an 8th relay that needs testing, jumper its
 IN line to a spare GPIO first.
 """
 
-from machine import Pin
 import time
+
+from machine import Pin
 
 # Dwell timings for the diagnostic only. Not in DEVICE_CONFIG because
 # this script is a one-off bench tool, not part of the runtime path.

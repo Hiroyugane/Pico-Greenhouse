@@ -4,11 +4,12 @@
 # Drives the existing status-LED row and passive buzzer during an SD-payload
 # update (see lib/updater.py). The boot-time hook in lib.updater calls:
 #
-#   feedback.step(audio=True)   # once per file in verify + apply
-#   feedback.step(audio=False)  # once per chunk in hash + copy
-#   feedback.success()          # 3-note rising arpeggio on apply_ok
-#   feedback.failure()          # 2-note descending on verify/apply_fail
-#   feedback.finish()           # always-safe cleanup
+#   feedback.step(audio=True)       # once per file in verify + apply
+#   feedback.step(audio=False)      # once per chunk in hash + copy
+#   feedback.success()              # 3-note rising arpeggio on apply_ok
+#   feedback.failure()              # 2-note descending on verify/apply_fail
+#   feedback.already_applied()      # neutral chime when payload == live code
+#   feedback.finish()               # always-safe cleanup
 #
 # Standalone from StatusManager/BuzzerController: the updater runs BEFORE
 # EventLogger init (per main.py:168-181) so the rest of the system is not
@@ -77,6 +78,7 @@ class UpdateFeedback:
         tick_duration_ms: int = 25,
         success_pattern=None,
         fail_pattern=None,
+        noop_pattern=None,
         step_delay_ms: int = 0,
     ):
         """
@@ -92,6 +94,8 @@ class UpdateFeedback:
             success_pattern (list[tuple]): (freq, dur_ms, pause_ms) triples for
                 the success jingle. freq=0 is a rest.
             fail_pattern (list[tuple]): Same shape, played on failure.
+            noop_pattern (list[tuple]): Same shape, played when the payload's
+                hashes already match the live flash (no-op apply).
             step_delay_ms (int): Minimum ms between visible chase steps. 0 means
                 advance on every step() call. Use a positive value to throttle
                 a chunk-rate ticker so the chase remains readable.
@@ -117,6 +121,7 @@ class UpdateFeedback:
         self._tick_ms = int(tick_duration_ms)
         self._success_pattern = list(success_pattern or [])
         self._fail_pattern = list(fail_pattern or [])
+        self._noop_pattern = list(noop_pattern or [])
         self._step_delay_ms = int(step_delay_ms)
 
         self._index = -1
@@ -251,6 +256,23 @@ class UpdateFeedback:
         self._play(self._fail_pattern)
         self.finish()
 
+    def already_applied(self) -> None:
+        """
+        Light every other LED and play the noop jingle, then leave outputs quiet.
+
+        Distinct from success() so the operator can tell at a glance whether
+        the boot actually rewrote flash or just confirmed an idempotent payload.
+        """
+        self._clear_all_leds()
+        for i, pin in enumerate(self._leds):
+            if i % 2 == 0:
+                try:
+                    pin.on()
+                except Exception:
+                    pass
+        self._play(self._noop_pattern)
+        self.finish()
+
     def finish(self) -> None:
         """Silence the buzzer and turn all LEDs off. Always safe to call."""
         self._clear_all_leds()
@@ -301,6 +323,7 @@ def build_from_config(config: dict):
             tick_duration_ms=fb_cfg.get("tick_duration_ms", 25),
             success_pattern=fb_cfg.get("success_pattern", []),
             fail_pattern=fb_cfg.get("fail_pattern", []),
+            noop_pattern=fb_cfg.get("noop_pattern", []),
             step_delay_ms=fb_cfg.get("step_delay_ms", 0),
         )
     except Exception:

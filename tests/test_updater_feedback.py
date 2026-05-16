@@ -22,6 +22,7 @@ def feedback_factory():
             tick_duration_ms=0,  # silence ticks by default in tests
             success_pattern=[(1047, 1, 0), (1319, 1, 0), (1568, 1, 0)],
             fail_pattern=[(400, 1, 0), (250, 1, 0)],
+            noop_pattern=[(880, 1, 0), (880, 1, 0)],
             step_delay_ms=0,
         )
         defaults.update(overrides)
@@ -172,9 +173,20 @@ class TestUpdateFeedbackJingles:
 
     def test_jingles_work_without_buzzer(self, feedback_factory):
         fb = feedback_factory(buzzer_pin=None)
-        # Both must complete silently without raising.
+        # All three must complete silently without raising.
         fb.success()
         fb.failure()
+        fb.already_applied()
+
+    def test_already_applied_plays_noop_pattern(self, feedback_factory):
+        fb = feedback_factory(noop_pattern=[(880, 1, 0), (660, 1, 0)])
+        fb.already_applied()
+        freq_calls = [c.args[0] for c in fb._pwm.freq.call_args_list if c.args]
+        assert 880 in freq_calls
+        assert 660 in freq_calls
+        # All LEDs off after finish().
+        for led in fb._leds:
+            assert led._current_value == 0
 
     def test_jingle_rest_note_zero_freq(self, feedback_factory):
         fb = feedback_factory(success_pattern=[(0, 1, 0), (1568, 1, 0)])
@@ -224,6 +236,7 @@ class TestBuildFromConfig:
                 "step_delay_ms": 0,
                 "success_pattern": [(1047, 1, 0)],
                 "fail_pattern": [(400, 1, 0)],
+                "noop_pattern": [(880, 1, 0)],
             },
         }
         cfg["updater_feedback"].update(overrides)

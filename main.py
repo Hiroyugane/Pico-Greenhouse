@@ -43,6 +43,7 @@ from lib.buffer_manager import BufferManager
 from lib.buzzer import BuzzerController
 from lib.co2_logger import CO2Logger
 from lib.event_logger import EventLogger
+from lib.fan_controllers import AlwaysOnFanController
 from lib.fan_output import Pca9685FanOutput, RelayFanOutput
 from lib.hardware_factory import HardwareFactory
 from lib.heater import HeaterController
@@ -430,8 +431,17 @@ async def main():
                 name=role,
             )
             fans.append(fan)
+        elif mode == "always_on":
+            fan = AlwaysOnFanController(
+                output=fan_output,
+                logger=logger,
+                duty_pct=fan_cfg["duty_pct"],
+                refresh_interval_s=fan_cfg["refresh_interval_s"],
+                name=role,
+            )
+            fans.append(fan)
         else:
-            # always_on and heater_follower controllers land in later steps.
+            # heater_follower controller lands in step 6.
             logger.warning(
                 "MAIN",
                 f"Fan {role!r} mode={mode!r} has no policy class yet; skipping",

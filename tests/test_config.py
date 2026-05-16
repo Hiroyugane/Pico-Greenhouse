@@ -883,6 +883,27 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["fans"]["case"]["duty_pct"] = original
 
+    def test_fans_always_on_missing_refresh_raises(self):
+        import config
+
+        original = config.DEVICE_CONFIG["fans"]["case"].pop("refresh_interval_s")
+        try:
+            with pytest.raises(ValueError, match="refresh_interval_s"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["fans"]["case"]["refresh_interval_s"] = original
+
+    def test_fans_always_on_zero_refresh_raises(self):
+        import config
+
+        original = config.DEVICE_CONFIG["fans"]["case"]["refresh_interval_s"]
+        config.DEVICE_CONFIG["fans"]["case"]["refresh_interval_s"] = 0
+        try:
+            with pytest.raises(ValueError, match="refresh_interval_s"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["fans"]["case"]["refresh_interval_s"] = original
+
     def test_fans_always_on_duty_out_of_range_raises(self):
         import config
 

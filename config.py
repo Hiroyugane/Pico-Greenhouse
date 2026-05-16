@@ -205,6 +205,7 @@ DEVICE_CONFIG = {
             "output": "pca9685",
             "pca9685_ch": 2,
             "duty_pct": 60,
+            "refresh_interval_s": 300,
         },
     },
     # PCA9685 PWM driver (16-channel I2C, shared I2C0 bus).
@@ -574,11 +575,14 @@ def _validate_fans(fans_cfg, pins_cfg):
             if not isinstance(v, (int, float)) or not (0 <= v <= 100):
                 raise ValueError(f"{prefix}.default_duty_pct must be 0-100")
         elif mode == "always_on":
-            if "duty_pct" not in cfg:
-                raise ValueError(f"Missing config key: {prefix}.duty_pct")
+            for k in ("duty_pct", "refresh_interval_s"):
+                if k not in cfg:
+                    raise ValueError(f"Missing config key: {prefix}.{k}")
             v = cfg["duty_pct"]
             if not isinstance(v, (int, float)) or not (0 <= v <= 100):
                 raise ValueError(f"{prefix}.duty_pct must be 0-100")
+            if cfg["refresh_interval_s"] <= 0:
+                raise ValueError(f"{prefix}.refresh_interval_s must be > 0")
         else:  # heater_follower
             for k in ("post_run_s", "duty_pct", "poll_interval_s"):
                 if k not in cfg:

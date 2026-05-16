@@ -5,6 +5,43 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-16 · Updater legacy update_dir fallback
+
+### decision · `updater.legacy_update_dirs` keeps pre-2026-05-15 payloads applicable
+
+After the SD layout refactor moved `/sd/update` → `/sd/ota/pending`
+([c1f4c07](c1f4c07)), a field Pico booted normally instead of
+applying a payload that had been copied to the old `/sd/update`
+location. `lib/updater.py` `has_pending_update()` only checks the
+canonical `update_dir`, so the legacy path was invisible.
+
+Added a new config key `updater.legacy_update_dirs` (default
+`["/sd/update"]`) and a fallback in `run_pending_update()`: if the
+canonical `update_dir` has no `manifest.json`, the boot hook walks
+the legacy list in order and uses the first one that does. The
+matched directory is fed straight into `Updater`, so `finalize()`
+still renames it into the **canonical** `applied_dir`
+(`/sd/ota/applied/<version>/`) — legacy payloads end up in the new
+applied tree on success, so the legacy path self-clears.
+
+The start-log line is annotated `payload detected at legacy <path>`
+when the fallback fires, to make it obvious in `/sd/logs/updates.log`
+which path was consumed. Operators clear the fallback by setting
+`legacy_update_dirs: []` once all field cards are migrated.
+
+### note · canonical wins when both paths have a manifest
+
+If someone builds a payload at the new path AND leaves an old one at
+`/sd/update`, the canonical `update_dir` always wins. The legacy
+directory is only consulted when the canonical has no manifest, so a
+fresh build is never silently overridden by stale legacy data.
+
+### note · `tools/build_update_payload.py` examples now show `G:/ota/pending`
+
+Docstring examples were still showing `--copy-to G:/update`, which is
+how the legacy payload got onto the card in the first place. Updated
+all five example lines so future copies land at the canonical path.
+
 ## 2026-05-15 · Boot SD diagnostics tee'd to /boot.log
 
 ### decision · mirror HardwareFactory pre-EventLogger output to flash file

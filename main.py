@@ -43,12 +43,13 @@ from lib.buffer_manager import BufferManager
 from lib.buzzer import BuzzerController
 from lib.co2_logger import CO2Logger
 from lib.event_logger import EventLogger
+from lib.fan_output import RelayFanOutput
 from lib.hardware_factory import HardwareFactory
 from lib.heater import HeaterController
 from lib.led_button import LEDButtonHandler, ServiceReminder
 from lib.mcp4725 import MCP4725
 from lib.oled_display import OLEDDisplay
-from lib.relay import FanController, GrowlightController
+from lib.relay import FanController, GrowlightController, RelayController
 from lib.sht31 import SHT31
 from lib.soil_logger import SoilLogger
 from lib.status_manager import StatusManager
@@ -390,8 +391,10 @@ async def main():
 
     fans = []
     for pin, config, name in fan_configs:
+        relay = RelayController(pin=pin, invert=True, name=name, logger=logger)
+        fan_output = RelayFanOutput(relay)
         fan = FanController(
-            pin=pin,
+            output=fan_output,
             time_provider=time_provider,
             th_logger=th_logger,
             logger=logger,

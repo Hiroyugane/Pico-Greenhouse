@@ -156,11 +156,12 @@ class TestFanController:
         mock_dht = Mock()
         mock_dht.last_temperature = None
 
-        from lib.relay import FanController
+        from lib.fan_output import RelayFanOutput
+        from lib.relay import FanController, RelayController
 
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
             fan = FanController(
-                pin=16,
+                output=RelayFanOutput(RelayController(16, invert=True)),
                 time_provider=time_provider,
                 th_logger=mock_dht,
                 logger=mock_event_logger,
@@ -182,11 +183,12 @@ class TestFanController:
     def test_on_time_clamping(self, time_provider, mock_th_logger):
         """on_time_s > interval_s gets clamped and warning logged."""
         mock_logger = Mock()
-        from lib.relay import FanController
+        from lib.fan_output import RelayFanOutput
+        from lib.relay import FanController, RelayController
 
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
             fan = FanController(
-                pin=16,
+                output=RelayFanOutput(RelayController(16, invert=True)),
                 time_provider=time_provider,
                 th_logger=mock_th_logger,
                 logger=mock_logger,
@@ -330,11 +332,12 @@ class TestFanController:
     def test_invalid_timing_logged(self, time_provider, mock_th_logger):
         """on_time <= 0 or interval <= 0 logs error."""
         mock_logger = Mock()
-        from lib.relay import FanController
+        from lib.fan_output import RelayFanOutput
+        from lib.relay import FanController, RelayController
 
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
             FanController(
-                pin=16,
+                output=RelayFanOutput(RelayController(16, invert=True)),
                 time_provider=time_provider,
                 th_logger=mock_th_logger,
                 logger=mock_logger,
@@ -681,11 +684,12 @@ class TestFanControllerHysteresisNoAction:
         # temp=24.5 is in the band [24.0, 25.0) → no action
         mock_dht.last_temperature = 24.5
 
-        from lib.relay import FanController
+        from lib.fan_output import RelayFanOutput
+        from lib.relay import FanController, RelayController
 
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
             fan = FanController(
-                pin=16,
+                output=RelayFanOutput(RelayController(16, invert=True)),
                 time_provider=time_provider,
                 th_logger=mock_dht,
                 logger=mock_event_logger,

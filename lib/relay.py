@@ -82,22 +82,22 @@ class RelayController:
         }
 
 
-class FanController(RelayController):
+class FanController:
     """
-    Fan-specific relay controller with dual-mode async cycling.
+    Fan controller with time-of-day schedule + temperature thermostat.
 
-    Composes RelayController and adds:
-    - Time-of-day scheduling (ON for X seconds every Y seconds from midnight)
-    - Temperature-based thermostat override
-    - Async cycle task
+    Drives a FanOutput (RelayFanOutput today, Pca9685FanOutput after
+    the next PCB revision). Composes — does not inherit — so the same
+    policy works for relays or PWM channels without touching the loop.
 
     State variables:
-    - thermostat_active: Whether temperature override is active
-    - thermostat_on_count: Number of thermostat activations
-    - last_schedule_state: Last known schedule state (for logging changes)
+    - thermostat_active: temperature override engaged
+    - thermostat_on_count: thermostat activations since boot
+    - last_schedule_state: cached schedule decision (change-only logging)
+    - external_override: optional callable(()->bool) — CO2Logger ventilation hook
 
     Attributes:
-        pin: GPIO pin number
+        output: FanOutput driving the physical fan
         time_provider: TimeProvider instance for RTC queries
         th_logger: TempHumidityLogger instance for temperature reads
         logger: EventLogger instance for logging
@@ -109,7 +109,7 @@ class FanController(RelayController):
 
     def __init__(
         self,
-        pin: int,
+        output,
         time_provider,
         th_logger,
         logger,
@@ -124,7 +124,7 @@ class FanController(RelayController):
         Initialize FanController with dual-mode scheduling.
 
         Args:
-            pin (int): GPIO pin for relay
+            output: FanOutput instance (RelayFanOutput, Pca9685FanOutput, ...)
             time_provider: TimeProvider instance
             th_logger: TempHumidityLogger instance for temperature
             logger: EventLogger instance
@@ -133,10 +133,10 @@ class FanController(RelayController):
             max_temp (float): Temperature threshold in °C (default: 24.0)
             temp_hysteresis (float): Hysteresis in °C (default: 1.0)
             poll_interval_s (int): Schedule/thermostat check interval (default: 15)
-            name (str, optional): Relay name
+            name (str, optional): Display name (defaults to output.name)
         """
-        super().__init__(pin, invert=True, name=name or f"Fan_{pin}", logger=logger)
-
+        self._output = output
+        self.name = name or getattr(output, "name", "Fan")
         self.time_provider = time_provider
         self.th_logger = th_logger
         self.logger = logger
@@ -173,13 +173,26 @@ class FanController(RelayController):
             "FanController",
             "init config",
             name=self.name,
-            pin=pin,
             interval_s=interval_s,
             on_time_s=on_time_s,
             max_temp=max_temp,
             temp_hysteresis=temp_hysteresis,
             poll_interval_s=poll_interval_s,
         )
+
+    @property
+    def pin(self):
+        """Underlying GPIO pin for relay-backed outputs (None for PWM outputs)."""
+        return getattr(self._output, "pin", None)
+
+    def turn_on(self) -> None:
+        self._output.on()
+
+    def turn_off(self) -> None:
+        self._output.off()
+
+    def is_on(self) -> bool:
+        return self._output.is_on()
 
     async def start_cycle(self) -> None:
         """
@@ -207,7 +220,7 @@ class FanController(RelayController):
                     schedule_on=schedule_should_be_on,
                     temp=current_temp,
                     thermo_active=self.thermostat_active,
-                    is_on=self._state,
+                    is_on=self._output.is_on(),
                     last_sched=self.last_schedule_state,
                 )
 
@@ -326,7 +339,9 @@ class FanController(RelayController):
 
             except asyncio.CancelledError:
                 self.turn_off()
-                self.logger.debug("FanController", "cycle cancelled cleanup", name=self.name, is_on=self._state)
+                self.logger.debug(
+                    "FanController", "cycle cancelled cleanup", name=self.name, is_on=self._output.is_on()
+                )
                 self.logger.warning("FanController", f"{self.name} cycle cancelled")
                 raise
             except Exception as e:
@@ -336,16 +351,15 @@ class FanController(RelayController):
 
     def get_state(self) -> dict:
         """Return state dict including thermostat state."""
-        state = super().get_state()
-        state.update(
-            {
-                "thermostat_active": self.thermostat_active,
-                "thermostat_activations": self.thermostat_on_count,
-                "max_temp": self.max_temp,
-                "current_temp": self.th_logger.last_temperature,
-            }
-        )
-        return state
+        return {
+            "name": self.name,
+            "is_on": self._output.is_on(),
+            "pin": getattr(self._output, "pin", None),
+            "thermostat_active": self.thermostat_active,
+            "thermostat_activations": self.thermostat_on_count,
+            "max_temp": self.max_temp,
+            "current_temp": self.th_logger.last_temperature,
+        }
 
 
 class GrowlightController(RelayController):

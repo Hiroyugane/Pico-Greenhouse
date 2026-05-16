@@ -343,10 +343,13 @@ def relay_controller():
 @pytest.fixture
 def fan_controller(time_provider, mock_th_logger, mock_event_logger):
     """FanController with all dependencies mocked."""
-    from lib.relay import FanController
+    from lib.fan_output import RelayFanOutput
+    from lib.relay import FanController, RelayController
 
+    relay = RelayController(16, invert=True, name="TestFan")
+    output = RelayFanOutput(relay)
     return FanController(
-        pin=16,
+        output=output,
         time_provider=time_provider,
         th_logger=mock_th_logger,
         logger=mock_event_logger,

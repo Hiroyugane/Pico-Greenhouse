@@ -72,3 +72,48 @@ class RelayFanOutput(FanOutput):
 
     def is_on(self) -> bool:
         return self._relay.is_on()
+
+
+class Pca9685FanOutput(FanOutput):
+    """
+    FanOutput driving one PCA9685 PWM channel.
+
+    Used by the next hardware revision: PCA9685 PWM drives an IRLZ44N
+    MOSFET gate which switches the fan supply. set_duty(pct) flows
+    straight through to the PCA9685; on() applies default_duty_pct so
+    schedule-driven binary controllers (FanController) get the
+    configured running speed instead of 100%.
+    """
+
+    def __init__(self, pca9685, channel: int, name: str, default_duty_pct: float = 100):
+        self._pca = pca9685
+        self._channel = channel
+        self._name = name
+        self._default_duty_pct = default_duty_pct
+        self._duty_pct = 0
+        self._pca.set_duty(channel, 0)
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def channel(self) -> int:
+        return self._channel
+
+    def on(self) -> None:
+        self.set_duty(self._default_duty_pct)
+
+    def off(self) -> None:
+        self.set_duty(0)
+
+    def set_duty(self, pct: float) -> None:
+        if pct < 0:
+            pct = 0
+        elif pct > 100:
+            pct = 100
+        self._pca.set_duty(self._channel, pct)
+        self._duty_pct = pct
+
+    def is_on(self) -> bool:
+        return self._duty_pct > 0

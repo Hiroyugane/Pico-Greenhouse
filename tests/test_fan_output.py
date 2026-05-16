@@ -84,3 +84,66 @@ class TestRelayFanOutput:
         output.set_duty(75)
         # Inverted relay: on = LOW = 0
         output._relay.pin.value.assert_called_with(0)
+
+
+class TestPca9685FanOutput:
+    """Pca9685FanOutput adapts a PCA9685 channel to the FanOutput API."""
+
+    @pytest.fixture
+    def mock_pca(self):
+        from unittest.mock import MagicMock
+
+        pca = MagicMock()
+        pca.set_duty = MagicMock()
+        return pca
+
+    @pytest.fixture
+    def output(self, mock_pca):
+        from lib.fan_output import Pca9685FanOutput
+
+        return Pca9685FanOutput(mock_pca, channel=3, name="Exhaust", default_duty_pct=80)
+
+    def test_init_writes_zero_duty(self, mock_pca):
+        from lib.fan_output import Pca9685FanOutput
+
+        Pca9685FanOutput(mock_pca, channel=5, name="X")
+        mock_pca.set_duty.assert_called_with(5, 0)
+
+    def test_initial_state_off(self, output):
+        assert output.is_on() is False
+
+    def test_name_and_channel(self, output):
+        assert output.name == "Exhaust"
+        assert output.channel == 3
+
+    def test_on_uses_default_duty(self, output, mock_pca):
+        output.on()
+        mock_pca.set_duty.assert_called_with(3, 80)
+        assert output.is_on() is True
+
+    def test_off_writes_zero(self, output, mock_pca):
+        output.on()
+        output.off()
+        mock_pca.set_duty.assert_called_with(3, 0)
+        assert output.is_on() is False
+
+    def test_set_duty_passthrough(self, output, mock_pca):
+        output.set_duty(45)
+        mock_pca.set_duty.assert_called_with(3, 45)
+        assert output.is_on() is True
+
+    def test_set_duty_clamps_negative(self, output, mock_pca):
+        output.set_duty(-5)
+        mock_pca.set_duty.assert_called_with(3, 0)
+        assert output.is_on() is False
+
+    def test_set_duty_clamps_over_100(self, output, mock_pca):
+        output.set_duty(150)
+        mock_pca.set_duty.assert_called_with(3, 100)
+        assert output.is_on() is True
+
+    def test_set_duty_zero_marks_off(self, output):
+        output.set_duty(50)
+        assert output.is_on() is True
+        output.set_duty(0)
+        assert output.is_on() is False

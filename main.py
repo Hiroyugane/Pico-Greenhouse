@@ -43,7 +43,7 @@ from lib.buffer_manager import BufferManager
 from lib.buzzer import BuzzerController
 from lib.co2_logger import CO2Logger
 from lib.event_logger import EventLogger
-from lib.fan_controllers import AlwaysOnFanController
+from lib.fan_controllers import AlwaysOnFanController, HeaterFollowerFanController
 from lib.fan_output import Pca9685FanOutput, RelayFanOutput
 from lib.hardware_factory import HardwareFactory
 from lib.heater import HeaterController
@@ -384,6 +384,37 @@ async def main():
 
     wdt.feed()  # Feed after TempHumidityLogger init
 
+    # Step 6b: Create heater controller (active-HIGH MOSFET, day/night
+    # thermostat). Constructed before the fan loop so heater_follower
+    # fans can take a reference to it.
+    light_config = DEVICE_CONFIG.get("growlight", {})
+    heater_config = DEVICE_CONFIG.get("heater", {})
+    dawn_h = light_config.get("dawn_hour", 7)
+    dawn_m = light_config.get("dawn_minute", 0)
+    sunset_h = light_config.get("sunset_hour", 19)
+    sunset_m = light_config.get("sunset_minute", 0)
+    day_offset_min = heater_config.get("day_offset_min", 0)
+    night_offset_min = heater_config.get("night_offset_min", 0)
+    day_total_min = dawn_h * 60 + dawn_m + day_offset_min
+    night_total_min = sunset_h * 60 + sunset_m + night_offset_min
+    heater = HeaterController(
+        pin=DEVICE_CONFIG["pins"]["heater_mosfet"],
+        time_provider=time_provider,
+        th_logger=th_logger,
+        logger=logger,
+        day_min_temp=heater_config.get("day_min_temp", 22.0),
+        night_min_temp=heater_config.get("night_min_temp", 16.0),
+        temp_hysteresis=heater_config.get("temp_hysteresis", 0.5),
+        day_start_hour=(day_total_min // 60) % 24,
+        day_start_minute=day_total_min % 60,
+        night_start_hour=(night_total_min // 60) % 24,
+        night_start_minute=night_total_min % 60,
+        max_stale_reads=heater_config.get("max_stale_reads", 3),
+        poll_interval_s=heater_config.get("poll_interval_s", 30),
+        name="Heater",
+    )
+    logger.info("MAIN", "Heater controller initialized")
+
     # Step 7: Create fan controllers from the role-keyed fans dict.
     # Iterates DEVICE_CONFIG["fans"], skips entries with enabled=False,
     # and dispatches output (relay vs pca9685) and policy (mode) per
@@ -440,11 +471,21 @@ async def main():
                 name=role,
             )
             fans.append(fan)
+        elif mode == "heater_follower":
+            fan = HeaterFollowerFanController(
+                output=fan_output,
+                heater=heater,
+                logger=logger,
+                duty_pct=fan_cfg["duty_pct"],
+                post_run_s=fan_cfg["post_run_s"],
+                poll_interval_s=fan_cfg["poll_interval_s"],
+                name=role,
+            )
+            fans.append(fan)
         else:
-            # heater_follower controller lands in step 6.
             logger.warning(
                 "MAIN",
-                f"Fan {role!r} mode={mode!r} has no policy class yet; skipping",
+                f"Fan {role!r} mode={mode!r} has no policy class; skipping",
             )
 
     logger.info("MAIN", "Fan controllers initialized")
@@ -459,7 +500,6 @@ async def main():
     # Step 7b: Create grow light controller (relay master + MCP4725 dimming).
     # Plant mode runs the MCP4725 dimming path; mushroom mode runs the basic
     # relay-only path. growlight.mode in DEVICE_CONFIG is no longer consulted.
-    light_config = DEVICE_CONFIG.get("growlight", {})
     grow_dac = None
     if is_plant_mode:
         try:
@@ -494,34 +534,6 @@ async def main():
         sunset=f"{light_config.get('sunset_hour', 19):02d}:{light_config.get('sunset_minute', 0):02d}",
         poll_s=light_config.get("poll_interval_s", 60),
     )
-
-    # Step 7b2: Create heater controller (active-HIGH MOSFET, day/night thermostat)
-    heater_config = DEVICE_CONFIG.get("heater", {})
-    dawn_h = light_config.get("dawn_hour", 7)
-    dawn_m = light_config.get("dawn_minute", 0)
-    sunset_h = light_config.get("sunset_hour", 19)
-    sunset_m = light_config.get("sunset_minute", 0)
-    day_offset_min = heater_config.get("day_offset_min", 0)
-    night_offset_min = heater_config.get("night_offset_min", 0)
-    day_total_min = dawn_h * 60 + dawn_m + day_offset_min
-    night_total_min = sunset_h * 60 + sunset_m + night_offset_min
-    heater = HeaterController(
-        pin=DEVICE_CONFIG["pins"]["heater_mosfet"],
-        time_provider=time_provider,
-        th_logger=th_logger,
-        logger=logger,
-        day_min_temp=heater_config.get("day_min_temp", 22.0),
-        night_min_temp=heater_config.get("night_min_temp", 16.0),
-        temp_hysteresis=heater_config.get("temp_hysteresis", 0.5),
-        day_start_hour=(day_total_min // 60) % 24,
-        day_start_minute=day_total_min % 60,
-        night_start_hour=(night_total_min // 60) % 24,
-        night_start_minute=night_total_min % 60,
-        max_stale_reads=heater_config.get("max_stale_reads", 3),
-        poll_interval_s=heater_config.get("poll_interval_s", 30),
-        name="Heater",
-    )
-    logger.info("MAIN", "Heater controller initialized")
 
     # Step 7b3: Create CO2 logger (UART0 SenseAir-style sensor) and wire its
     # override flag into the configured fan so high-ppm triggers ventilation.

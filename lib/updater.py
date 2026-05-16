@@ -402,8 +402,20 @@ def run_pending_update(config, hardware, wdt=None):
     if not sd_ok:
         return
 
+    # Canonical path wins. If it has no manifest, fall through to any
+    # configured legacy paths so payloads dropped at /sd/update from the
+    # pre-2026-05-15 layout still apply without re-copying.
+    update_dir = upd_cfg["update_dir"]
+    used_legacy = None
+    if not _exists(update_dir + "/" + MANIFEST_FILENAME):
+        for legacy in upd_cfg.get("legacy_update_dirs", []):
+            if _exists(legacy + "/" + MANIFEST_FILENAME):
+                update_dir = legacy
+                used_legacy = legacy
+                break
+
     updater = Updater(
-        update_dir=upd_cfg["update_dir"],
+        update_dir=update_dir,
         applied_dir=upd_cfg["applied_dir"],
         log_path=upd_cfg["log_path"],
         allowed_paths=upd_cfg.get("allowed_paths", []),
@@ -436,7 +448,10 @@ def run_pending_update(config, hardware, wdt=None):
         except Exception:
             pass
 
-    updater.log("start", "?", detail="payload detected")
+    if used_legacy is not None:
+        updater.log("start", "?", detail="payload detected at legacy %s" % used_legacy)
+    else:
+        updater.log("start", "?", detail="payload detected")
 
     try:
         manifest = updater.load_manifest()

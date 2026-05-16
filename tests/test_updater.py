@@ -637,6 +637,115 @@ class TestRunPendingUpdateBranches:
         assert reset_called == []
 
 
+class TestRunPendingUpdateLegacyFallback:
+    """Backward-compat fallback for payloads at the pre-2026-05-15 path."""
+
+    class _HW:
+        def is_sd_mounted(self):
+            return True
+
+    def _payload_at(self, base_dir):
+        """Write a small valid payload + manifest under base_dir; return manifest."""
+        files = [
+            ("main.py", b"# legacy main\n"),
+            ("lib/relay.py", b"# legacy relay\n"),
+        ]
+        for rel, content in files:
+            _write(base_dir / rel, content)
+        manifest = {
+            "version": "legacy-v1",
+            "files": [
+                {"path": rel, "sha256": _sha256_bytes(content), "bytes": len(content)}
+                for rel, content in files
+            ],
+        }
+        (base_dir / "manifest.json").write_text(json.dumps(manifest))
+        return manifest, files
+
+    def _cfg(self, sd_root, *, canonical="ota_pending", legacy=("update",)):
+        return {
+            "updater": {
+                "enabled": True,
+                "update_dir": str(sd_root / canonical),
+                "applied_dir": str(sd_root / "applied"),
+                "log_path": str(sd_root / "updates.log"),
+                "max_retries": 3,
+                "retry_delay_ms": 0,
+                "allowed_paths": ["main.py", "config.py", "lib/"],
+                "legacy_update_dirs": [str(sd_root / name) for name in legacy],
+            }
+        }
+
+    def test_legacy_path_applies_when_canonical_empty(self, sd_root, monkeypatch):
+        from lib import updater as upd_mod
+
+        # Canonical /sd/ota/pending exists but is empty; payload is at legacy /sd/update.
+        (sd_root / "ota_pending").mkdir()
+        manifest, files = self._payload_at(sd_root / "update")
+        flash_root = sd_root / "flash"
+        flash_root.mkdir()
+        monkeypatch.setattr(upd_mod, "_FLASH_ROOT", str(flash_root), raising=False)
+        reset_called = []
+        monkeypatch.setattr("machine.reset", lambda: reset_called.append(True), raising=False)
+
+        upd_mod.run_pending_update(self._cfg(sd_root), self._HW())
+
+        for rel, content in files:
+            assert (flash_root / rel).read_bytes() == content
+        assert (sd_root / "applied" / manifest["version"]).exists()
+        assert not (sd_root / "update").exists()  # finalize renamed it
+        assert reset_called == [True]
+        assert "at legacy" in (sd_root / "updates.log").read_text()
+
+    def test_canonical_wins_when_both_have_manifest(self, sd_root, monkeypatch):
+        from lib import updater as upd_mod
+
+        # Both paths have a manifest. Canonical must win — payload at legacy
+        # stays untouched.
+        canonical_manifest, _ = self._payload_at(sd_root / "ota_pending")
+        legacy_manifest, _ = self._payload_at(sd_root / "update")
+        assert canonical_manifest["version"] == legacy_manifest["version"]  # same content
+        flash_root = sd_root / "flash"
+        flash_root.mkdir()
+        monkeypatch.setattr(upd_mod, "_FLASH_ROOT", str(flash_root), raising=False)
+        reset_called = []
+        monkeypatch.setattr("machine.reset", lambda: reset_called.append(True), raising=False)
+
+        upd_mod.run_pending_update(self._cfg(sd_root), self._HW())
+
+        assert reset_called == [True]
+        # Canonical was consumed (renamed into applied/), legacy untouched.
+        assert not (sd_root / "ota_pending").exists()
+        assert (sd_root / "update" / "manifest.json").exists()
+        # Log line should NOT mark this as a legacy detection.
+        assert "at legacy" not in (sd_root / "updates.log").read_text()
+
+    def test_neither_has_manifest_returns_silently(self, sd_root, monkeypatch):
+        from lib import updater as upd_mod
+
+        (sd_root / "ota_pending").mkdir(exist_ok=True)
+        # sd_root fixture already created "update"; leave it empty.
+        reset_called = []
+        monkeypatch.setattr("machine.reset", lambda: reset_called.append(True), raising=False)
+        upd_mod.run_pending_update(self._cfg(sd_root), self._HW())
+        assert reset_called == []
+        # No log file created — has_pending_update is False before log("start").
+        assert not (sd_root / "updates.log").exists()
+
+    def test_empty_legacy_list_disables_fallback(self, sd_root, monkeypatch):
+        from lib import updater as upd_mod
+
+        # Payload only at legacy path, but config disables fallback → no apply.
+        (sd_root / "ota_pending").mkdir()
+        self._payload_at(sd_root / "update")
+        reset_called = []
+        monkeypatch.setattr("machine.reset", lambda: reset_called.append(True), raising=False)
+        upd_mod.run_pending_update(self._cfg(sd_root, legacy=()), self._HW())
+        assert reset_called == []
+        # Payload at legacy stays put.
+        assert (sd_root / "update" / "manifest.json").exists()
+
+
 class _RecordingFeedback:
     """Drop-in UpdateFeedback that records every call for assertion."""
 

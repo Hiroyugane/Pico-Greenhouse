@@ -5,6 +5,51 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-16 · Updater legacy update_dir fallback applies
+
+**Branch:** `main`
+**Why hardware-only:** Update payload detection runs against the
+mounted SD on a real Pico — host pytest covers the path-selection
+logic but not the actual boot-time mount + apply + reset sequence on
+a card with the legacy `/sd/update/` layout.
+**Pre-flight:** SD card has a valid payload (manifest.json + files)
+at `/sd/update/` from a previous `tools/build_update_payload.py
+--copy-to G:/update` run. `/sd/ota/pending/` is empty or absent.
+Pico flashed with this commit's `lib/updater.py` and `config.py`.
+
+### Legacy payload at /sd/update is detected and applied
+
+- [ ] Insert SD with legacy `/sd/update/manifest.json` present;
+  power-cycle the Pico.
+- [ ] LED loading-chase + buzzer ticks run (updater_feedback) during
+  verify/apply — confirms the payload was detected, not skipped.
+- [ ] Pico resets and the success jingle plays.
+- [ ] After reboot, pull the card: `/sd/update/` is gone,
+  `/sd/ota/applied/<version>/` contains the manifest + files.
+- [ ] `/sd/logs/updates.log` last line for that version contains
+  `payload detected at legacy /sd/update` followed by `apply_ok`.
+
+### Canonical wins over legacy when both are present
+
+- [ ] Build a second payload, copy it to `G:/ota/pending/`. Leave the
+  old legacy directory in place with its own manifest (different
+  version string).
+- [ ] Power-cycle. The canonical payload should be the one that
+  applies; `/sd/logs/updates.log` should NOT say `at legacy`.
+- [ ] `/sd/update/` still present after reboot; `/sd/ota/pending/`
+  consumed into `/sd/ota/applied/<canonical-version>/`.
+
+### Empty list disables fallback
+
+- [ ] Edit `config.py` on the Pico: set
+  `updater.legacy_update_dirs = []`. Reboot.
+- [ ] With payload only at `/sd/update/`, Pico boots normally (no
+  jingle, no reset). `/sd/update/` untouched.
+
+### Notes (post-test)
+
+> Fill in here. Add `[!]` items with failure mode and a short repro.
+
 ## 2026-05-15 · /boot.log captures SD diagnostics without USB serial
 
 **Branch:** `main`

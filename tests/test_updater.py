@@ -137,6 +137,51 @@ class TestUpdaterUnit:
         errors = u.verify_payload(manifest)
         assert errors  # any non-empty list is acceptable
 
+    def test_is_already_applied_true_when_flash_matches(
+        self, updater_factory, good_payload, sd_root, monkeypatch
+    ):
+        manifest, files = good_payload
+        flash_root = sd_root / "flash"
+        flash_root.mkdir()
+        for rel, content in files:
+            target = flash_root / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+        monkeypatch.setattr("lib.updater._FLASH_ROOT", str(flash_root), raising=False)
+        u = updater_factory()
+        assert u.is_already_applied(manifest) is True
+
+    def test_is_already_applied_false_when_one_file_differs(
+        self, updater_factory, good_payload, sd_root, monkeypatch
+    ):
+        manifest, files = good_payload
+        flash_root = sd_root / "flash"
+        flash_root.mkdir()
+        for rel, content in files:
+            target = flash_root / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+        # Tamper with one file so its hash diverges from the manifest entry.
+        (flash_root / files[0][0]).write_bytes(b"different bytes")
+        monkeypatch.setattr("lib.updater._FLASH_ROOT", str(flash_root), raising=False)
+        u = updater_factory()
+        assert u.is_already_applied(manifest) is False
+
+    def test_is_already_applied_false_when_flash_missing(
+        self, updater_factory, good_payload, sd_root, monkeypatch
+    ):
+        manifest, _ = good_payload
+        flash_root = sd_root / "flash"
+        flash_root.mkdir()
+        # Flash is empty — every manifest file is missing.
+        monkeypatch.setattr("lib.updater._FLASH_ROOT", str(flash_root), raising=False)
+        u = updater_factory()
+        assert u.is_already_applied(manifest) is False
+
+    def test_is_already_applied_false_for_empty_manifest(self, updater_factory):
+        u = updater_factory()
+        assert u.is_already_applied({"version": "v1", "files": []}) is False
+
     def test_apply_copies_files_to_flash_root(self, updater_factory, good_payload, sd_root, monkeypatch):
         # Point 'flash root' at a tmp dir by monkeypatching the updater's
         # write target. Exact mechanism TBD by implementation — this test
@@ -753,6 +798,7 @@ class _RecordingFeedback:
         self.steps = []  # list of audio flags
         self.success_calls = 0
         self.failure_calls = 0
+        self.already_applied_calls = 0
         self.finish_calls = 0
 
     def step(self, audio=False):
@@ -763,6 +809,9 @@ class _RecordingFeedback:
 
     def failure(self):
         self.failure_calls += 1
+
+    def already_applied(self):
+        self.already_applied_calls += 1
 
     def finish(self):
         self.finish_calls += 1
@@ -848,6 +897,7 @@ class TestRunPendingUpdateFeedback:
                 "step_delay_ms": 0,
                 "success_pattern": [(1047, 1, 0), (1319, 1, 0), (1568, 1, 0)],
                 "fail_pattern": [(400, 1, 0), (250, 1, 0)],
+                "noop_pattern": [(880, 1, 0), (880, 1, 0)],
             },
         }
 
@@ -966,6 +1016,47 @@ class TestRunPendingUpdateFeedback:
         upd_mod.run_pending_update(self._cfg(sd_root), self._HW())
         # main.py replacement landed on flash.
         assert (flash_root / "main.py").exists()
+
+    def test_noop_jingle_when_flash_already_matches(self, sd_root, good_payload, monkeypatch):
+        """Payload byte-identical to live flash short-circuits the apply path."""
+        from lib import updater as upd_mod
+        from lib import updater_feedback as ufb_mod
+
+        manifest, files = good_payload
+        flash_root = sd_root / "flash"
+        flash_root.mkdir()
+        monkeypatch.setattr(upd_mod, "_FLASH_ROOT", str(flash_root), raising=False)
+
+        # Seed flash with the same files the payload contains.
+        for rel, content in files:
+            target = flash_root / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+
+        # Apply must NOT run; sentinel the _copy_file path so the test fails
+        # loudly if the short-circuit regresses.
+        def boom_copy(self, src, dst):
+            raise AssertionError("apply was not short-circuited")
+
+        monkeypatch.setattr(upd_mod.Updater, "_copy_file", boom_copy)
+
+        fb = _RecordingFeedback()
+        monkeypatch.setattr(ufb_mod, "build_from_config", lambda cfg: fb)
+
+        reset_called = []
+        monkeypatch.setattr("machine.reset", lambda: reset_called.append(True), raising=False)
+        upd_mod.run_pending_update(self._cfg(sd_root), self._HW())
+
+        # Noop path: no reset, no success/failure jingle — just the already_applied chime.
+        assert reset_called == []
+        assert fb.already_applied_calls == 1
+        assert fb.success_calls == 0
+        assert fb.failure_calls == 0
+        # Trigger consumed: /sd/update is renamed under applied/<version>/.
+        assert not (sd_root / "update").exists()
+        assert (sd_root / "applied" / manifest["version"]).exists()
+        # Log line uses the new "noop" status.
+        assert "noop" in (sd_root / "updates.log").read_text()
 
     def test_success_jingle_failure_does_not_block_reset(self, sd_root, good_payload, monkeypatch):
         from lib import updater as upd_mod

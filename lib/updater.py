@@ -239,6 +239,47 @@ class Updater:
                 errors.append("sha256 mismatch for %s" % rel)
         return errors
 
+    def is_already_applied(self, manifest):
+        """Return True if every manifest file already exists on flash with matching size + sha256.
+
+        Used as a pre-apply short-circuit so the operator doesn't burn flash
+        writes (or hit MicroPython-side write quirks) re-applying a payload
+        that's byte-for-byte identical to the live code. The check uses the
+        same SHA-256 path as verify_payload, just against ``_FLASH_ROOT``
+        instead of ``update_dir``.
+        """
+        files = manifest.get("files", [])
+        if not files:
+            return False
+        flash_root = _FLASH_ROOT
+        flash_root_clean = flash_root.rstrip("/").rstrip("\\")
+        for entry in files:
+            try:
+                rel = entry["path"]
+                expected_hash = entry["sha256"]
+                expected_size = int(entry["bytes"])
+            except (KeyError, TypeError, ValueError):
+                return False
+            if flash_root_clean:
+                abs_path = flash_root_clean + "/" + rel
+            else:
+                abs_path = "/" + rel
+            if not _exists(abs_path):
+                return False
+            try:
+                actual_size = os.stat(abs_path)[6]
+            except OSError:
+                return False
+            if actual_size != expected_size:
+                return False
+            try:
+                actual_hash = self._hash_file(abs_path)
+            except OSError:
+                return False
+            if actual_hash.lower() != expected_hash.lower():
+                return False
+        return True
+
     def apply(self, manifest):
         flash_root = _FLASH_ROOT
         flash_root_clean = flash_root.rstrip("/").rstrip("\\")
@@ -475,6 +516,25 @@ def run_pending_update(config, hardware, wdt=None):
             detail = detail[:237] + "..."
         updater.log("verify_fail", version, detail=detail)
         _signal_failure()
+        return
+
+    # Short-circuit: payload content already on flash. Skip the apply (no
+    # flash writes), still finalize so the trigger is consumed, play the
+    # noop jingle, and let the boot continue without a reset.
+    if updater.is_already_applied(manifest):
+        try:
+            updater.finalize(manifest)
+        except Exception as e:
+            updater.log("noop", version, detail="finalize warn: %s" % str(e)[:200])
+        else:
+            updater.log(
+                "noop", version, detail="already up to date; files=%d" % len(manifest.get("files", []))
+            )
+        if feedback is not None:
+            try:
+                feedback.already_applied()
+            except Exception:
+                pass
         return
 
     try:

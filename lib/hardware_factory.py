@@ -61,6 +61,7 @@ class HardwareFactory:
         self.config = config or DEVICE_CONFIG
         self.i2c1 = None
         self.rtc = None
+        self.pca9685 = None
         self.spi = None
         self.sd = None
         self.sd_mounted = False
@@ -123,6 +124,10 @@ class HardwareFactory:
 
         # Step 4: Initialize GPIO pins
         self._init_pins()
+
+        # Step 5: Initialize PCA9685 PWM driver (non-fatal; absent on
+        # current PCB, enabled in config once the next revision lands).
+        self._init_pca9685()
 
         print(f"[HardwareFactory] Setup complete. Errors: {len(self.errors)}")
         return True
@@ -398,9 +403,48 @@ class HardwareFactory:
             self.errors.append(f"Pin initialization failed: {e}")
             return False
 
+    def _init_pca9685(self) -> bool:
+        """
+        Initialize the PCA9685 PWM driver on the shared I2C0 bus.
+
+        Skipped entirely when pca9685.enabled is False (no chip on current
+        PCB). On enabled boards a failure is non-fatal: the error is
+        recorded and self.pca9685 stays None so fan wiring can fall back
+        to the relay outputs.
+        """
+        pca_cfg = self.config.get("pca9685", {})
+        if not pca_cfg.get("enabled", False):
+            self._debug("PCA9685 disabled in config; skipping init")
+            return False
+        if self.i2c1 is None:
+            self.errors.append("PCA9685 init skipped: I2C bus not initialized")
+            return False
+        try:
+            from lib.pca9685 import PCA9685
+
+            self.pca9685 = PCA9685(
+                i2c=self.i2c1,
+                address=pca_cfg.get("i2c_address", 0x40),
+                freq_hz=pca_cfg.get("freq_hz", 1000),
+            )
+            self._debug(
+                "PCA9685 initialized",
+                address=hex(pca_cfg.get("i2c_address", 0x40)),
+                freq_hz=pca_cfg.get("freq_hz", 1000),
+            )
+            return True
+        except Exception as e:
+            self.errors.append(f"PCA9685 init failed: {e}")
+            self.pca9685 = None
+            return False
+
     def get_rtc(self):
         """Return RTC instance (or None if init failed)."""
         return self.rtc
+
+    def get_pca9685(self):
+        """Return PCA9685 driver instance (or None if disabled / init failed)."""
+        return self.pca9685
 
     def get_i2c(self):
         """Return shared I2C1 bus instance (or None if init failed)."""

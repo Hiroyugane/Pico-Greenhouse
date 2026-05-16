@@ -144,6 +144,22 @@ DEVICE_CONFIG = {
         "temp_hysteresis": 0.5,  # Hysteresis for thermostat (°C)
         "poll_interval_s": 5,  # Schedule/thermostat check interval (seconds)
     },
+    # PCA9685 PWM driver (16-channel I2C, shared I2C0 bus).
+    #
+    # Used by the next hardware revision to drive IRLZ44N MOSFET gates for
+    # variable-speed fan control (see lib/pca9685.py, lib/fan_output.py).
+    # Disabled by default: until the new PCB lands the chip is absent and
+    # HardwareFactory leaves get_pca9685() == None so fans fall back to
+    # the existing relay path.
+    #
+    # i2c_address: A5..A0 strap pins on the PCA9685 select 0x40..0x7F;
+    # 0x40 is the default with all straps tied LOW.
+    # freq_hz: shared across all 16 channels per datasheet, 24..1526 Hz.
+    "pca9685": {
+        "enabled": False,
+        "i2c_address": 0x40,
+        "freq_hz": 1000,
+    },
     # Heater Configuration (GP3 → R6 → IRLZ44N gate, ACTIVE HIGH)
     #
     # Day/night setpoints inherit the growlight schedule plus an optional
@@ -492,6 +508,11 @@ def validate_config():
             "temp_hysteresis",
             "poll_interval_s",
         ],
+        "pca9685": [
+            "enabled",
+            "i2c_address",
+            "freq_hz",
+        ],
         "heater": [
             "day_min_temp",
             "night_min_temp",
@@ -714,6 +735,14 @@ def validate_config():
 
     if DEVICE_CONFIG["growlight"]["poll_interval_s"] <= 0:
         raise ValueError("growlight.poll_interval_s must be > 0")
+
+    pca_cfg = DEVICE_CONFIG["pca9685"]
+    if not isinstance(pca_cfg["enabled"], bool):
+        raise ValueError("pca9685.enabled must be a bool")
+    if not isinstance(pca_cfg["i2c_address"], int) or not (0x08 <= pca_cfg["i2c_address"] <= 0x77):
+        raise ValueError("pca9685.i2c_address must be a 7-bit I2C address (0x08-0x77)")
+    if not isinstance(pca_cfg["freq_hz"], int) or not (24 <= pca_cfg["freq_hz"] <= 1526):
+        raise ValueError("pca9685.freq_hz must be an int 24-1526 (PCA9685 datasheet range)")
 
     heater_cfg = DEVICE_CONFIG["heater"]
     if heater_cfg["temp_hysteresis"] < 0:

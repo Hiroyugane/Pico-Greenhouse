@@ -529,3 +529,64 @@ class TestHardwareFactoryI2C:
         # Should have been called with sda_pin, scl_pin, port (fallback path)
         call_kwargs = mock_rtc_cls.call_args
         assert "sda_pin" in str(call_kwargs) or "scl_pin" in str(call_kwargs)
+
+
+class TestHardwareFactoryPCA9685:
+    """Tests for PCA9685 PWM driver initialization."""
+
+    def test_init_pca9685_disabled_skips_and_returns_false(self, monkeypatch):
+        """When pca9685.enabled=False, init is skipped and pca9685 stays None."""
+        from lib.hardware_factory import HardwareFactory
+
+        factory = HardwareFactory()
+        factory.i2c1 = Mock()
+        monkeypatch.setitem(factory.config, "pca9685", {"enabled": False, "i2c_address": 0x40, "freq_hz": 1000})
+        assert factory._init_pca9685() is False
+        assert factory.pca9685 is None
+        assert factory.errors == []
+
+    def test_init_pca9685_no_i2c_records_error(self, monkeypatch):
+        """Enabled but i2c1 missing: error logged, pca9685 stays None."""
+        from lib.hardware_factory import HardwareFactory
+
+        factory = HardwareFactory()
+        factory.i2c1 = None
+        monkeypatch.setitem(factory.config, "pca9685", {"enabled": True, "i2c_address": 0x40, "freq_hz": 1000})
+        assert factory._init_pca9685() is False
+        assert factory.pca9685 is None
+        assert any("I2C bus not initialized" in e for e in factory.errors)
+
+    def test_init_pca9685_success(self, monkeypatch):
+        """Enabled + I2C present: PCA9685 instance is stored and returned."""
+        from lib.hardware_factory import HardwareFactory
+
+        factory = HardwareFactory()
+        factory.i2c1 = Mock()
+        monkeypatch.setitem(factory.config, "pca9685", {"enabled": True, "i2c_address": 0x40, "freq_hz": 1000})
+        mock_pca_instance = Mock()
+        with patch("lib.pca9685.PCA9685", return_value=mock_pca_instance):
+            ok = factory._init_pca9685()
+        assert ok is True
+        assert factory.pca9685 is mock_pca_instance
+        assert factory.get_pca9685() is mock_pca_instance
+
+    def test_init_pca9685_failure_records_error(self, monkeypatch):
+        """Driver constructor raising: error recorded, pca9685 stays None."""
+        from lib.hardware_factory import HardwareFactory
+
+        factory = HardwareFactory()
+        factory.i2c1 = Mock()
+        monkeypatch.setitem(factory.config, "pca9685", {"enabled": True, "i2c_address": 0x40, "freq_hz": 1000})
+        with patch("lib.pca9685.PCA9685", side_effect=OSError("no chip")):
+            ok = factory._init_pca9685()
+        assert ok is False
+        assert factory.pca9685 is None
+        assert any("PCA9685 init failed" in e for e in factory.errors)
+
+    def test_get_pca9685_default_none(self):
+        """Fresh factory before setup: get_pca9685() returns None."""
+        from lib.hardware_factory import HardwareFactory
+
+        factory = HardwareFactory()
+        assert factory.get_pca9685() is None
+

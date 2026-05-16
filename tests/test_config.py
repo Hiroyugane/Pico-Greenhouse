@@ -23,6 +23,7 @@ class TestConfigStructure:
             "fan_2",
             "growlight",
             "heater",
+            "pca9685",
             "co2_logger",
             "soil_logger",
             "Service_reminder",
@@ -668,6 +669,71 @@ class TestValidateConfig:
                 config.validate_config()
         finally:
             config.DEVICE_CONFIG["heater"]["day_min_temp"] = original
+
+    def test_pca9685_enabled_default_false(self):
+        """pca9685 ships disabled (no chip on current PCB)."""
+        from config import DEVICE_CONFIG
+
+        assert DEVICE_CONFIG["pca9685"]["enabled"] is False
+
+    def test_pca9685_enabled_non_bool_raises(self):
+        """pca9685.enabled must be a bool."""
+        import config
+
+        original = config.DEVICE_CONFIG["pca9685"]["enabled"]
+        config.DEVICE_CONFIG["pca9685"]["enabled"] = "yes"
+        try:
+            with pytest.raises(ValueError, match="pca9685.enabled"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["pca9685"]["enabled"] = original
+
+    def test_pca9685_address_out_of_range_raises(self):
+        """pca9685.i2c_address outside 7-bit range raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["pca9685"]["i2c_address"]
+        config.DEVICE_CONFIG["pca9685"]["i2c_address"] = 0x80
+        try:
+            with pytest.raises(ValueError, match="pca9685.i2c_address"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["pca9685"]["i2c_address"] = original
+
+    def test_pca9685_freq_too_low_raises(self):
+        """pca9685.freq_hz below 24 Hz raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["pca9685"]["freq_hz"]
+        config.DEVICE_CONFIG["pca9685"]["freq_hz"] = 10
+        try:
+            with pytest.raises(ValueError, match="pca9685.freq_hz"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["pca9685"]["freq_hz"] = original
+
+    def test_pca9685_freq_too_high_raises(self):
+        """pca9685.freq_hz above 1526 Hz raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["pca9685"]["freq_hz"]
+        config.DEVICE_CONFIG["pca9685"]["freq_hz"] = 2000
+        try:
+            with pytest.raises(ValueError, match="pca9685.freq_hz"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["pca9685"]["freq_hz"] = original
+
+    def test_pca9685_missing_key_raises(self):
+        """Missing pca9685.enabled raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["pca9685"].pop("enabled")
+        try:
+            with pytest.raises(ValueError, match="Missing config key"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["pca9685"]["enabled"] = original
 
     def test_co2_logger_zero_interval_raises(self):
         """co2_logger.interval_s = 0 raises ValueError."""

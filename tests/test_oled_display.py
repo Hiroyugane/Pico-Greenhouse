@@ -2,6 +2,7 @@
 # Dennis Hiro, 2026-03-02
 
 import asyncio
+import time
 from unittest.mock import Mock, patch
 
 import pytest
@@ -94,6 +95,7 @@ class TestOLEDDisplayMenuCycling:
             "relays",
             "co2",
             "soil",
+            "debug",
         }
         assert set(MENUS) == expected
 
@@ -511,6 +513,314 @@ class TestOLEDDisplayAdditionalCoverage:
         oled_display._co2_logger = cl
         oled_display._render_co2()
         oled_display._row.assert_any_call("Vent: ON", 1)
+
+
+# ---------------------------------------------------------------------------
+# TestOLEDDebugMenu — debug actions sub-menu
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mock_heater():
+    h = Mock()
+    h.turn_on = Mock()
+    h.turn_off = Mock()
+    return h
+
+
+@pytest.fixture
+def debug_oled(
+    mock_i2c,
+    time_provider,
+    th_logger,
+    buffer_manager,
+    mock_status_manager,
+    mock_reminder,
+    fan_controller,
+    growlight_controller,
+    mock_event_logger,
+    mock_heater,
+):
+    """OLEDDisplay with heater + feedback callback wired, for debug-menu tests."""
+    blink_calls = []
+
+    def _blink():
+        blink_calls.append(1)
+
+    display = OLEDDisplay(
+        i2c=mock_i2c,
+        time_provider=time_provider,
+        th_logger=th_logger,
+        buffer_manager=buffer_manager,
+        status_manager=mock_status_manager,
+        reminder=mock_reminder,
+        fans=[fan_controller],
+        growlight=growlight_controller,
+        sd_remount_cb=Mock(),
+        start_time_ms=0,
+        logger=mock_event_logger,
+        heater=mock_heater,
+        feedback_blink_cb=_blink,
+        event_log_path=None,
+        debug_test_heater_s=0.01,
+        debug_test_growlight_pulse_s=0.01,
+        debug_test_growlight_dim_step_s=0.01,
+        debug_test_relay_pulse_s=0.01,
+        debug_status_show_ms=3000,
+        startup_banner_s=0,
+        vram_clear_delay_s=0,
+        invert_delay_s=0,
+    )
+    display._blink_calls = blink_calls
+    return display
+
+
+class TestOLEDDebugMenu:
+    def test_debug_menu_exists_in_menus(self):
+        assert "debug" in MENUS
+
+    def test_long_press_on_debug_menu_enters_sub_menu(self, debug_oled):
+        debug_oled.current_menu = MENUS.index("debug")
+        debug_oled.long_press_action()
+        assert debug_oled._debug_mode is True
+        assert debug_oled._debug_action_idx == 0
+
+    def test_short_press_inside_debug_cycles_actions(self, debug_oled):
+        debug_oled.current_menu = MENUS.index("debug")
+        debug_oled.long_press_action()  # enter
+        starting_menu = debug_oled.current_menu
+        debug_oled.next_menu()
+        assert debug_oled.current_menu == starting_menu  # top-level menu unchanged
+        assert debug_oled._debug_action_idx == 1
+
+    def test_short_press_inside_debug_wraps(self, debug_oled):
+        debug_oled.current_menu = MENUS.index("debug")
+        debug_oled.long_press_action()
+        total = len(debug_oled._debug_actions)
+        for _ in range(total):
+            debug_oled.next_menu()
+        assert debug_oled._debug_action_idx == 0
+
+    def test_wipe_logs_requires_confirm(self, debug_oled):
+        debug_oled.current_menu = MENUS.index("debug")
+        debug_oled.long_press_action()  # enter
+        debug_oled._debug_action_idx = next(
+            i for i, a in enumerate(debug_oled._debug_actions) if a["id"] == "wipe_logs"
+        )
+        debug_oled._buffer_manager._buffers = {"x": ["a"]}
+        debug_oled.long_press_action()  # first long-press: arms confirm
+        assert debug_oled._debug_confirm_pending is True
+        # Buffer must NOT have been wiped yet.
+        assert debug_oled._buffer_manager._buffers == {"x": ["a"]}
+
+    def test_short_press_cancels_pending_confirm(self, debug_oled):
+        debug_oled.current_menu = MENUS.index("debug")
+        debug_oled.long_press_action()
+        debug_oled._debug_action_idx = next(
+            i for i, a in enumerate(debug_oled._debug_actions) if a["id"] == "wipe_logs"
+        )
+        debug_oled.long_press_action()  # arm confirm
+        debug_oled.next_menu()
+        assert debug_oled._debug_confirm_pending is False
+
+    async def test_wipe_logs_second_long_press_executes(self, debug_oled):
+        debug_oled.current_menu = MENUS.index("debug")
+        debug_oled.long_press_action()
+        idx = next(i for i, a in enumerate(debug_oled._debug_actions) if a["id"] == "wipe_logs")
+        debug_oled._debug_action_idx = idx
+        debug_oled._buffer_manager._buffers = {"x": ["a"]}
+        debug_oled.long_press_action()  # arm
+        debug_oled.long_press_action()  # execute
+        await asyncio.sleep(0.05)
+        assert debug_oled._buffer_manager._buffers == {}
+        assert debug_oled._debug_running is False
+
+    async def test_cycle_relays_pulses_each_fan_and_growlight(self, debug_oled):
+        debug_oled.current_menu = MENUS.index("debug")
+        debug_oled.long_press_action()
+        debug_oled._debug_action_idx = next(
+            i for i, a in enumerate(debug_oled._debug_actions) if a["id"] == "cycle_relays"
+        )
+        debug_oled._fans[0].turn_on = Mock()
+        debug_oled._fans[0].turn_off = Mock()
+        debug_oled._growlight.turn_on = Mock()
+        debug_oled._growlight.turn_off = Mock()
+        debug_oled.long_press_action()  # execute (non-destructive)
+        await asyncio.sleep(0.1)
+        debug_oled._fans[0].turn_on.assert_called_once()
+        debug_oled._fans[0].turn_off.assert_called_once()
+        debug_oled._growlight.turn_on.assert_called_once()
+        debug_oled._growlight.turn_off.assert_called_once()
+
+    async def test_test_heater_pulses_heater(self, debug_oled, mock_heater):
+        debug_oled.current_menu = MENUS.index("debug")
+        debug_oled.long_press_action()
+        debug_oled._debug_action_idx = next(
+            i for i, a in enumerate(debug_oled._debug_actions) if a["id"] == "test_heater"
+        )
+        debug_oled.long_press_action()
+        await asyncio.sleep(0.1)
+        mock_heater.turn_on.assert_called_once()
+        mock_heater.turn_off.assert_called_once()
+
+    async def test_test_growlight_pulses_growlight(self, debug_oled):
+        debug_oled.current_menu = MENUS.index("debug")
+        debug_oled.long_press_action()
+        debug_oled._debug_action_idx = next(
+            i for i, a in enumerate(debug_oled._debug_actions) if a["id"] == "test_growlight"
+        )
+        debug_oled._growlight.turn_on = Mock()
+        debug_oled._growlight.turn_off = Mock()
+        debug_oled.long_press_action()
+        await asyncio.sleep(0.1)
+        debug_oled._growlight.turn_on.assert_called_once()
+        debug_oled._growlight.turn_off.assert_called_once()
+
+    async def test_dim_sweep_only_listed_when_dac_present(
+        self,
+        mock_i2c,
+        time_provider,
+        th_logger,
+        buffer_manager,
+        mock_status_manager,
+        mock_reminder,
+        fan_controller,
+        growlight_controller,
+        mock_event_logger,
+        mock_heater,
+    ):
+        # growlight_controller fixture has dac=None → dim sweep should be absent.
+        display = OLEDDisplay(
+            i2c=mock_i2c,
+            time_provider=time_provider,
+            th_logger=th_logger,
+            buffer_manager=buffer_manager,
+            status_manager=mock_status_manager,
+            reminder=mock_reminder,
+            fans=[fan_controller],
+            growlight=growlight_controller,
+            heater=mock_heater,
+            logger=mock_event_logger,
+            startup_banner_s=0,
+            vram_clear_delay_s=0,
+            invert_delay_s=0,
+        )
+        action_ids = [a["id"] for a in display._debug_actions]
+        assert "test_growlight_dim" not in action_ids
+
+    async def test_dim_sweep_runs_when_dac_present(self, debug_oled):
+        # Inject a fake DAC and use set_level to capture levels.
+        called_levels = []
+        debug_oled._growlight.dac = Mock()
+        debug_oled._growlight.set_level = lambda lvl: called_levels.append(lvl)
+        debug_oled._debug_actions = debug_oled._build_debug_actions()
+        debug_oled.current_menu = MENUS.index("debug")
+        debug_oled.long_press_action()
+        debug_oled._debug_action_idx = next(
+            i for i, a in enumerate(debug_oled._debug_actions) if a["id"] == "test_growlight_dim"
+        )
+        debug_oled.long_press_action()
+        await asyncio.sleep(0.1)
+        # Sweep levels plus the final off call.
+        assert 0 in called_levels and 100 in called_levels
+
+    async def test_feedback_blink_called_after_success(self, debug_oled):
+        debug_oled.current_menu = MENUS.index("debug")
+        debug_oled.long_press_action()
+        debug_oled._debug_action_idx = next(
+            i for i, a in enumerate(debug_oled._debug_actions) if a["id"] == "cycle_relays"
+        )
+        debug_oled.long_press_action()
+        await asyncio.sleep(0.1)
+        assert len(debug_oled._blink_calls) == 1
+
+    async def test_action_failure_sets_status_and_skips_blink(self, debug_oled):
+        debug_oled.current_menu = MENUS.index("debug")
+        debug_oled.long_press_action()
+        # Replace the cycle_relays handler with one that raises.
+        for action in debug_oled._debug_actions:
+            if action["id"] == "cycle_relays":
+                async def _boom():
+                    raise RuntimeError("nope")
+                action["handler"] = _boom
+                debug_oled._debug_action_idx = debug_oled._debug_actions.index(action)
+                break
+        debug_oled.long_press_action()
+        await asyncio.sleep(0.05)
+        assert debug_oled._debug_status.startswith("FAIL")
+        assert len(debug_oled._blink_calls) == 0
+
+    def test_long_press_ignored_while_action_running(self, debug_oled):
+        debug_oled.current_menu = MENUS.index("debug")
+        debug_oled.long_press_action()
+        debug_oled._debug_running = True
+        before = debug_oled._debug_confirm_pending
+        debug_oled.long_press_action()
+        assert debug_oled._debug_confirm_pending == before
+
+    def test_short_press_ignored_while_action_running(self, debug_oled):
+        debug_oled.current_menu = MENUS.index("debug")
+        debug_oled.long_press_action()
+        debug_oled._debug_running = True
+        debug_oled._debug_action_idx = 0
+        debug_oled.next_menu()
+        assert debug_oled._debug_action_idx == 0
+
+    def test_render_debug_entry_view(self, debug_oled):
+        debug_oled.current_menu = MENUS.index("debug")
+        debug_oled._row = Mock()
+        debug_oled._render_debug()
+        debug_oled._row.assert_any_call("Hold to enter", 0)
+
+    def test_render_debug_sub_menu_shows_action(self, debug_oled):
+        debug_oled.current_menu = MENUS.index("debug")
+        debug_oled._debug_mode = True
+        debug_oled._row = Mock()
+        debug_oled._render_debug()
+        first_label = debug_oled._debug_actions[0]["label"]
+        debug_oled._row.assert_any_call(f"> {first_label}", 0)
+
+    def test_render_debug_confirm_shows_prompt(self, debug_oled):
+        debug_oled.current_menu = MENUS.index("debug")
+        debug_oled._debug_mode = True
+        debug_oled._debug_confirm_pending = True
+        debug_oled._row = Mock()
+        debug_oled._render_debug()
+        debug_oled._row.assert_any_call("CONFIRM?", 2)
+
+    async def test_menu_timeout_exits_debug_mode(self, debug_oled):
+        debug_oled.current_menu = MENUS.index("debug")
+        debug_oled._debug_mode = True
+        debug_oled._menu_timeout_s = 1
+        debug_oled._last_interaction_ms = 0
+
+        async def _fake_sleep(s):
+            raise RuntimeError("stop")
+
+        with patch("lib.oled_display.asyncio.sleep", side_effect=_fake_sleep):
+            with pytest.raises(RuntimeError, match="stop"):
+                await debug_oled.refresh_loop()
+        assert debug_oled._debug_mode is False
+        assert debug_oled.current_menu == 0
+
+    async def test_confirm_auto_cancels_after_timeout(self, debug_oled):
+        debug_oled.current_menu = MENUS.index("debug")
+        debug_oled._debug_mode = True
+        debug_oled._debug_confirm_pending = True
+        debug_oled._debug_confirm_timeout_ms = 1
+        debug_oled._debug_confirm_ms = 0
+        debug_oled._menu_timeout_s = 3600  # keep menu timeout out of the way
+        debug_oled._last_interaction_ms = int(time.time() * 1000)
+
+        async def _fake_sleep(s):
+            raise RuntimeError("stop")
+
+        import time as _time
+        with patch("lib.oled_display._ticks_ms", return_value=int(_time.time() * 1000)):
+            with patch("lib.oled_display.asyncio.sleep", side_effect=_fake_sleep):
+                with pytest.raises(RuntimeError, match="stop"):
+                    await debug_oled.refresh_loop()
+        assert debug_oled._debug_confirm_pending is False
 
 
 # ---------------------------------------------------------------------------

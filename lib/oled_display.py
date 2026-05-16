@@ -15,8 +15,14 @@
 #   6: relays    – fan and growlight relay states
 #   7: co2       – CO2 ppm + override status
 #   8: soil      – soil moisture % + raw value
+#   9: debug     – debug-actions entry; long-press opens a sub-menu where
+#                  short-press cycles actions (wipe logs, cycle relays,
+#                  heater 5 s, growlight pulse, growlight dim sweep) and
+#                  long-press executes the highlighted action (destructive
+#                  actions require a second long-press to confirm).
 
 import gc
+import os
 import time
 
 import uasyncio as asyncio
@@ -30,7 +36,7 @@ except AttributeError:
 
 
 # ── Menu identifiers (ordered) ─────────────────────────────────────────────
-MENUS = ("temp", "humidity", "service", "sd", "alerts", "system", "relays", "co2", "soil")
+MENUS = ("temp", "humidity", "service", "sd", "alerts", "system", "relays", "co2", "soil", "debug")
 
 
 class OLEDDisplay:
@@ -90,6 +96,16 @@ class OLEDDisplay:
         invert_delay_s: float = 0.1,
         co2_logger=None,
         soil_logger=None,
+        heater=None,
+        feedback_blink_cb=None,
+        event_log_path=None,
+        debug_confirm_timeout_s: float = 8.0,
+        debug_status_show_ms: int = 3000,
+        debug_test_heater_s: float = 5.0,
+        debug_test_growlight_pulse_s: float = 2.0,
+        debug_test_growlight_dim_levels_pct=None,
+        debug_test_growlight_dim_step_s: float = 1.0,
+        debug_test_relay_pulse_s: float = 1.0,
     ):
         self._i2c = i2c
         self._time_provider = time_provider
@@ -104,6 +120,9 @@ class OLEDDisplay:
         self._logger = logger
         self._co2_logger = co2_logger
         self._soil_logger = soil_logger
+        self._heater = heater
+        self._feedback_blink_cb = feedback_blink_cb
+        self._event_log_path = event_log_path
         self._width = width
         self._height = height
         self._i2c_address = i2c_address
@@ -115,6 +134,26 @@ class OLEDDisplay:
         self._startup_banner_s = startup_banner_s
         self._vram_clear_delay_s = vram_clear_delay_s
         self._invert_delay_s = invert_delay_s
+
+        # Debug sub-menu config + state
+        self._debug_confirm_timeout_ms = int(debug_confirm_timeout_s * 1000)
+        self._debug_status_show_ms = int(debug_status_show_ms)
+        self._debug_test_heater_s = debug_test_heater_s
+        self._debug_test_growlight_pulse_s = debug_test_growlight_pulse_s
+        self._debug_test_growlight_dim_levels_pct = list(
+            debug_test_growlight_dim_levels_pct or [0, 25, 50, 75, 100, 0]
+        )
+        self._debug_test_growlight_dim_step_s = debug_test_growlight_dim_step_s
+        self._debug_test_relay_pulse_s = debug_test_relay_pulse_s
+
+        self._debug_mode: bool = False
+        self._debug_action_idx: int = 0
+        self._debug_confirm_pending: bool = False
+        self._debug_confirm_ms: int = 0
+        self._debug_running: bool = False
+        self._debug_status: str = ""
+        self._debug_status_until_ms: int = 0
+        self._debug_actions = self._build_debug_actions()
 
         self.current_menu: int = 0
         self.display_on: bool = False
@@ -186,12 +225,39 @@ class OLEDDisplay:
     # ── Public API ────────────────────────────────────────────────────────
 
     def next_menu(self) -> None:
-        """Advance to next menu (wraps around). Called on short button press."""
+        """Advance to next menu (wraps around). Called on short button press.
+
+        Inside the debug sub-menu, short press cycles through debug actions
+        instead of advancing the top-level menu. A short press also cancels
+        any pending destructive-action confirmation.
+        """
         self._last_interaction_ms = _ticks_ms()
         self._last_activity_ms = self._last_interaction_ms
         # Turn on display if it was off
         if not self._display_active:
             self._turn_on_display()
+
+        if self._debug_mode:
+            if self._debug_running:
+                # Swallow input while an action is executing.
+                self.render()
+                return
+            if self._debug_confirm_pending:
+                self._debug_confirm_pending = False
+                self._set_debug_status("cancelled")
+                self.render()
+                return
+            if self._debug_actions:
+                self._debug_action_idx = (self._debug_action_idx + 1) % len(self._debug_actions)
+                if self._logger:
+                    self._logger.debug(
+                        "OLEDDisplay",
+                        "debug action selected",
+                        action=self._debug_actions[self._debug_action_idx]["id"],
+                    )
+            self.render()
+            return
+
         self.current_menu = (self.current_menu + 1) % len(MENUS)
         if self._logger:
             self._logger.debug("OLEDDisplay", "menu changed", menu=MENUS[self.current_menu])
@@ -205,14 +271,21 @@ class OLEDDisplay:
         - temp / humidity: clear reading history
         - service:         reset service reminder
         - sd:              trigger SD remount
+        - debug (entry):   open the debug actions sub-menu
+        - debug (sub):     execute highlighted action (destructive ones
+                           require a second long-press to confirm)
         - others:          no-op
         """
         menu = MENUS[self.current_menu]
         self._last_interaction_ms = _ticks_ms()
         self._last_activity_ms = self._last_interaction_ms
-        # Turn on display if it was off
         if not self._display_active:
             self._turn_on_display()
+
+        if menu == "debug":
+            self._handle_debug_long_press()
+            return
+
         if menu in ("temp", "humidity"):
             if self._th_logger:
                 self._th_logger.clear_history()
@@ -232,6 +305,227 @@ class OLEDDisplay:
             if self._logger:
                 self._logger.debug("OLEDDisplay", "Long press: no action for menu", menu=menu)
         self.render()
+
+    # ── Debug sub-menu ────────────────────────────────────────────────────
+
+    def _build_debug_actions(self):
+        """Construct the ordered list of available debug actions.
+
+        Skips actions whose hardware dependency is missing so the operator
+        never lands on a no-op (e.g. dim sweep when no DAC is wired).
+        """
+        actions = [
+            {
+                "id": "wipe_logs",
+                "label": "Wipe logs",
+                "destructive": True,
+                "handler": self._action_wipe_logs,
+            },
+            {
+                "id": "cycle_relays",
+                "label": "Cycle relays",
+                "destructive": False,
+                "handler": self._action_cycle_relays,
+            },
+        ]
+        if self._heater is not None:
+            actions.append(
+                {
+                    "id": "test_heater",
+                    "label": "Heater 5s",
+                    "destructive": False,
+                    "handler": self._action_test_heater,
+                }
+            )
+        if self._growlight is not None:
+            actions.append(
+                {
+                    "id": "test_growlight",
+                    "label": "Light pulse",
+                    "destructive": False,
+                    "handler": self._action_test_growlight,
+                }
+            )
+            if getattr(self._growlight, "dac", None) is not None:
+                actions.append(
+                    {
+                        "id": "test_growlight_dim",
+                        "label": "Dim sweep",
+                        "destructive": False,
+                        "handler": self._action_test_growlight_dim,
+                    }
+                )
+        return actions
+
+    def _set_debug_status(self, text: str) -> None:
+        self._debug_status = text
+        self._debug_status_until_ms = _ticks_ms() + self._debug_status_show_ms
+
+    def _exit_debug_mode(self) -> None:
+        """Leave the debug sub-menu and reset transient state."""
+        self._debug_mode = False
+        self._debug_confirm_pending = False
+        self._debug_action_idx = 0
+
+    def _handle_debug_long_press(self) -> None:
+        if not self._debug_mode:
+            self._debug_mode = True
+            self._debug_action_idx = 0
+            self._debug_confirm_pending = False
+            self._debug_status = ""
+            if self._logger:
+                self._logger.info("OLEDDisplay", "Debug sub-menu entered")
+            self.render()
+            return
+
+        if self._debug_running or not self._debug_actions:
+            self.render()
+            return
+
+        action = self._debug_actions[self._debug_action_idx]
+        if action["destructive"] and not self._debug_confirm_pending:
+            self._debug_confirm_pending = True
+            self._debug_confirm_ms = _ticks_ms()
+            if self._logger:
+                self._logger.info("OLEDDisplay", "Debug confirm armed", action=action["id"])
+            self.render()
+            return
+
+        self._debug_confirm_pending = False
+        self._dispatch_debug_action(action)
+
+    def _dispatch_debug_action(self, action) -> None:
+        """Spawn the action's coroutine and render the running state."""
+        self._debug_running = True
+        if self._logger:
+            self._logger.info("OLEDDisplay", "Debug action running", action=action["id"])
+
+        async def _runner():
+            ok = True
+            err = None
+            try:
+                await action["handler"]()
+            except Exception as exc:
+                ok = False
+                err = str(exc)
+                if self._logger:
+                    self._logger.error("OLEDDisplay", f"Debug action {action['id']} failed: {exc}")
+            finally:
+                self._debug_running = False
+                self._set_debug_status("done" if ok else f"FAIL {err}"[:16])
+                if ok and self._feedback_blink_cb:
+                    try:
+                        self._feedback_blink_cb()
+                    except Exception as exc:
+                        if self._logger:
+                            self._logger.warning("OLEDDisplay", f"Feedback blink failed: {exc}")
+                self.render()
+
+        try:
+            asyncio.create_task(_runner())
+        except Exception as exc:
+            # Fall back to a synchronous status update so the UI doesn't appear stuck.
+            self._debug_running = False
+            self._set_debug_status(f"FAIL {exc}"[:16])
+            if self._logger:
+                self._logger.error("OLEDDisplay", f"Debug task spawn failed: {exc}")
+        self.render()
+
+    # ── Debug action implementations ──────────────────────────────────────
+
+    async def _action_wipe_logs(self) -> None:
+        """Drop in-memory buffers, the fallback CSV, and the event log file.
+
+        Sensor CSVs on the SD card are *not* removed — they are scientific
+        data, and the user can format the card if a full wipe is needed.
+        """
+        bm = self._buffer_manager
+        if bm is not None:
+            try:
+                bm._buffers = {}
+            except Exception:
+                pass
+            try:
+                clear_fn = getattr(bm, "clear_fallback_startup", None)
+                if callable(clear_fn):
+                    clear_fn()
+            except Exception:
+                pass
+        if self._event_log_path:
+            try:
+                os.remove(self._event_log_path)
+            except Exception:
+                pass
+        await asyncio.sleep(0)
+
+    async def _action_cycle_relays(self) -> None:
+        """Pulse each fan and the growlight ON for ``test_relay_pulse_s``.
+
+        Per-relay schedulers will reassert their own state on the next
+        poll, so the test is a visible click + brief activity, not a
+        lasting change.
+        """
+        for fan in self._fans:
+            try:
+                fan.turn_on()
+                await asyncio.sleep(self._debug_test_relay_pulse_s)
+            finally:
+                try:
+                    fan.turn_off()
+                except Exception:
+                    pass
+        if self._growlight is not None:
+            try:
+                self._growlight.turn_on()
+                await asyncio.sleep(self._debug_test_relay_pulse_s)
+            finally:
+                try:
+                    self._growlight.turn_off()
+                except Exception:
+                    pass
+
+    async def _action_test_heater(self) -> None:
+        """Drive the heater gate HIGH for ``test_heater_s`` then LOW."""
+        if self._heater is None:
+            return
+        try:
+            self._heater.turn_on()
+            await asyncio.sleep(self._debug_test_heater_s)
+        finally:
+            try:
+                self._heater.turn_off()
+            except Exception:
+                pass
+
+    async def _action_test_growlight(self) -> None:
+        """Pulse the growlight relay (and DAC, when present) at default level."""
+        if self._growlight is None:
+            return
+        try:
+            self._growlight.turn_on()
+            await asyncio.sleep(self._debug_test_growlight_pulse_s)
+        finally:
+            try:
+                self._growlight.turn_off()
+            except Exception:
+                pass
+
+    async def _action_test_growlight_dim(self) -> None:
+        """Step through configured dim levels with a fixed dwell at each."""
+        if self._growlight is None or getattr(self._growlight, "dac", None) is None:
+            return
+        set_level = getattr(self._growlight, "set_level", None)
+        if not callable(set_level):
+            return
+        try:
+            for level in self._debug_test_growlight_dim_levels_pct:
+                set_level(level)
+                await asyncio.sleep(self._debug_test_growlight_dim_step_s)
+        finally:
+            try:
+                set_level(0)
+            except Exception:
+                pass
 
     def render(self) -> None:
         """Render the current menu to the display. No-op if display is off or inactive."""
@@ -265,15 +559,31 @@ class OLEDDisplay:
                 # Timeout: return to default menu after inactivity
                 if self._menu_timeout_s > 0:
                     idle_ms = _ticks_ms() - self._last_interaction_ms
-                    if idle_ms >= self._menu_timeout_s * 1000 and self.current_menu != 0:
+                    if idle_ms >= self._menu_timeout_s * 1000 and (
+                        self.current_menu != 0 or self._debug_mode
+                    ):
+                        if self._debug_mode and not self._debug_running:
+                            self._exit_debug_mode()
                         self.current_menu = 0
                         if self._logger:
                             self._logger.debug("OLEDDisplay", "menu timeout → returned to temp")
+
+                # Confirm prompt auto-cancels after debug_confirm_timeout_s
+                if (
+                    self._debug_mode
+                    and self._debug_confirm_pending
+                    and self._debug_confirm_timeout_ms > 0
+                    and _ticks_ms() - self._debug_confirm_ms >= self._debug_confirm_timeout_ms
+                ):
+                    self._debug_confirm_pending = False
+                    self._set_debug_status("cancelled")
 
                 # Display timeout: turn off display after inactivity
                 if self._display_timeout_s > 0 and self._display_active:
                     activity_idle_ms = _ticks_ms() - self._last_activity_ms
                     if activity_idle_ms >= self._display_timeout_s * 1000:
+                        if self._debug_mode and not self._debug_running:
+                            self._exit_debug_mode()
                         self._turn_off_display()
 
                 self.render()
@@ -492,6 +802,35 @@ class OLEDDisplay:
             self._row("Vent: ON", 1)
         else:
             self._row("Vent: off", 1)
+
+    def _render_debug(self) -> None:
+        self._header("DEBUG")
+        if not self._debug_mode:
+            self._row("Hold to enter", 0)
+            self._row("debug menu.", 1)
+            if self._oled:
+                self._oled.text("[HOLD]=open", 56, 56, 1)
+            return
+
+        if not self._debug_actions:
+            self._row("No actions", 0)
+            return
+
+        action = self._debug_actions[self._debug_action_idx]
+        self._row(f"> {action['label']}", 0)
+        self._row(f"{self._debug_action_idx + 1}/{len(self._debug_actions)}", 1)
+
+        if self._debug_running:
+            self._row("RUNNING...", 2)
+        elif self._debug_confirm_pending:
+            self._row("CONFIRM?", 2)
+            self._row("TAP=cancel", 3)
+        elif self._debug_status and _ticks_ms() < self._debug_status_until_ms:
+            self._row(self._debug_status[:16], 2)
+
+        if self._oled and not self._debug_running:
+            hint = "[HOLD]=run" if not self._debug_confirm_pending else "[HOLD]=YES"
+            self._oled.text(hint, 56, 56, 1)
 
     def _render_soil(self) -> None:
         self._header("SOIL")

@@ -3,15 +3,15 @@
 Walks `main.py`, `config.py`, and `lib/*.py` (excluding vendored drivers),
 computes SHA-256 of each file, writes `manifest.json` to OUT_DIR alongside
 the files in the expected layout, then optionally mirrors the whole tree
-into a destination folder on the SD card (e.g. `G:/update`).
+into a destination folder on the SD card (e.g. `G:/ota/pending`).
 
 Usage:
     python tools/build_update_payload.py
     python tools/build_update_payload.py --out build/update_payload
     python tools/build_update_payload.py --version 20260515T143052Z-c8a3a11
-    python tools/build_update_payload.py --copy-to G:/update
-    python tools/build_update_payload.py --copy-to G:/update --no-confirm
-    python tools/build_update_payload.py --compiled --copy-to G:/update --no-confirm
+    python tools/build_update_payload.py --copy-to G:/ota/pending
+    python tools/build_update_payload.py --copy-to G:/ota/pending --no-confirm
+    python tools/build_update_payload.py --compiled --copy-to G:/ota/pending --no-confirm
 
 The payload layout matches what `lib/updater.py` expects:
 
@@ -235,7 +235,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--copy-to",
         default=None,
-        help="After building, mirror payload into this directory (e.g. G:/update).",
+        help="After building, mirror payload into this directory (e.g. G:/ota/pending).",
     )
     parser.add_argument(
         "--no-confirm",

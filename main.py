@@ -43,7 +43,7 @@ from lib.buffer_manager import BufferManager
 from lib.buzzer import BuzzerController
 from lib.co2_logger import CO2Logger
 from lib.event_logger import EventLogger
-from lib.fan_output import RelayFanOutput
+from lib.fan_output import Pca9685FanOutput, RelayFanOutput
 from lib.hardware_factory import HardwareFactory
 from lib.heater import HeaterController
 from lib.led_button import LEDButtonHandler, ServiceReminder
@@ -383,29 +383,60 @@ async def main():
 
     wdt.feed()  # Feed after TempHumidityLogger init
 
-    # Step 7: Create relay controllers with dependency injection
-    fan_configs = [
-        (DEVICE_CONFIG["pins"]["relay_fan_1"], DEVICE_CONFIG.get("fan_1", {}), "Fan_1"),
-        (DEVICE_CONFIG["pins"]["relay_fan_2"], DEVICE_CONFIG.get("fan_2", {}), "Fan_2"),
-    ]
-
+    # Step 7: Create fan controllers from the role-keyed fans dict.
+    # Iterates DEVICE_CONFIG["fans"], skips entries with enabled=False,
+    # and dispatches output (relay vs pca9685) and policy (mode) per
+    # entry. pca9685 entries are skipped with a warning when the chip
+    # is not present (current PCB until next-rev hardware lands).
     fans = []
-    for pin, config, name in fan_configs:
-        relay = RelayController(pin=pin, invert=True, name=name, logger=logger)
-        fan_output = RelayFanOutput(relay)
-        fan = FanController(
-            output=fan_output,
-            time_provider=time_provider,
-            th_logger=th_logger,
-            logger=logger,
-            interval_s=config.get("interval_s", 600),
-            on_time_s=config.get("on_time_s", 20),
-            max_temp=config.get("max_temp", 23.8),
-            temp_hysteresis=config.get("temp_hysteresis", 0.5),
-            poll_interval_s=config.get("poll_interval_s", 5),
-            name=name,
-        )
-        fans.append(fan)
+    pca9685 = hardware.get_pca9685()
+    for role, fan_cfg in DEVICE_CONFIG.get("fans", {}).items():
+        if not fan_cfg.get("enabled", False):
+            logger.debug("MAIN", "fan disabled in config; skipping", role=role)
+            continue
+
+        output_type = fan_cfg["output"]
+        fan_output = None
+        if output_type == "relay":
+            pin = DEVICE_CONFIG["pins"][fan_cfg["relay_pin_key"]]
+            relay = RelayController(pin=pin, invert=True, name=role, logger=logger)
+            fan_output = RelayFanOutput(relay)
+        elif output_type == "pca9685":
+            if pca9685 is None:
+                logger.warning(
+                    "MAIN",
+                    f"Fan {role!r} uses pca9685 but driver unavailable; skipping",
+                )
+                continue
+            fan_output = Pca9685FanOutput(
+                pca9685,
+                channel=fan_cfg["pca9685_ch"],
+                name=role,
+                default_duty_pct=fan_cfg.get("default_duty_pct", 100),
+            )
+
+        mode = fan_cfg["mode"]
+        if mode == "thermostat_schedule":
+            fan = FanController(
+                output=fan_output,
+                time_provider=time_provider,
+                th_logger=th_logger,
+                logger=logger,
+                interval_s=fan_cfg["interval_s"],
+                on_time_s=fan_cfg["on_time_s"],
+                max_temp=fan_cfg["max_temp"],
+                temp_hysteresis=fan_cfg["temp_hysteresis"],
+                poll_interval_s=fan_cfg["poll_interval_s"],
+                name=role,
+            )
+            fans.append(fan)
+        else:
+            # always_on and heater_follower controllers land in later steps.
+            logger.warning(
+                "MAIN",
+                f"Fan {role!r} mode={mode!r} has no policy class yet; skipping",
+            )
+
     logger.info("MAIN", "Fan controllers initialized")
     wdt.feed()  # Feed after fan controllers
     logger.debug(
@@ -508,14 +539,19 @@ async def main():
             write_queue=write_queue,
             status_manager=status_manager,
         )
-        # Attach the override hook to the chosen fan.
-        override_fan_key = co2_config.get("override_fan", "fan_2")
-        fan_index = 1 if override_fan_key == "fan_2" else 0
-        if fan_index < len(fans):
-            fans[fan_index].external_override = co2_logger_obj.is_override_active
+        # Attach the override hook to the fan whose role matches override_fan.
+        override_role = co2_config.get("override_fan", "exhaust")
+        target_fan = next((f for f in fans if f.name == override_role), None)
+        if target_fan is not None:
+            target_fan.external_override = co2_logger_obj.is_override_active
             logger.info(
                 "MAIN",
-                f"CO2 override wired to {fans[fan_index].name} (>{co2_config.get('override_ppm_on', 1000)} ppm)",
+                f"CO2 override wired to {target_fan.name} (>{co2_config.get('override_ppm_on', 1000)} ppm)",
+            )
+        else:
+            logger.warning(
+                "MAIN",
+                f"CO2 override_fan {override_role!r} not found in enabled fans",
             )
     except Exception as e:
         logger.warning("MAIN", f"CO2Logger init failed (non-critical): {e}")

@@ -128,21 +128,84 @@ DEVICE_CONFIG = {
         "retry_delay_s": 0.5,  # Delay between sensor read retries (seconds)
         "sensor_type": "th",  # Folder + filename prefix under paths.sensor_root
     },
-    # Fan Control - Fan 1 (Time-based + Thermostat)
-    "fan_1": {
-        "interval_s": 600,  # Cycle interval (10 minutes)
-        "on_time_s": 20,  # Time ON per cycle
-        "max_temp": 23.8,  # Temperature threshold (°C)
-        "temp_hysteresis": 0.5,  # Hysteresis for thermostat (°C)
-        "poll_interval_s": 5,  # Schedule/thermostat check interval (seconds)
-    },
-    # Fan Control - Fan 2 (Time-based + Thermostat)
-    "fan_2": {
-        "interval_s": 500,  # Cycle interval
-        "on_time_s": 20,  # Time ON per cycle
-        "max_temp": 27.0,  # Temperature threshold (°C)
-        "temp_hysteresis": 0.5,  # Hysteresis for thermostat (°C)
-        "poll_interval_s": 5,  # Schedule/thermostat check interval (seconds)
+    # Fan Roster (role-keyed, mode-dispatched).
+    #
+    # Each entry names a physical fan role. The controller class is picked
+    # by `mode`; the drive backend by `output`. Current PCB has two relay
+    # outputs (REL_CON pins 2 and 3, GP18/GP19) — those map to exhaust and
+    # growroom_walls. The remaining three roles ship disabled and flip on
+    # when the PCA9685 PCB lands; only main.py wiring changes (policy is
+    # untouched).
+    #
+    # Modes:
+    #   thermostat_schedule — time-of-day on-cycle + temperature override
+    #                         (FanController). Needs interval_s, on_time_s,
+    #                         max_temp, temp_hysteresis, poll_interval_s,
+    #                         default_duty_pct.
+    #   always_on           — constant duty (AlwaysOnFanController).
+    #                         Needs duty_pct.
+    #   heater_follower     — runs while heater.is_on() plus post_run_s
+    #                         afterrun (HeaterFollowerFanController). Needs
+    #                         post_run_s, duty_pct, poll_interval_s.
+    #
+    # Outputs:
+    #   relay    — wraps a RelayController on the pin named by
+    #              relay_pin_key (must reference DEVICE_CONFIG["pins"]).
+    #   pca9685  — drives PCA9685 channel pca9685_ch (0..15). Disabled
+    #              until pca9685.enabled flips True.
+    "fans": {
+        "exhaust": {
+            "enabled": True,
+            "mode": "thermostat_schedule",
+            "output": "relay",
+            "relay_pin_key": "relay_fan_1",
+            "interval_s": 600,
+            "on_time_s": 20,
+            "max_temp": 23.8,
+            "temp_hysteresis": 0.5,
+            "poll_interval_s": 5,
+            "default_duty_pct": 100,
+        },
+        "growroom_walls": {
+            "enabled": True,
+            "mode": "thermostat_schedule",
+            "output": "relay",
+            "relay_pin_key": "relay_fan_2",
+            "interval_s": 500,
+            "on_time_s": 20,
+            "max_temp": 27.0,
+            "temp_hysteresis": 0.5,
+            "poll_interval_s": 5,
+            "default_duty_pct": 100,
+        },
+        "growroom_center": {
+            "enabled": False,
+            "mode": "thermostat_schedule",
+            "output": "pca9685",
+            "pca9685_ch": 0,
+            "interval_s": 500,
+            "on_time_s": 20,
+            "max_temp": 27.0,
+            "temp_hysteresis": 0.5,
+            "poll_interval_s": 5,
+            "default_duty_pct": 80,
+        },
+        "heater_distribution": {
+            "enabled": False,
+            "mode": "heater_follower",
+            "output": "pca9685",
+            "pca9685_ch": 1,
+            "post_run_s": 60,
+            "duty_pct": 80,
+            "poll_interval_s": 5,
+        },
+        "case": {
+            "enabled": False,
+            "mode": "always_on",
+            "output": "pca9685",
+            "pca9685_ch": 2,
+            "duty_pct": 60,
+        },
     },
     # PCA9685 PWM driver (16-channel I2C, shared I2C0 bus).
     #
@@ -197,17 +260,17 @@ DEVICE_CONFIG = {
     # Poll/response framing matches the prototype in tests/co2log.py:
     # 7-byte request 0xFE 0x44 0x00 0x08 0x02 0x9F 0x25 → 7-byte reply
     # whose bytes 3-4 (0-indexed) encode ppm as high*256 + low.
-    # The override_fan key chooses which FanController gets force-on
-    # when ppm crosses override_ppm_on, until ppm drops below
-    # override_ppm_off. fan_2 has the higher max_temp by default so it
-    # is the bigger ventilator and the natural CO2 vent target.
+    # The override_fan key names a role in DEVICE_CONFIG["fans"]; that
+    # fan gets force-on when ppm crosses override_ppm_on, until ppm
+    # drops below override_ppm_off. The exhaust fan is the natural CO2
+    # vent target.
     "co2_logger": {
         "interval_s": 30,  # Poll cadence (seconds)
         "warmup_s": 30,  # Sensor warm-up window where read failures don't escalate
         "max_retries": 3,  # UART read retries per poll
         "override_ppm_on": 1000,  # Trip threshold (ppm)
         "override_ppm_off": 800,  # Release threshold (ppm), must be < on
-        "override_fan": "fan_2",  # Which fan key to force-on (fan_1 or fan_2)
+        "override_fan": "exhaust",  # Which fans-dict role to force-on
         "sensor_type": "co2",  # Folder + filename prefix under paths.sensor_root
     },
     # Grow Light Configuration
@@ -441,6 +504,94 @@ DEVICE_CONFIG = {
 }
 
 
+_VALID_FAN_MODES = ("thermostat_schedule", "always_on", "heater_follower")
+_VALID_FAN_OUTPUTS = ("relay", "pca9685")
+
+
+def _validate_fans(fans_cfg, pins_cfg):
+    """Validate the role-keyed fans dict (called from validate_config)."""
+    if not isinstance(fans_cfg, dict) or not fans_cfg:
+        raise ValueError("fans must be a non-empty dict")
+
+    used_relay_keys = set()
+    used_pca_channels = set()
+
+    for role, cfg in fans_cfg.items():
+        prefix = f"fans.{role}"
+        if not isinstance(cfg, dict):
+            raise ValueError(f"{prefix} must be a dict")
+        for k in ("enabled", "mode", "output"):
+            if k not in cfg:
+                raise ValueError(f"Missing config key: {prefix}.{k}")
+        if not isinstance(cfg["enabled"], bool):
+            raise ValueError(f"{prefix}.enabled must be a bool")
+        if cfg["mode"] not in _VALID_FAN_MODES:
+            raise ValueError(f"{prefix}.mode must be one of {_VALID_FAN_MODES}")
+        if cfg["output"] not in _VALID_FAN_OUTPUTS:
+            raise ValueError(f"{prefix}.output must be one of {_VALID_FAN_OUTPUTS}")
+
+        if cfg["output"] == "relay":
+            if "relay_pin_key" not in cfg:
+                raise ValueError(f"Missing config key: {prefix}.relay_pin_key")
+            pk = cfg["relay_pin_key"]
+            if not isinstance(pk, str) or pk not in pins_cfg:
+                raise ValueError(
+                    f"{prefix}.relay_pin_key must reference a pin in pins section (got {pk!r})"
+                )
+            if pk in used_relay_keys:
+                raise ValueError(f"{prefix}.relay_pin_key={pk!r} is used by another fan")
+            used_relay_keys.add(pk)
+        else:  # pca9685
+            if "pca9685_ch" not in cfg:
+                raise ValueError(f"Missing config key: {prefix}.pca9685_ch")
+            ch = cfg["pca9685_ch"]
+            if not isinstance(ch, int) or not (0 <= ch <= 15):
+                raise ValueError(f"{prefix}.pca9685_ch must be int 0-15")
+            if ch in used_pca_channels:
+                raise ValueError(f"{prefix}.pca9685_ch={ch} is used by another fan")
+            used_pca_channels.add(ch)
+
+        mode = cfg["mode"]
+        if mode == "thermostat_schedule":
+            required = (
+                "interval_s",
+                "on_time_s",
+                "max_temp",
+                "temp_hysteresis",
+                "poll_interval_s",
+                "default_duty_pct",
+            )
+            for k in required:
+                if k not in cfg:
+                    raise ValueError(f"Missing config key: {prefix}.{k}")
+            if cfg["interval_s"] <= 0 or cfg["on_time_s"] <= 0:
+                raise ValueError(f"{prefix}: interval_s and on_time_s must be > 0")
+            if cfg["temp_hysteresis"] < 0:
+                raise ValueError(f"{prefix}.temp_hysteresis must be >= 0")
+            if cfg["poll_interval_s"] <= 0:
+                raise ValueError(f"{prefix}.poll_interval_s must be > 0")
+            v = cfg["default_duty_pct"]
+            if not isinstance(v, (int, float)) or not (0 <= v <= 100):
+                raise ValueError(f"{prefix}.default_duty_pct must be 0-100")
+        elif mode == "always_on":
+            if "duty_pct" not in cfg:
+                raise ValueError(f"Missing config key: {prefix}.duty_pct")
+            v = cfg["duty_pct"]
+            if not isinstance(v, (int, float)) or not (0 <= v <= 100):
+                raise ValueError(f"{prefix}.duty_pct must be 0-100")
+        else:  # heater_follower
+            for k in ("post_run_s", "duty_pct", "poll_interval_s"):
+                if k not in cfg:
+                    raise ValueError(f"Missing config key: {prefix}.{k}")
+            if cfg["post_run_s"] < 0:
+                raise ValueError(f"{prefix}.post_run_s must be >= 0")
+            v = cfg["duty_pct"]
+            if not isinstance(v, (int, float)) or not (0 <= v <= 100):
+                raise ValueError(f"{prefix}.duty_pct must be 0-100")
+            if cfg["poll_interval_s"] <= 0:
+                raise ValueError(f"{prefix}.poll_interval_s must be > 0")
+
+
 def validate_config():
     """
     Validate configuration dictionary at startup.
@@ -494,20 +645,6 @@ def validate_config():
         ],
         "sht31": ["i2c_address"],
         "temp_humidity_logger": ["interval_s", "max_retries", "max_buffer_size", "retry_delay_s", "sensor_type"],
-        "fan_1": [
-            "interval_s",
-            "on_time_s",
-            "max_temp",
-            "temp_hysteresis",
-            "poll_interval_s",
-        ],
-        "fan_2": [
-            "interval_s",
-            "on_time_s",
-            "max_temp",
-            "temp_hysteresis",
-            "poll_interval_s",
-        ],
         "pca9685": [
             "enabled",
             "i2c_address",
@@ -676,12 +813,6 @@ def validate_config():
     if not isinstance(sht31_addr, int) or sht31_addr not in (0x44, 0x45):
         raise ValueError("sht31.i2c_address must be 0x44 or 0x45")
 
-    if DEVICE_CONFIG["fan_1"]["on_time_s"] <= 0 or DEVICE_CONFIG["fan_1"]["interval_s"] <= 0:
-        raise ValueError("fan_1 timing values must be > 0")
-
-    if DEVICE_CONFIG["fan_2"]["on_time_s"] <= 0 or DEVICE_CONFIG["fan_2"]["interval_s"] <= 0:
-        raise ValueError("fan_2 timing values must be > 0")
-
     if DEVICE_CONFIG["Service_reminder"]["days_interval"] <= 0:
         raise ValueError("Service_reminder.days_interval must be > 0")
 
@@ -729,9 +860,7 @@ def validate_config():
     if DEVICE_CONFIG["temp_humidity_logger"]["retry_delay_s"] <= 0:
         raise ValueError("temp_humidity_logger.retry_delay_s must be > 0")
 
-    for fan_key in ("fan_1", "fan_2"):
-        if DEVICE_CONFIG[fan_key]["poll_interval_s"] <= 0:
-            raise ValueError(f"{fan_key}.poll_interval_s must be > 0")
+    _validate_fans(DEVICE_CONFIG.get("fans"), DEVICE_CONFIG["pins"])
 
     if DEVICE_CONFIG["growlight"]["poll_interval_s"] <= 0:
         raise ValueError("growlight.poll_interval_s must be > 0")
@@ -765,8 +894,10 @@ def validate_config():
         raise ValueError("co2_logger.override_ppm_on must be > override_ppm_off")
     if co2_cfg["override_ppm_off"] < 0:
         raise ValueError("co2_logger.override_ppm_off must be >= 0")
-    if co2_cfg["override_fan"] not in ("fan_1", "fan_2"):
-        raise ValueError("co2_logger.override_fan must be 'fan_1' or 'fan_2'")
+    if co2_cfg["override_fan"] not in DEVICE_CONFIG.get("fans", {}):
+        raise ValueError(
+            f"co2_logger.override_fan must be a key in fans dict (got {co2_cfg['override_fan']!r})"
+        )
     if not isinstance(co2_cfg["sensor_type"], str) or not co2_cfg["sensor_type"]:
         raise ValueError("co2_logger.sensor_type must be a non-empty string")
 

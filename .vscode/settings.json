@@ -1,0 +1,49 @@
+{
+    // ── Pylance / MicroPico ──────────────────────────────────────────
+    "python.languageServer": "Pylance",
+    "python.analysis.typeCheckingMode": "basic",
+    "python.analysis.diagnosticSeverityOverrides": {
+        "reportMissingModuleSource": "none"
+    },
+    "python.terminal.activateEnvironment": false,
+    "micropico.openOnStart": true,
+    "python.analysis.typeshedPaths": [
+        "~/.micropico-stubs/included"
+    ],
+    "python.analysis.extraPaths": [
+        "./typings",
+        "~/.micropico-stubs/included"
+    ],
+
+    // ── Testing ──────────────────────────────────────────────────────
+    "python.testing.pytestEnabled": true,
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestArgs": ["tests"],
+
+    // ── Ruff (lint + format on save) ─────────────────────────────────
+    "[python]": {
+        "editor.defaultFormatter": "charliermarsh.ruff",
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+            "source.fixAll.ruff": "explicit",
+            "source.organizeImports.ruff": "explicit"
+        }
+    },
+
+    // ── Editor polish ────────────────────────────────────────────────
+    "files.exclude": {
+        "**/__pycache__": true,
+        "**/*.pyc": true
+    },
+    "files.trimTrailingWhitespace": true,
+    "files.insertFinalNewline": true,
+
+    // ── Search exclusions (vendored libs) ────────────────────────────
+    "search.exclude": {
+        "**/__pycache__": true,
+        "**/lib/picozero*": true,
+        "**/lib/sdcard*": true,
+        "**/lib/ds3231.py": true,
+        "**/lib/ds2321_gen.py": true
+    }
+}

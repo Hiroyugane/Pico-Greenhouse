@@ -1,0 +1,443 @@
+{
+    "version": "2.0.0",
+    "options": {
+        "env": {
+            "PATH": "${workspaceFolder}\\.venv\\Scripts;${env:PATH}"
+        }
+    },
+    // ── Problem-matcher definitions ──────────────────────────────────
+    // Ruff output format:  file.py:line:col: CODE message
+    // Pytest short-summary: FAILED tests/test_x.py::test_name - message
+    "inputs": [],
+    "tasks": [
+        {
+            "label": "lint",
+            "type": "shell",
+            "command": "ruff check .",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": {
+                "owner": "ruff",
+                "fileLocation": [
+                    "relative",
+                    "${workspaceFolder}"
+                ],
+                "pattern": {
+                    "regexp": "^(.+?):(\\d+):(\\d+): (\\w+) (.+)$",
+                    "file": 1,
+                    "line": 2,
+                    "column": 3,
+                    "code": 4,
+                    "message": 5
+                }
+            }
+        },
+        {
+            "label": "format",
+            "type": "shell",
+            "command": "ruff format .",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "pytest-host",
+            "type": "shell",
+            "command": "pytest -q --maxfail=1 --disable-warnings --cov --cov-report=term-missing",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": {
+                "owner": "pytest",
+                "fileLocation": [
+                    "relative",
+                    "${workspaceFolder}"
+                ],
+                "pattern": {
+                    "regexp": "^FAILED (.+?)::(.+?) - (.+)$",
+                    "file": 1,
+                    "message": 3
+                }
+            }
+        },
+        {
+            "label": "host-sim-smoke",
+            "detail": "Run main.py with host shims for a few seconds to verify startup",
+            "type": "shell",
+            "command": "$errFile = Join-Path $env:TEMP 'hostsim.err'; $p = Start-Process python -ArgumentList 'main.py' -PassThru -NoNewWindow -RedirectStandardError $errFile; Start-Sleep -Seconds 5; if ($p.HasExited) { Get-Content $errFile -ErrorAction SilentlyContinue; Write-Error 'host-sim exited early'; exit 1 } else { Stop-Process -Id $p.Id -Force; Write-Host 'host-sim smoke OK' }",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "check",
+            "detail": "Run lint, tests, then host-sim smoke test — full quality gate",
+            "dependsOn": [
+                "lint",
+                "pytest-host",
+                "host-sim-smoke"
+            ],
+            "dependsOrder": "sequence",
+            "problemMatcher": []
+        },
+        {
+            "label": "ai-verify",
+            "detail": "Agent verification gate: lint + tests with coverage + host-sim smoke (verbose output for agent parsing)",
+            "type": "shell",
+            "command": "ruff check .; if ($LASTEXITCODE -ne 0) { exit 1 }; python -m pytest tests/ -v --tb=short --cov=lib --cov=config --cov-fail-under=88 --cov-report=term-missing; if ($LASTEXITCODE -ne 0) { exit 1 }; $proc = Start-Process python -ArgumentList 'main.py' -PassThru -NoNewWindow; Start-Sleep 5; if ($proc.HasExited) { Write-Error 'Host-sim exited early'; exit 1 } else { Stop-Process $proc; Write-Host 'Host-sim smoke: OK' }",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "build-mpy",
+            "type": "shell",
+            "command": "$ErrorActionPreference = 'Stop'; if (-not (Get-Command mpy-cross -ErrorAction SilentlyContinue)) { Write-Error 'mpy-cross not found in PATH. Install mpy-cross and retry.'; exit 1 }; $buildRoot = 'build'; $buildLib = Join-Path $buildRoot 'lib'; if (Test-Path $buildRoot) { Remove-Item $buildRoot -Recurse -Force }; New-Item -ItemType Directory -Path $buildLib -Force | Out-Null; Copy-Item main.py (Join-Path $buildRoot 'main.py') -Force; & mpy-cross config.py -o (Join-Path $buildRoot 'config.mpy'); if ($LASTEXITCODE -ne 0) { Write-Error 'Failed compiling config.py'; exit $LASTEXITCODE }; $libSources = Get-ChildItem lib -File -Filter *.py | Where-Object { $_.Name -ne '__init__.py' }; if (-not $libSources) { Write-Error 'No runtime Python modules found under lib/ to compile.'; exit 1 }; foreach ($src in $libSources) { $outFile = Join-Path $buildLib ($src.BaseName + '.mpy'); & mpy-cross $src.FullName -o $outFile; if ($LASTEXITCODE -ne 0) { Write-Error ('Failed compiling ' + $src.Name); exit $LASTEXITCODE } }; Write-Host ('build-mpy complete: config.py and ' + $libSources.Count + ' lib modules compiled to ' + $buildRoot)",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "flash-mpremote",
+            "detail": "Compile runtime artifacts, then flash only main.py, config.py, and lib/ (auto-toggles MicroPico)",
+            "type": "shell",
+            "command": ". .vscode\\micropico-port.ps1; Disconnect-MicroPico; if (-not (Test-Path 'build/main.py') -or -not (Test-Path 'build/config.mpy') -or -not (Test-Path 'build/lib')) { Write-Error 'Missing build artifacts. Run build-mpy first.'; Connect-MicroPico; exit 1 }; $libArtifacts = Get-ChildItem build/lib -File | Where-Object { $_.Extension -in '.mpy', '.py' }; if (-not $libArtifacts) { Write-Error 'No lib artifacts in build/lib to flash.'; Connect-MicroPico; exit 1 }; mpremote fs mkdir /lib *> $null; mpremote fs rm /config.py *> $null; $libCopy = ($libArtifacts | ForEach-Object { '+ fs cp build/lib/' + $_.Name + ' :/lib/' + $_.Name }) -join ' '; Invoke-Expression ('mpremote soft-reset + fs cp build/main.py :main.py + fs cp build/config.mpy :config.mpy ' + $libCopy); $rc=$LASTEXITCODE; Connect-MicroPico; exit $rc",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "dependsOn": [
+                "check",
+                "build-mpy"
+            ],
+            "dependsOrder": "sequence",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "flash-mpremote-nocheck",
+            "detail": "Compile runtime artifacts, then flash only main.py, config.py, and lib/ (auto-toggles MicroPico)",
+            "type": "shell",
+            "command": ". .vscode\\micropico-port.ps1; Disconnect-MicroPico; if (-not (Test-Path 'build/main.py') -or -not (Test-Path 'build/config.mpy') -or -not (Test-Path 'build/lib')) { Write-Error 'Missing build artifacts. Run build-mpy first.'; Connect-MicroPico; exit 1 }; $libArtifacts = Get-ChildItem build/lib -File | Where-Object { $_.Extension -in '.mpy', '.py' }; if (-not $libArtifacts) { Write-Error 'No lib artifacts in build/lib to flash.'; Connect-MicroPico; exit 1 }; mpremote fs mkdir /lib *> $null; mpremote fs rm /config.py *> $null; $libCopy = ($libArtifacts | ForEach-Object { '+ fs cp build/lib/' + $_.Name + ' :/lib/' + $_.Name }) -join ' '; Invoke-Expression ('mpremote soft-reset + fs cp build/main.py :main.py + fs cp build/config.mpy :config.mpy ' + $libCopy); $rc=$LASTEXITCODE; Connect-MicroPico; exit $rc",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "dependsOn": [
+                "build-mpy"
+            ],
+            "dependsOrder": "sequence",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "clean-device",
+            "detail": "Removes all flashed files and directories from Pico flash (preserves /sd mount; fails silently on missing entries; auto-toggles MicroPico)",
+            "type": "shell",
+            "command": ". .vscode\\micropico-port.ps1; Disconnect-MicroPico; try { $listing = & mpremote fs ls / 2>$null; foreach ($line in $listing) { $t = $line.Trim(); if (-not $t -or $t.StartsWith('ls ')) { continue }; $parts = $t -split '\\s+', 2; if ($parts.Count -lt 2) { continue }; $name = $parts[1]; if ($name -eq 'sd/' -or $name -eq 'sd') { continue }; if ($name.EndsWith('/')) { try { & mpremote fs rm -r (':/' + $name.TrimEnd('/')) 2>$null | Out-Null } catch {} } else { try { & mpremote fs rm (':/' + $name) 2>$null | Out-Null } catch {} } }; Write-Host 'clean-device: done' } finally { Connect-MicroPico }; exit 0",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "clean-and-flash",
+            "detail": "Wipe all files from Pico then flash everything fresh (no quality checks; auto-toggles MicroPico)",
+            "dependsOn": [
+                "clean-device",
+                "flash-mpremote"
+            ],
+            "dependsOrder": "sequence",
+            "problemMatcher": []
+        },
+        {
+            "label": "repl",
+            "detail": "Interactive MicroPython REPL on connected Pico (auto-toggles MicroPico; reconnects on exit)",
+            "type": "shell",
+            "command": ". .vscode\\micropico-port.ps1; Disconnect-MicroPico; mpremote repl; Connect-MicroPico",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "focus": true
+            },
+            "isBackground": true,
+            "problemMatcher": []
+        },
+        {
+            "label": "serial-monitor",
+            "detail": "Passive serial output from connected Pico (auto-toggles MicroPico; reconnects on exit)",
+            "type": "shell",
+            "command": ". .vscode\\micropico-port.ps1; Disconnect-MicroPico; mpremote repl --escape-non-printable; Connect-MicroPico",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "focus": true
+            },
+            "isBackground": true,
+            "problemMatcher": []
+        },
+        {
+            "label": "run-on-device",
+            "detail": "Execute main.py on Pico without flashing (auto-toggles MicroPico)",
+            "type": "shell",
+            "command": ". .vscode\\micropico-port.ps1; Disconnect-MicroPico; mpremote run main.py; $rc=$LASTEXITCODE; Connect-MicroPico; exit $rc",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "run-on-device (current file)",
+            "detail": "Execute the currently open file on Pico (auto-toggles MicroPico)",
+            "type": "shell",
+            "command": ". .vscode\\micropico-port.ps1; Disconnect-MicroPico; mpremote run ${file}; $rc=$LASTEXITCODE; Connect-MicroPico; exit $rc",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "mount-and-run",
+            "detail": "Mount workspace on Pico VFS and run main.py — edits visible instantly (auto-toggles MicroPico; reconnects on exit)",
+            "type": "shell",
+            "command": ". .vscode\\micropico-port.ps1; Disconnect-MicroPico; mpremote mount . run main.py; Connect-MicroPico",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "focus": true
+            },
+            "isBackground": true,
+            "problemMatcher": []
+        },
+        {
+            "label": "pull-logs",
+            "detail": "Copy SD logs from Pico to local sd/ folder (auto-toggles MicroPico)",
+            "type": "shell",
+            "command": ". .vscode\\micropico-port.ps1; Disconnect-MicroPico; mpremote fs cp -r :/sd/ sd/; $rc=$LASTEXITCODE; Connect-MicroPico; exit $rc",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "list-device-files",
+            "detail": "List files on Pico flash and SD card (auto-toggles MicroPico)",
+            "type": "shell",
+            "command": ". .vscode\\micropico-port.ps1; Disconnect-MicroPico; mpremote fs ls / + fs ls /sd/; $rc=$LASTEXITCODE; Connect-MicroPico; exit $rc",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "host-sim",
+            "detail": "Run main.py with host shims on CPython",
+            "type": "shell",
+            "command": "python main.py",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "focus": true
+            },
+            "isBackground": true,
+            "problemMatcher": []
+        },
+        {
+            "label": "watch-lint",
+            "detail": "Auto-lint on every file save",
+            "type": "shell",
+            "command": "ruff check --watch .",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "isBackground": true,
+            "problemMatcher": {
+                "owner": "ruff-watch",
+                "fileLocation": [
+                    "relative",
+                    "${workspaceFolder}"
+                ],
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": "^\\[watch\\]",
+                    "endsPattern": "^Found \\d+ error|^All checks passed"
+                },
+                "pattern": {
+                    "regexp": "^(.+?):(\\d+):(\\d+): (\\w+) (.+)$",
+                    "file": 1,
+                    "line": 2,
+                    "column": 3,
+                    "code": 4,
+                    "message": 5
+                }
+            }
+        },
+        {
+            "label": "watch-test",
+            "detail": "Re-run tests on file changes (requires ptw)",
+            "type": "shell",
+            "command": "ptw -- -q --maxfail=1 --disable-warnings",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "isBackground": true,
+            "problemMatcher": []
+        },
+        {
+            "label": "build-update-payload",
+            "detail": "Build SD-update payload (manifest.json + main/config/lib) into build/update_payload/",
+            "type": "shell",
+            "command": "python tools/build_update_payload.py",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "deploy-update-to-sdcard",
+            "detail": "Compile, build SD-update payload (config + lib compiled to .mpy), and copy to G:\\update (auto-confirms overwrite)",
+            "type": "shell",
+            "command": "python tools/build_update_payload.py --compiled --copy-to G:/update --no-confirm",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "dependsOn": [
+                "pytest-host",
+                "build-mpy"
+            ],
+            "dependsOrder": "sequence",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "deploy-update-to-sdcard-nocheck",
+            "detail": "Compile, build SD-update payload (config + lib compiled to .mpy), and copy to G:\\update without running tests first",
+            "type": "shell",
+            "command": "python tools/build_update_payload.py --compiled --copy-to G:/update --no-confirm",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "dependsOn": [
+                "build-mpy"
+            ],
+            "dependsOrder": "sequence",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "hw-probe",
+            "detail": "Run hardware probe suite on connected Pico — writes JSON to SD (auto-toggles MicroPico)",
+            "type": "shell",
+            "command": ". .vscode\\micropico-port.ps1; Disconnect-MicroPico; mpremote run hw_probe.py; $rc=$LASTEXITCODE; Connect-MicroPico; exit $rc",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "pull-probe",
+            "detail": "Copy probe JSON results from Pico SD card to probe_results/ (auto-toggles MicroPico)",
+            "type": "shell",
+            "command": ". .vscode\\micropico-port.ps1; Disconnect-MicroPico; mpremote fs cp :/sd/hw_probe_*.json probe_results/; $rc=$LASTEXITCODE; Connect-MicroPico; exit $rc",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        }
+    ]
+}

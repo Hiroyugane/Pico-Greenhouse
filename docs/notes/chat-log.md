@@ -5,6 +5,39 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-16 · .gitignore refactor
+
+### decision · trimmed 676-line .gitignore to ~80 lines of project-relevant rules
+
+The old `.gitignore` was a stacked dump of GitHub templates: full
+Visual Studio / .NET, Django, Flask, Scrapy, RabbitMQ, ActiveMQ,
+Marimo, Streamlit, VS6, etc. — none of which apply to a MicroPython
+Pi Pico project. Rewrote it to keep only: OS/editor noise (incl.
+useful bits cherry-picked from a Flutter reference gitignore —
+`Thumbs.db`, `Desktop.ini`, `*.swp`, `.idea/`), Python essentials
+(bytecode, venv, test/lint caches), MicroPython `*.mpy`, Claude
+tooling, and Pi Greenhouse runtime artifacts (`sd/`, `*.csv`,
+`*.log`, `hw_probe_result.*`, `typings/`, `service_reminder.txt`,
+`.main_original.py`).
+
+### decision · .vscode/ allow-list expanded to all workspace-relative files
+
+Audited every file in `.vscode/` for absolute-path leakage before
+allow-listing. All current files use `${workspaceFolder}`, `~/`, or
+`$env:` only — no `C:\Users\...` paths. So the allow-list now
+covers `extensions.json`, `launch.json`, `settings.json`,
+`tasks.json`, `Git-codebase.code-workspace`, `micropico-port.ps1`,
+and `*.code-snippets`. Re-audit before allow-listing any new
+`.vscode/` file.
+
+### issue · `.github/workflows/ci.yml` was hidden by an accidental `.github/` ignore
+
+The old gitignore had `.github/` as a blanket ignore, which silently
+suppressed `.github/workflows/ci.yml`. `.github/copilot-instructions.md`
+was already tracked despite the ignore. Dropping the `.github/` rule
+in this refactor exposes `ci.yml` as untracked. Decide whether to add
+it to git — it's not part of the gitignore refactor commit.
+
 ## 2026-05-16 · Updater legacy update_dir fallback
 
 ### decision · `updater.legacy_update_dirs` keeps pre-2026-05-15 payloads applicable

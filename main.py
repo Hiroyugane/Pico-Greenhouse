@@ -642,6 +642,17 @@ async def main():
             else:
                 logger.warning("MAIN", "SD remount failed via OLED long-press")
 
+        debug_cfg = display_config.get("debug", {})
+
+        def _debug_blink_cb():
+            """Schedule a brief reminder-LED pattern after a debug action completes."""
+            try:
+                asyncio.create_task(
+                    led_handler.blink_pattern_async(debug_cfg.get("feedback_blink_ms", [80, 80, 80, 80]))
+                )
+            except Exception as exc:
+                logger.warning("MAIN", f"Debug feedback blink scheduling failed: {exc}")
+
         try:
             oled = OLEDDisplay(
                 i2c=hardware.get_i2c(),
@@ -657,6 +668,9 @@ async def main():
                 logger=logger,
                 co2_logger=co2_logger_obj,
                 soil_logger=soil_logger_obj,
+                heater=heater,
+                feedback_blink_cb=_debug_blink_cb if debug_cfg.get("enabled", True) else None,
+                event_log_path=logger_config.get("logfile", "/sd/logs/system.log"),
                 width=display_config.get("width", 128),
                 height=display_config.get("height", 64),
                 i2c_address=display_config.get("i2c_address", 0x3C),
@@ -667,6 +681,15 @@ async def main():
                 startup_banner_s=display_config.get("startup_banner_s", 2.0),
                 vram_clear_delay_s=display_config.get("vram_clear_delay_s", 0.05),
                 invert_delay_s=display_config.get("invert_delay_s", 0.1),
+                debug_confirm_timeout_s=debug_cfg.get("confirm_timeout_s", 8),
+                debug_status_show_ms=debug_cfg.get("status_show_ms", 3000),
+                debug_test_heater_s=debug_cfg.get("test_heater_s", 5),
+                debug_test_growlight_pulse_s=debug_cfg.get("test_growlight_pulse_s", 2),
+                debug_test_growlight_dim_levels_pct=debug_cfg.get(
+                    "test_growlight_dim_levels_pct", [0, 25, 50, 75, 100, 0]
+                ),
+                debug_test_growlight_dim_step_s=debug_cfg.get("test_growlight_dim_step_s", 1),
+                debug_test_relay_pulse_s=debug_cfg.get("test_relay_pulse_s", 1),
             )
             wdt.feed()  # Feed after OLED init
             logger.info("MAIN", f"OLED display initialized (on={oled.display_on})")

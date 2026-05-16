@@ -313,6 +313,21 @@ DEVICE_CONFIG = {
         "startup_banner_s": 2.0,  # How long to show the "Pi Greenhouse / Ready!" banner at init
         "vram_clear_delay_s": 0.05,  # Per-step delay during the triple-clear sequence at init
         "invert_delay_s": 0.1,  # Delay after invert/revert and final clear at init
+        # Debug Actions sub-menu (entered from the "debug" menu via long-press).
+        # Inside the sub-menu: short press cycles actions, long press executes
+        # the highlighted action. Destructive actions (wipe_logs) require a
+        # second long press to confirm.
+        "debug": {
+            "enabled": True,  # Master enable; False removes the menu entry
+            "confirm_timeout_s": 8,  # Confirm prompt auto-cancels after this many seconds
+            "status_show_ms": 3000,  # How long the "done"/"failed" status line stays on screen
+            "feedback_blink_ms": [80, 80, 80, 80],  # Reminder LED pattern played after a successful action
+            "test_heater_s": 5,  # Heater "ON-for-N-seconds" smoke-test duration
+            "test_growlight_pulse_s": 2,  # Relay pulse duration for the basic growlight test
+            "test_growlight_dim_levels_pct": [0, 25, 50, 75, 100, 0],  # DAC sweep when MCP4725 is present
+            "test_growlight_dim_step_s": 1,  # Dwell at each dim level
+            "test_relay_pulse_s": 1,  # Per-relay ON duration during the cycle test
+        },
     },
     # Output Pin Initial States
     "output_pins": {
@@ -574,6 +589,7 @@ def validate_config():
             "startup_banner_s",
             "vram_clear_delay_s",
             "invert_delay_s",
+            "debug",
         ],
         "updater": [
             "enabled",
@@ -743,6 +759,36 @@ def validate_config():
     for delay_key in ("startup_banner_s", "vram_clear_delay_s", "invert_delay_s"):
         if not isinstance(disp_cfg[delay_key], (int, float)) or disp_cfg[delay_key] < 0:
             raise ValueError(f"display.{delay_key} must be a number >= 0")
+
+    debug_cfg = disp_cfg["debug"]
+    debug_required = (
+        "enabled",
+        "confirm_timeout_s",
+        "status_show_ms",
+        "feedback_blink_ms",
+        "test_heater_s",
+        "test_growlight_pulse_s",
+        "test_growlight_dim_levels_pct",
+        "test_growlight_dim_step_s",
+        "test_relay_pulse_s",
+    )
+    for key in debug_required:
+        if key not in debug_cfg:
+            raise ValueError(f"Missing config key: display.debug.{key}")
+    if not isinstance(debug_cfg["enabled"], bool):
+        raise ValueError("display.debug.enabled must be a bool")
+    for s_key in ("confirm_timeout_s", "test_heater_s", "test_growlight_pulse_s", "test_growlight_dim_step_s", "test_relay_pulse_s"):
+        v = debug_cfg[s_key]
+        if not isinstance(v, (int, float)) or v <= 0:
+            raise ValueError(f"display.debug.{s_key} must be > 0")
+    if not isinstance(debug_cfg["status_show_ms"], int) or debug_cfg["status_show_ms"] <= 0:
+        raise ValueError("display.debug.status_show_ms must be an int > 0")
+    blink = debug_cfg["feedback_blink_ms"]
+    if not isinstance(blink, list) or not blink or any(not isinstance(x, int) or x < 0 for x in blink):
+        raise ValueError("display.debug.feedback_blink_ms must be a non-empty list of ints >= 0")
+    levels = debug_cfg["test_growlight_dim_levels_pct"]
+    if not isinstance(levels, list) or not levels or any(not isinstance(x, int) or not (0 <= x <= 100) for x in levels):
+        raise ValueError("display.debug.test_growlight_dim_levels_pct must be a non-empty list of ints 0-100")
 
     dac_addr = DEVICE_CONFIG["growlight"]["dac_i2c_address"]
     if not isinstance(dac_addr, int) or not (0x08 <= dac_addr <= 0x77):

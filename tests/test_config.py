@@ -370,6 +370,83 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["updater_feedback"]["fail_pattern"] = original
 
+    def test_display_debug_section_present(self):
+        """display.debug must exist with all expected tunables."""
+        from config import DEVICE_CONFIG
+
+        dbg = DEVICE_CONFIG["display"]["debug"]
+        for key in (
+            "enabled",
+            "confirm_timeout_s",
+            "status_show_ms",
+            "feedback_blink_ms",
+            "test_heater_s",
+            "test_growlight_pulse_s",
+            "test_growlight_dim_levels_pct",
+            "test_growlight_dim_step_s",
+            "test_relay_pulse_s",
+        ):
+            assert key in dbg, f"display.debug missing {key}"
+
+    def test_display_debug_missing_key_raises(self):
+        """Removing a display.debug key raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["display"]["debug"].pop("test_heater_s")
+        try:
+            with pytest.raises(ValueError, match="display.debug.test_heater_s"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["display"]["debug"]["test_heater_s"] = original
+
+    def test_display_debug_non_bool_enabled_raises(self):
+        """display.debug.enabled must be a bool."""
+        import config
+
+        original = config.DEVICE_CONFIG["display"]["debug"]["enabled"]
+        config.DEVICE_CONFIG["display"]["debug"]["enabled"] = "yes"
+        try:
+            with pytest.raises(ValueError, match="display.debug.enabled"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["display"]["debug"]["enabled"] = original
+
+    def test_display_debug_zero_heater_duration_raises(self):
+        """display.debug.test_heater_s must be > 0."""
+        import config
+
+        original = config.DEVICE_CONFIG["display"]["debug"]["test_heater_s"]
+        config.DEVICE_CONFIG["display"]["debug"]["test_heater_s"] = 0
+        try:
+            with pytest.raises(ValueError, match="display.debug.test_heater_s"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["display"]["debug"]["test_heater_s"] = original
+
+    def test_display_debug_invalid_dim_level_raises(self):
+        """display.debug.test_growlight_dim_levels_pct entries must be 0-100."""
+        import config
+
+        original = config.DEVICE_CONFIG["display"]["debug"]["test_growlight_dim_levels_pct"]
+        config.DEVICE_CONFIG["display"]["debug"]["test_growlight_dim_levels_pct"] = [0, 110]
+        try:
+            with pytest.raises(ValueError, match="display.debug.test_growlight_dim_levels_pct"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["display"]["debug"]["test_growlight_dim_levels_pct"] = original
+
+    def test_display_debug_feedback_blink_empty_raises(self):
+        """display.debug.feedback_blink_ms must be a non-empty list."""
+        import config
+
+        original = config.DEVICE_CONFIG["display"]["debug"]["feedback_blink_ms"]
+        config.DEVICE_CONFIG["display"]["debug"]["feedback_blink_ms"] = []
+        try:
+            with pytest.raises(ValueError, match="display.debug.feedback_blink_ms"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["display"]["debug"]["feedback_blink_ms"] = original
+
     def test_zero_fan2_interval_raises(self):
         """fan_2.interval_s = 0 raises ValueError."""
         import config

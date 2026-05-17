@@ -5,6 +5,32 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-17 · OLED SYSTEM screen surfaces build version
+
+### decision · combine date+time on row 0 to free a slot for `Ver:<hash>` on row 1
+
+`_render_system()` previously used 5 rows for date / time / uptime /
+buf / RAM, leaving no room for build identity. Row 0 now collapses
+into a 16-char `YYYY-MM-DD HH:MM` (slicing `now_timestamp()[:16]`,
+which fits the 16-char row truncation exactly), and row 1 becomes
+`Ver:<7-char git short hash>` — e.g. `Ver:c195be2` (11 chars). No
+existing field is dropped. Uptime / buf / RAM keep their rows 2–4.
+
+### decision · stamp `lib/build_info.py` from the payload builder, fall back to `Ver:dev`
+
+`tools/build_update_payload.py` now writes `lib/build_info.py`
+(VERSION = git short hash, BUILD_TIME = full ISO timestamp) into
+the working tree before collecting sources, so the raw-mode payload
+picks it up automatically, Thonny-direct flashes also get a stamped
+file, and `--compiled` mode additionally drops the same file into
+`<out>/lib/` with a manifest entry (since the compiled collector only
+takes `.mpy`). The file is gitignored. `lib/oled_display.py` does a
+guarded `from lib.build_info import VERSION` with two fallbacks (`from
+build_info import …` for on-device sys.path quirks, then literal
+`"dev"`), so unbuilt working trees and host runs read `Ver:dev`. No
+new `DEVICE_CONFIG` entries — build identity is build-time metadata,
+not operator-tunable behavior.
+
 ## 2026-05-17 · Updater short-circuits when payload already on flash
 
 ### issue · same-version SD update failed with only "start" line and failure jingle

@@ -5,6 +5,39 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-17 · OLED SYSTEM screen shows build version
+
+**Branch:** `main`
+**Why hardware-only:** Verifies that `lib/build_info.py` actually
+ships in the payload, gets imported on-device, and the new row 1
+literal `Ver:<hash>` fits the 16-char OLED row without truncation
+artifacts the host shim can't simulate (real SSD1306 + real font).
+Also confirms the combined `YYYY-MM-DD HH:MM` on row 0 reads cleanly
+from the live RTC, not just from a mocked `now_timestamp()`.
+**Pre-flight:** Run `python tools/build_update_payload.py
+--copy-to G:/ota/pending --no-confirm` so the working tree
+contains a freshly-stamped `lib/build_info.py`. Flash via Thonny
+(or let the updater run from `/sd/update/`). Note the local
+`git rev-parse --short HEAD` value before booting.
+
+### SYSTEM screen renders new layout
+
+- [ ] After boot, short-press the menu button until SYSTEM is
+  reached (sixth screen).
+- [ ] Row 0 reads `YYYY-MM-DD HH:MM` (16 chars exactly), matching
+  the RTC date and time.
+- [ ] Row 1 reads `Ver:<hash>` where `<hash>` equals the
+  7-character output of `git rev-parse --short HEAD` captured
+  during pre-flight.
+- [ ] Rows 2–4 still show `Up: …`, `Buf:…`, `RAM: …%` as before
+  (no regressions).
+- [ ] No text wraps to row 5 / no garbled characters at the right
+  edge of any row.
+
+### Notes (post-test)
+
+> Fill in here.
+
 ## 2026-05-17 · Updater same-version short-circuit (noop jingle)
 
 **Branch:** `main`

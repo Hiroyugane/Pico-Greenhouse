@@ -461,6 +461,40 @@ class TestOLEDDisplayAdditionalCoverage:
         ]
         assert any(r.startswith("RAM: 25.0%") for r in ram_rows)
 
+    def test_render_system_row0_is_combined_date_time(self, oled_display):
+        """Row 0 collapses YYYY-MM-DD HH:MM:SS into 16-char YYYY-MM-DD HH:MM."""
+        oled_display._row = Mock()
+        oled_display._time_provider.now_timestamp = Mock(return_value="2026-04-05 12:34:56")
+        oled_display._buffer_manager.get_metrics = Mock(return_value={"buffer_entries": 0})
+        oled_display._render_system()
+        oled_display._row.assert_any_call("2026-04-05 12:34", 0)
+
+    def test_render_system_row1_shows_build_version(self, oled_display):
+        """Row 1 shows the build version (stamped by build_update_payload)."""
+        oled_display._row = Mock()
+        oled_display._time_provider.now_timestamp = Mock(return_value="2026-04-05 12:34:56")
+        oled_display._buffer_manager.get_metrics = Mock(return_value={"buffer_entries": 0})
+        with patch("lib.oled_display._BUILD_VERSION", "abc1234"):
+            oled_display._render_system()
+        oled_display._row.assert_any_call("Ver:abc1234", 1)
+
+    def test_render_system_row1_shows_dev_when_unstamped(self, oled_display):
+        """When lib/build_info is missing, _BUILD_VERSION falls back to 'dev'."""
+        oled_display._row = Mock()
+        oled_display._time_provider.now_timestamp = Mock(return_value="2026-04-05 12:34:56")
+        oled_display._buffer_manager.get_metrics = Mock(return_value={"buffer_entries": 0})
+        with patch("lib.oled_display._BUILD_VERSION", "dev"):
+            oled_display._render_system()
+        oled_display._row.assert_any_call("Ver:dev", 1)
+
+    def test_render_system_short_timestamp_does_not_crash(self, oled_display):
+        """Defensive: short/garbage timestamps from time_provider don't blow up."""
+        oled_display._row = Mock()
+        oled_display._time_provider.now_timestamp = Mock(return_value="?")
+        oled_display._buffer_manager.get_metrics = Mock(return_value={"buffer_entries": 0})
+        oled_display._render_system()
+        oled_display._row.assert_any_call("?", 0)
+
     def test_render_soil_no_logger(self, oled_display):
         oled_display._row = Mock()
         oled_display._soil_logger = None

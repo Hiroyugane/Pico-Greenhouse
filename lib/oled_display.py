@@ -35,6 +35,15 @@ except AttributeError:
         return int(time.time() * 1000)
 
 
+try:
+    from lib.build_info import VERSION as _BUILD_VERSION
+except ImportError:
+    try:
+        from build_info import VERSION as _BUILD_VERSION  # on-device sys.path
+    except ImportError:
+        _BUILD_VERSION = "dev"
+
+
 # ── Menu identifiers (ordered) ─────────────────────────────────────────────
 MENUS = ("temp", "humidity", "service", "sd", "alerts", "system", "relays", "co2", "soil", "debug")
 
@@ -758,8 +767,7 @@ class OLEDDisplay:
     def _render_system(self) -> None:
         self._header("SYSTEM")
         now = self._time_provider.now_timestamp() if self._time_provider else "?"
-        time_str = now[11:16] if len(now) >= 16 else now  # HH:MM
-        date_str = now[:10] if len(now) >= 10 else now  # YYYY-MM-DD
+        date_time_str = now[:16] if len(now) >= 16 else now  # "YYYY-MM-DD HH:MM"
         metrics = self._buffer_manager.get_metrics() if self._buffer_manager else {}
         buffered = metrics.get("buffer_entries", 0)
 
@@ -771,8 +779,8 @@ class OLEDDisplay:
         else:
             used_pct = 0
 
-        self._row(date_str, 0)
-        self._row(time_str, 1)
+        self._row(date_time_str, 0)
+        self._row(f"Ver:{_BUILD_VERSION}", 1)
         self._row(f"Up: {self._uptime_str()}", 2)
         self._row(f"Buf:{buffered}", 3)
         self._row(f"RAM: {used_pct:.1f}%", 4)

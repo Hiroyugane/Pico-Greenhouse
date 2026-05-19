@@ -5,6 +5,70 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-19 · SD reliability + watchdog-feed pass
+
+**Branch:** `main`
+**Why hardware-only:** Six interlocking changes touch real SPI timing,
+real SD card behavior, and the actual watchdog timer — none of which
+the host shim exercises. Verifies the silent-reset rate drops, no
+startup log entries get lost across an SD-eject cycle, and the new
+reset-cause label is correct on a deliberate WDT trip.
+**Pre-flight:** Wipe `/sd/logs/system.log` so the new run is easy to
+read in isolation. Confirm `git rev-parse --short HEAD` matches the
+fix series (last commit: docs append). Reseat SD card; note its
+make/model. Flash the new code via the OTA path or Thonny.
+
+### Silent-reset rate after the fixes
+
+- [ ] Boot the system and let it run for at least 2 hours with no
+  manual intervention.
+- [ ] `grep -c "System startup" /sd/logs/system.log` returns ≤ 3 over
+  the 2-hour window (previous run: 86 startups in ~42 h ≈ 2.05/h, so
+  ≤ 3 over 2 h ≈ ≤ 1.5/h = at least 25% reduction; aim is more).
+- [ ] No truncated startup patterns (every `System startup` line is
+  followed within ~5 s by `TempHumidityLogger Initialized`,
+  `Heater controller initialized`, `Fan controllers initialized`).
+
+### Reset cause logging
+
+- [ ] Each `[MAIN] System startup` line now ends with
+  `(reset_cause=PWRON_RESET)` or similar.
+- [ ] Force a WDT reset by holding a long-press during a known
+  blocking operation OR by temporarily setting
+  `watchdog_timeout_ms=1000` in config and ensuring at least one
+  task overruns. Confirm the *next* boot's startup line reads
+  `(reset_cause=WDT_RESET)`.
+- [ ] Revert the watchdog timeout to 8000 ms.
+
+### Fallback drain on boot (no more data loss)
+
+- [ ] With SD card inserted and healthy, boot the system; after
+  init completes, eject the SD physically.
+- [ ] Wait 90 s (verify `[StatusMgr] SD status changed: FAILED`
+  appears, plus several `Write went to fallback` rows in the
+  console).
+- [ ] Reinsert the SD; wait for `[MAIN] SD card re-mounted after
+  hot-swap`.
+- [ ] Power-cycle the Pico **before** the next health-loop iteration
+  (so fallback has rows in it at boot).
+- [ ] On the next boot, the new `[STARTUP] Drained N fallback row(s)
+  from previous boot` line appears (N > 0) and the migrated rows
+  show up in the matching CSV under `/sd/sensors/...`.
+
+### SPI baudrate drop
+
+- [ ] After at least 1 hour of running, count
+  `grep -c "SD status changed: FAILED" /sd/logs/system.log` — expect
+  noticeably less than the prior 32-in-42-hour rate (≤ 1 per hour).
+- [ ] CSV write cadence under `/sd/sensors/th/2026/` matches the
+  configured `interval_s` (30 s) — confirms the lower baudrate isn't
+  the new bottleneck.
+
+### Notes (post-test)
+
+> Fill in here. Append `[!]` rows with failure mode + console snippet
+> for anything that regresses.
+
 ## 2026-05-17 · OLED SYSTEM screen shows build version
 
 **Branch:** `main`

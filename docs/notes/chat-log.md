@@ -5,6 +5,101 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-19 · SD reliability + watchdog resilience pass
+
+### issue · Pico restarted ~86× in 42 h with no exceptions in the log
+
+The shipped `sd/logs/system.log` (1491 lines, 2026-05-16 23:30 →
+2026-05-18 16:38) contained 86 `System startup` lines but zero
+`[ERR]` / traceback / exception markers. Many restart clusters
+were tight (1–3 min apart). Watchdog timeout was 8000 ms; the
+trips were silent — no console message, just an immediate reboot.
+
+### decision · bound `migrate_fallback()` per call and feed WDT between rows
+
+Root cause of the silent resets was identified as
+`BufferManager.migrate_fallback()` running synchronously inside the
+60 s health loop with no row cap and no WDT feed. A backlog of
+30+ rows on a slow SD takes longer than 8 s of synchronous SPI
+work, which is the exact failure mode that resets the Pico without
+logging anything.
+
+`migrate_fallback()` now drains at most
+`system.fallback_migrate_batch_max` rows per call (default 20),
+feeds the watchdog between every row, and rewrites the fallback
+file with the remainder so chronological order is preserved across
+the multi-pass drain. The health-check loop fires it once per
+cycle, so a 100-row backlog drains in ~5 health cycles instead of
+one watchdog-tripping pass.
+
+### decision · drain fallback at boot instead of wiping it
+
+`buffer_manager.clear_fallback_startup()` was called unconditionally
+in `main()` at boot, wiping the fallback CSV. That is what caused
+the "truncated startup" log pattern (only `System startup`,
+`CO2 override wired`, `OLED display initialized`, `Growlight ON`
+surviving): log entries that hadn't flushed to primary before the
+prior reset went to fallback, then got wiped on the next boot.
+
+`main()` now calls `migrate_fallback()` up to twice at boot when SD
+is mounted, preserving the prior boot's data and emitting
+`[STARTUP] Drained N fallback row(s) from previous boot`. The bound
+on the loop keeps init time predictable; the health loop drains
+any remainder.
+
+### decision · feed WDT inside `WriteQueueManager._drain_batch` and `sd_integration.is_mounted` recovery
+
+Two more synchronous SD paths were unprotected: the write-queue
+drain (up to 5 SPI writes per cycle) and the MBR-read-fail recovery
+inside `is_mounted` (umount + SPI deinit + sleep_ms(200) + reinit +
+re-read). Both now accept a `wdt_feed` callable injected from
+`main.feed_wdt` and call it between each blocking step. Exceptions
+from the callback are swallowed so a misbehaving WDT driver can
+never abort the recovery path.
+
+### decision · drop default SPI baudrate from 40 MHz → 10 MHz
+
+40 MHz over the Pico SD_CON path with series resistors R8/R10 was
+too aggressive for the field cabling — the 32× `SD status changed:
+FAILED` over 42 h indicates SPI bit errors, not yanked cards.
+10 MHz is the field-tested setting; bandwidth is not the bottleneck
+(CSV rows are ~30 bytes), so this is a pure reliability win.
+
+### decision · log `machine.reset_cause()` on every boot
+
+`[MAIN] System startup` lines now end with the named reset cause
+(`PWRON_RESET`, `WDT_RESET`, `BROWNOUT_RESET`, …). When the next
+silent-reset bug shows up, the operator can tell at a glance
+whether it was the watchdog, a brown-out, a soft reset from the
+updater, or the user pressing RES_BTN. Mapping is best-effort:
+unknown codes fall through to `code=N`; failures (older firmware
+that lacks `reset_cause`) fall back to `unknown` without blocking
+boot. Host shim exposes the same constants so tests stay valid.
+
+### issue · CO2 sensor reading constant 10000 ppm on 2026-05-18
+
+`sd/sensors/co2/2026/co2_2026-05-18.csv` has all 1696 rows pinned
+at 10000 ppm, which keeps the CO2 override permanently ON and the
+exhaust fan running non-stop. This is sensor-side (likely
+calibration, ABC drift, or a UART framing issue) — not a software
+bug — but it's contributing to the I/O / power load that the rest
+of this session is trying to stabilise. **Flagged for bench
+verification, not auto-fixed.** Operator should run
+`prototypes/co2_test.py` (or similar) with a known-clean room and
+compare against the sensor datasheet's ABC window.
+
+### note · log timestamps go backwards in the wild
+
+[sd/logs/system.log:230-239](../../sd/logs/system.log#L230-L239)
+contains a row stamped `16:18:29` after rows stamped `16:23:23`,
+because `migrate_fallback()` re-injects old rows into the primary
+log after newer rows have already been written. The bounded-batch
+migration doesn't fully solve this — it just makes the windows
+smaller. A proper fix would teach `EventLogger` to write fallback
+rows under a separate `*.replay.log` file at migration time. Left
+as a follow-up; current session's priority was stopping the silent
+resets.
+
 ## 2026-05-17 · OLED SYSTEM screen surfaces build version
 
 ### decision · combine date+time on row 0 to free a slot for `Ver:<hash>` on row 1

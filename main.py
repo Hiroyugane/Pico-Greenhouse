@@ -34,8 +34,38 @@ if sys.implementation.name != "micropython":  # type: ignore[union-attr]
     )  # type: ignore[attr-defined]
     sys.path.insert(0, host_shims_path)
 
+import machine
 import uasyncio as asyncio
 from machine import ADC, UART, WDT, Pin
+
+
+def _describe_reset_cause() -> str:
+    """Return a human-readable label for ``machine.reset_cause()``.
+
+    Mapping is best-effort: MicroPython's rp2 port exposes named constants
+    (PWRON_RESET, WDT_RESET, BROWNOUT_RESET, …) but other ports may add
+    extras. Unknown codes fall through to the raw integer. Errors here
+    never block boot — the caller treats this as best-effort diagnostics.
+    """
+    try:
+        code = machine.reset_cause()
+    except Exception:
+        return "unknown"
+
+    name_map = {}
+    for name in (
+        "PWRON_RESET",
+        "HARD_RESET",
+        "WDT_RESET",
+        "DEEPSLEEP_RESET",
+        "SOFT_RESET",
+        "BROWNOUT_RESET",
+    ):
+        value = getattr(machine, name, None)
+        if isinstance(value, int):
+            name_map[value] = name
+    label = name_map.get(code, f"code={code}")
+    return label
 
 from config import DEVICE_CONFIG, validate_config
 from lib import boot_log
@@ -338,7 +368,8 @@ async def main():
 
     wdt.feed()  # Feed after logger init
 
-    logger.info("MAIN", "System startup")
+    reset_label = _describe_reset_cause()
+    logger.info("MAIN", f"System startup (reset_cause={reset_label})")
     log_lvl = logger_config.get("log_level", "INFO")
     dbg_on = logger_config.get("debug_enabled", False)
     logger.debug("MAIN", f"log_level={log_lvl}, debug_enabled={dbg_on}")

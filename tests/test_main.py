@@ -364,6 +364,41 @@ class TestMainStartup:
             DEVICE_CONFIG["system"]["require_sd_startup"] = orig
 
 
+class TestDescribeResetCause:
+    """Tests for the reset-cause logging helper."""
+
+    def test_returns_pwron_label_for_pwron_code(self, monkeypatch):
+        """Known reset codes map to their MicroPython constant name."""
+        import main as main_module
+
+        monkeypatch.setattr(main_module.machine, "reset_cause", lambda: main_module.machine.PWRON_RESET)
+        assert main_module._describe_reset_cause() == "PWRON_RESET"
+
+    def test_returns_wdt_label_for_wdt_code(self, monkeypatch):
+        """WDT_RESET maps cleanly — this is the label we'll most want to see."""
+        import main as main_module
+
+        monkeypatch.setattr(main_module.machine, "reset_cause", lambda: main_module.machine.WDT_RESET)
+        assert main_module._describe_reset_cause() == "WDT_RESET"
+
+    def test_returns_code_for_unknown_value(self, monkeypatch):
+        """Unknown integer codes fall through to a 'code=N' representation."""
+        import main as main_module
+
+        monkeypatch.setattr(main_module.machine, "reset_cause", lambda: 99)
+        assert main_module._describe_reset_cause() == "code=99"
+
+    def test_returns_unknown_when_reset_cause_raises(self, monkeypatch):
+        """A throwing reset_cause() must not block boot diagnostics."""
+        import main as main_module
+
+        def boom():
+            raise RuntimeError("port has no reset_cause")
+
+        monkeypatch.setattr(main_module.machine, "reset_cause", boom)
+        assert main_module._describe_reset_cause() == "unknown"
+
+
 @pytest.mark.asyncio
 class TestMainHealthCheck:
     """Tests for main loop health-check logic."""

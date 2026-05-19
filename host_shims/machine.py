@@ -62,6 +62,25 @@ def reset():
     _print("[HOST machine] reset() called — no-op on host")
 
 
+# MicroPython exposes these as module-level constants; numeric values match
+# the rp2 port (machine.PWRON_RESET=1, machine.WDT_RESET=3, etc.) so host
+# tests assert against the same ints the device produces.
+PWRON_RESET = 1
+HARD_RESET = 2
+WDT_RESET = 3
+DEEPSLEEP_RESET = 4
+SOFT_RESET = 5
+BROWNOUT_RESET = 6
+
+# Host runs are always cold boots from this process's point of view.
+_HOST_RESET_CAUSE = PWRON_RESET
+
+
+def reset_cause() -> int:
+    """Return the cause of the last reset (host: always PWRON_RESET)."""
+    return _HOST_RESET_CAUSE
+
+
 def idle():
     time.sleep(0.001)
 

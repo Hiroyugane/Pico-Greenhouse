@@ -61,6 +61,17 @@ _machine_mock.SPI = MagicMock()
 _machine_mock.I2C = MagicMock()
 _machine_mock.RTC = MagicMock
 
+# Reset-cause constants — values match MicroPython rp2 port. The bare
+# MagicMock would otherwise auto-create truthy attributes that aren't ints,
+# which breaks _describe_reset_cause()'s lookup.
+_machine_mock.PWRON_RESET = 1
+_machine_mock.HARD_RESET = 2
+_machine_mock.WDT_RESET = 3
+_machine_mock.DEEPSLEEP_RESET = 4
+_machine_mock.SOFT_RESET = 5
+_machine_mock.BROWNOUT_RESET = 6
+_machine_mock.reset_cause = MagicMock(return_value=_machine_mock.PWRON_RESET)
+
 
 # Make PWM() return a mock with freq/duty_u16/deinit tracking
 def _make_pwm(*args, **kwargs):

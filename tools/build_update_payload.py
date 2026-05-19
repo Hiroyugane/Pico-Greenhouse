@@ -227,7 +227,10 @@ def _copy_to_sd(out_dir: Path, dest: Path, *, confirm: bool) -> None:
     dest = dest.resolve() if dest.exists() else dest
     parent = dest.parent
     if not parent.exists():
-        raise FileNotFoundError(f"destination parent does not exist: {parent} — is the SD card mounted?")
+        anchor = Path(dest.anchor) if dest.anchor else parent
+        if not anchor.exists():
+            raise FileNotFoundError(f"SD card root not found at {anchor} — is the SD card mounted?")
+        parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
         if confirm:
             answer = input(f"Replace existing {dest}? [y/N]: ").strip().lower()

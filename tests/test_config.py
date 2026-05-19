@@ -1400,6 +1400,25 @@ class TestValidateConfig:
             config.DEVICE_CONFIG["system"]["watchdog_feed_interval_ms"] = orig_feed
             config.DEVICE_CONFIG["system"]["watchdog_timeout_ms"] = orig_timeout
 
+    def test_fallback_migrate_batch_max_zero_raises(self):
+        """system.fallback_migrate_batch_max <= 0 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["system"]["fallback_migrate_batch_max"]
+        config.DEVICE_CONFIG["system"]["fallback_migrate_batch_max"] = 0
+        try:
+            with pytest.raises(ValueError, match="fallback_migrate_batch_max"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["system"]["fallback_migrate_batch_max"] = original
+
+    def test_fallback_migrate_batch_max_default_valid(self):
+        """The shipped fallback_migrate_batch_max default validates clean."""
+        import config
+
+        assert config.DEVICE_CONFIG["system"]["fallback_migrate_batch_max"] > 0
+        assert config.validate_config() is True
+
     def test_invalid_log_level_raises(self):
         """event_logger.log_level with invalid value raises ValueError."""
         import config

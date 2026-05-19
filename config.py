@@ -450,6 +450,11 @@ DEVICE_CONFIG = {
         "queue_drain_interval_ms": 100,  # Milliseconds between drain cycles
         "queue_batch_size": 5,  # Max writes per drain cycle
         "sd_recovery_max_consecutive_failures": 5,  # Max failures before giving up in recovery attempt
+        # Max fallback rows migrated to primary per migrate_fallback() call.
+        # Caps the synchronous SD work the health-check loop does in one
+        # pass so a backlog of 50+ rows cannot exceed watchdog_timeout_ms;
+        # remaining rows drain on subsequent loop iterations.
+        "fallback_migrate_batch_max": 20,
     },
     # Software Updater Configuration (SD-payload self-update; see lib/updater.py)
     #
@@ -798,6 +803,7 @@ def validate_config():
             "queue_drain_interval_ms",
             "queue_batch_size",
             "sd_recovery_max_consecutive_failures",
+            "fallback_migrate_batch_max",
         ],
     }
 
@@ -1041,6 +1047,9 @@ def validate_config():
 
     if DEVICE_CONFIG["system"]["sd_recovery_max_consecutive_failures"] <= 0:
         raise ValueError("system.sd_recovery_max_consecutive_failures must be > 0")
+
+    if DEVICE_CONFIG["system"]["fallback_migrate_batch_max"] <= 0:
+        raise ValueError("system.fallback_migrate_batch_max must be > 0")
 
     # Validate status_leds.walk_order: non-empty list of unique role names
     valid_walk_roles = ("activity", "sd", "reminder", "warning", "error")

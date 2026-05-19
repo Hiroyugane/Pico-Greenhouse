@@ -5,6 +5,82 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-19 · SD detection tolerant of missing /sd/logs and empty cards
+
+### issue · fresh FAT-formatted card with no /sd/logs triggers reset loop
+
+Operator reported the require_sd_startup failure state (sd_led +
+error_led, reset after 10 s) on cards that mount cleanly but have no
+`/sd/logs/` directory — i.e. freshly FAT-formatted with no files. The
+mount itself succeeds; the cascade comes from downstream writers
+hitting a missing parent and racing the boot-time SD health logic.
+
+### decision · ensure DEVICE_CONFIG["paths"] tree at every successful mount
+
+`HardwareFactory._init_sd()` now calls a new `_ensure_sd_layout()`
+helper on each success path (host simulation, retry-loop mount,
+is_mounted fallback). The helper mkdirs every entry from
+`DEVICE_CONFIG["paths"]` that lives under the mount point — `logs`,
+`sensors`, `ota/pending`, `ota/applied`, `diagnostics` by default — so
+the first EventLogger / updater / sensor-logger write lands in a real
+directory instead of falling through to fallback. Failures during
+layout creation append to `self.errors` but do **not** flip
+`sd_mounted` back to False; the card is mounted and writable at the
+root, and the affected subtree degrades to fallback as before.
+
+The layout list is derived from existing config (no new tunables) per
+[configurability.md](../../.claude/rules/ecc/common/configurability.md);
+the only new code is in `lib/hardware_factory.py`.
+
+## 2026-05-19 · Verify retry-on-OSError to tolerate SD bus stalls
+
+### issue · breadcrumb run pinpointed SD bus drop at lib/co2_logger.mpy
+
+On-hardware run after [42c010c](42c010c) (breadcrumbs) and a manual
+mpremote flash produced a definitive failure trail in `/boot.log`:
+verify passed `main.py`, `config.mpy`, and the first five lib `.mpy`
+files, then hit `hash_fail timeout waiting for response` on
+`lib/co2_logger.mpy`. Every one of the 25 files after that point was
+reported as `missing` — but they aren't actually missing. The SD bus
+was wedged after the timeout, so every subsequent `os.stat()` raised
+`OSError` and `_exists()` swallowed it as False, producing a
+misleading 25-file "missing" cascade in the `verify_fail` detail.
+
+Diagnosis: SD bus drops under sustained read traffic at 10 MHz SPI,
+even after the R8 removal in [10257d9](10257d9). The updater logic
+itself is correct; the bus is the bottleneck.
+
+### decision · add `updater.verify_max_retries` / `verify_retry_delay_ms`
+
+Mirror the existing `apply()` retry pattern in `verify_payload()`.
+A transient `OSError` on `os.stat()` or `_hash_file()` now retries up
+to `verify_max_retries` times with `verify_retry_delay_ms` sleep
+between attempts, feeding the WDT in the gap. Semantic mismatches
+(`size_mismatch`, `hash_mismatch`) return immediately — they aren't
+bus glitches and retrying would just waste time + WDT budget.
+
+Behavior change: the old "missing file: X" error string is now
+"stat failed for X: `<oserror>`" because the retry boundary is OSError,
+not the False return of `_exists()`. A genuinely missing file
+surfaces as `stat_fail ENOENT …` instead of `missing`. Honest, and
+distinguishes "ENOENT" from "bus timeout" via the included error
+message.
+
+### deviation · `_verify_one_with_retry` helper instead of inlining
+
+verify_payload was already at ~50 lines and adding the retry loop
+inline would have pushed it past the project's 50-line function
+budget. Pulled the per-file stat/hash sequence into
+`_verify_one_with_retry` returning either `None` (ok) or
+`(breadcrumb_kind, detail)` so the caller stays simple.
+
+### note · the new knobs are configurable per the configurability rule
+
+Default values (`3` retries, `200 ms`) match the existing
+`max_retries` / `retry_delay_ms` for apply. New keys plumbed through
+`DEVICE_CONFIG`, `validate_config()`, and `tests/test_config.py` in
+[c6200dd](c6200dd) as required.
+
 ## 2026-05-19 · SD-update verify/apply breadcrumbs
 
 ### issue · Pico's `start` line lands on SD, no follow-up line lands, fail jingle still plays

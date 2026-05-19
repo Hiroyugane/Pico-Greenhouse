@@ -5,6 +5,41 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-19 · Verify retry-on-OSError under SD bus stalls
+
+**Branch:** `main`
+**Why hardware-only:** Whether `verify_max_retries=3` is enough to
+recover from real SD bus stalls under a 150 KB payload read can only
+be observed on the real Pico + real SD card. Host tests prove the
+control flow; only on-device runs prove the timing budget.
+**Pre-flight:** Flash latest main to Pico via `flash-mpremote-nocheck`
+(includes the retry-aware updater). Delete `/boot.log` on flash for
+a clean trail. Build payload with `deploy-update-to-sdcard-nocheck`.
+
+### Confirm verify completes under bus stalls
+
+- [ ] Power-cycle Pico with payload at `G:\ota\pending\`.
+- [ ] Apply succeeds (success jingle, all LEDs lit). On failure,
+  re-check `/boot.log` for the failure point.
+- [ ] `/sd/logs/updates.log` ends with `apply_ok …`.
+- [ ] `/boot.log` contains `verify start files=N` and `verify done
+  errors=0`. Per-file `verify <rel> ok` lines for all files.
+
+### Confirm retry budget on a deliberately glitchy run
+
+- [ ] If verify still fails: `/boot.log` should now show
+  `verify <rel> stat_fail …` or `verify <rel> hash_fail …` instead
+  of the misleading `missing` cascade — only the actually-glitched
+  file is flagged.
+- [ ] Optionally raise `updater.verify_max_retries` to `5` and
+  `updater.verify_retry_delay_ms` to `400` in `config.py` and
+  retest. Expect more glitchy runs to succeed; if even that doesn't
+  help, the SD bus is the problem (cabling, baud, card).
+
+### Notes (post-test)
+
+>
+
 ## 2026-05-19 · SD-update verify/apply breadcrumbs to /boot.log
 
 **Branch:** `main`

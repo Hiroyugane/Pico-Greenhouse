@@ -46,6 +46,11 @@ def log(message: str) -> None:
     _write_to_file(message)
 
 
+def write(message: str) -> None:
+    """Append ``message`` to the log file only (no console echo)."""
+    _write_to_file(message)
+
+
 def _write_to_file(message: str) -> None:
     """Append ``message`` to the log file, truncating on first write."""
     global _first_write

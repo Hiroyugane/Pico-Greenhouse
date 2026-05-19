@@ -5,6 +5,61 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-19 · External 5 V supply starves VSYS — 1N4002 drop traced
+
+### issue · root cause of SD / boot failures on external 5 V supply
+
+Symptoms on the production wiring (XL4015 buck + 1N4002 input diodes →
+Pico VSYS): boot halts after the I²C1-init line in `/boot.log`,
+sometimes with sd+error LEDs lit, sometimes silent with the relay
+LEDs dim-then-HIGH cycling on WDT reset. Working from USB power.
+Bench measurements:
+
+- Connector (pre-diode): 4.99 V
+- Post-diode → Pico VSYS: **3.05–3.4 V**
+- XL4015 no-load output: 5.14 V, CC trimpot maxed (clicker), CV pot
+  reaches setpoint, indicator stays in CV mode.
+
+The XL4015 was the first suspect (CC limit, clone module, transient
+response), but tracing the rail showed two 1N4002s in series before
+VSYS. Two silicon diodes drop ~1.6 V at the SD-inrush load, which
+collapses VSYS to ~3.4 V — barely above the on-board RT6150B-33
+buck-boost's working minimum (~1.8 V) and far below what the SD card
+needs through inrush. USB power bypasses the diode chain entirely,
+which is why the device works on USB.
+
+### decision · swap 1N4002 → Schottky in next PCB revision
+
+Next hardware revision replaces the input diodes with Schottky (e.g.
+**SS14** SMA / **1N5817** DO-41 / **MBRS340** for ≥ 3 A headroom).
+Forward drop falls from ~0.8 V to ~0.3 V per diode, restoring ~1 V of
+headroom and keeping VSYS comfortably in the Pico's operating range
+under SD inrush. Also evaluate whether the two-diode series is
+genuinely needed (reverse-polarity protection only needs one); if
+redundant, drop to a single Schottky.
+
+Pair the swap with a **470 µF–1000 µF electrolytic + 100 nF ceramic**
+at the Pico VSYS pin to absorb SD inrush — the buck's transient
+response is poor for sudden 200 mA steps and the bulk cap is cheap
+insurance regardless of diode choice. See linked entry in
+[hw-test-log.md](../test/hw-test-log.md) for post-revision
+verification steps.
+
+### decision · interim workaround: raise buck output to ~6.0 V
+
+Until the PCB revision lands, the XL4015 CV trimpot can be set to
+**~6.0 V** (not higher) so that VSYS post-diode lands ~5.0 V under
+typical idle and ≥ 4.4 V through SD inrush. Hard ceiling is **Pico
+VSYS abs max = 5.5 V**; the diode drop is current-dependent (smaller
+at idle than under load), so cranking the buck above 6.2 V risks
+overshooting abs max when the system goes quiet.
+
+Workaround is conditional on **only the Pico being downstream of
+the diodes** — anything else on the post-diode rail (SHT31, OLED,
+relay coil drive) would see 5.0+ V and may exceed its own abs-max.
+Trace the rail before adjusting. Mark the buck physically so future
+sessions don't crank it further by mistake.
+
 ## 2026-05-19 · Boot.log proves ENODEV on mount; classify and reformat
 
 ### issue · all 3 mount_sd attempts return ENODEV on the operator's card

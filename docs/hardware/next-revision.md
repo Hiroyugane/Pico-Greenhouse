@@ -1,0 +1,55 @@
+# Next hardware revision — queued changes
+
+> Canonical, append-only checklist of every change planned for the
+> next PCB / enclosure / wiring revision. Read this before opening
+> the schematic editor. Per
+> [.claude/rules/ecc/common/hardware-revision-notes.md](../../.claude/rules/ecc/common/hardware-revision-notes.md).
+>
+> Newest item on top. Each item links to the `docs/notes/chat-log.md`
+> entry where the root cause / decision was captured, so the full
+> rationale is one click away.
+>
+> Use `[ ]` queued, `[x]` shipped on the new revision, `[~]` deferred
+> with a reason in the entry body.
+
+## Electrical / PCB
+
+### [ ] Replace 1N4002 input diodes with Schottky (+ bulk cap at VSYS)
+
+**Filed:** 2026-05-19 ·
+[chat-log entry](../notes/chat-log.md#2026-05-19--external-5-v-supply-starves-vsys--1n4002-drop-traced) ·
+[memory: project-power-input-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_power_input_revision.md)
+
+- Swap both 1N4002 → **SS14** (SMA 1 A) / **1N5817** (DO-41 1 A) /
+  **MBRS340** (3 A headroom). Forward drop falls from ~0.8 V to
+  ~0.3 V per diode.
+- Evaluate whether the second series diode is needed. If both are
+  reverse-polarity protection, drop to a single Schottky.
+- Add **470 µF–1000 µF low-ESR electrolytic + 100 nF ceramic** at
+  Pico VSYS pin 39, leads as short as practical, to absorb SD
+  inrush.
+- After fab: re-verify per
+  [hw-test-log "VSYS rail validation"](../test/hw-test-log.md)
+  and revert the interim XL4015 setpoint from 6.0 V back to 5.0 V.
+
+### [ ] Move fans from 2× relays to PCA9685 + IRLZ44N MOSFETs
+
+**Filed:** 2026-05-16 ·
+[memory: project-fan-hardware-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_fan_hardware_revision.md)
+
+- Replace 2-relay fan control with a **PCA9685** 16-ch PWM driver
+  on I2C0 (shared with SHT31), each channel driving an **IRLZ44N**
+  MOSFET. Frees the two relay GPIOs, scales to 5+ fans, unlocks
+  variable speed.
+- Planned fan roster: exhaust, growroom walls, growroom center,
+  heater distribution, case.
+- Steps 1–4 of the suggested build order in the memory entry are
+  firmware-side and can land before the PCB arrives.
+
+## Mechanical / enclosure
+
+> (none queued yet)
+
+## Wiring / harness
+
+> (none queued yet)

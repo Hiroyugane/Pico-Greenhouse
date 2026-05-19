@@ -238,6 +238,99 @@ class TestIsMounted:
         assert result[1] is mock_sd_instance
         assert result[2] is mock_spi_instance
 
+    def test_is_mounted_device_mbr_fail_feeds_watchdog(self):
+        """Device recovery path feeds wdt_feed at each blocking step.
+
+        Why: the recovery path runs synchronously and stacks umount,
+        SPI deinit, sleep_ms(200), SDCard reinit, and another MBR read.
+        Without WDT feeds inside that block, a slow card pushes total
+        latency past the watchdog window and triggers a silent reset.
+        """
+        import lib.sd_integration as sd_mod
+
+        first_sd = Mock()
+        first_sd.readblocks = Mock(side_effect=OSError("read error"))
+        second_sd = Mock()
+        second_sd.readblocks = Mock()
+
+        mock_sdcard_mod = MagicMock()
+        mock_sdcard_mod.SDCard.return_value = second_sd
+        mock_spi_class = MagicMock(return_value=Mock())
+        mock_machine = MagicMock()
+        mock_machine.Pin = MagicMock(return_value=Mock())
+        mock_machine.SPI = mock_spi_class
+        mock_device_config = {
+            "spi": {"id": 1, "baudrate": 40000000, "sck": 10, "mosi": 11, "miso": 12, "cs": 13, "mount_point": "/sd"}
+        }
+
+        feeds = []
+
+        with patch.object(sd_mod, "_IS_DEVICE", True):
+            with _patch_lib_sdcard(mock_sdcard_mod):
+                with patch.dict(
+                    "sys.modules",
+                    {
+                        "config": MagicMock(DEVICE_CONFIG=mock_device_config),
+                        "machine": mock_machine,
+                    },
+                ):
+                    with patch("os.mount", create=True):
+                        with patch("os.umount", create=True):
+                            with patch("time.sleep_ms"):
+                                sd_mod.is_mounted(
+                                    first_sd,
+                                    Mock(),
+                                    return_instances=True,
+                                    wdt_feed=lambda: feeds.append(1),
+                                )
+
+        # At least three feeds: umount, spi deinit / sleep, sdcard reinit.
+        assert len(feeds) >= 3
+
+    def test_is_mounted_wdt_feed_exceptions_swallowed(self):
+        """A throwing wdt_feed callable must not abort the recovery path."""
+        import lib.sd_integration as sd_mod
+
+        first_sd = Mock()
+        first_sd.readblocks = Mock(side_effect=OSError("read error"))
+        second_sd = Mock()
+        second_sd.readblocks = Mock()
+
+        mock_sdcard_mod = MagicMock()
+        mock_sdcard_mod.SDCard.return_value = second_sd
+        mock_spi_class = MagicMock(return_value=Mock())
+        mock_machine = MagicMock()
+        mock_machine.Pin = MagicMock(return_value=Mock())
+        mock_machine.SPI = mock_spi_class
+        mock_device_config = {
+            "spi": {"id": 1, "baudrate": 40000000, "sck": 10, "mosi": 11, "miso": 12, "cs": 13, "mount_point": "/sd"}
+        }
+
+        def boom():
+            raise RuntimeError("watchdog driver crashed")
+
+        with patch.object(sd_mod, "_IS_DEVICE", True):
+            with _patch_lib_sdcard(mock_sdcard_mod):
+                with patch.dict(
+                    "sys.modules",
+                    {
+                        "config": MagicMock(DEVICE_CONFIG=mock_device_config),
+                        "machine": mock_machine,
+                    },
+                ):
+                    with patch("os.mount", create=True):
+                        with patch("os.umount", create=True):
+                            with patch("time.sleep_ms"):
+                                result = sd_mod.is_mounted(
+                                    first_sd,
+                                    Mock(),
+                                    return_instances=True,
+                                    wdt_feed=boom,
+                                )
+
+        assert isinstance(result, tuple)
+        assert result[0] is True
+
     def test_is_mounted_device_mbr_fail_reinit(self):
         """Device path: first readblocks fails, reinit succeeds."""
         import lib.sd_integration as sd_mod

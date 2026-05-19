@@ -98,7 +98,7 @@ def mount_sd(spi, cs_pin, mount_point: str = "/sd", debug_callback=None):
         return False, None
 
 
-def is_mounted(sd, spi=None, return_instances: bool = False, debug_callback=None):
+def is_mounted(sd, spi=None, return_instances: bool = False, debug_callback=None, wdt_feed=None):
     """
     Check if SD card is inserted in reader.
 
@@ -107,7 +107,18 @@ def is_mounted(sd, spi=None, return_instances: bool = False, debug_callback=None
 
     Args:
         debug_callback: Optional callable(msg) for debug output
+        wdt_feed: Optional callable() that feeds the hardware watchdog.
+            Invoked between the umount / SPI-deinit / sleep / re-init steps
+            of the recovery path so a slow card cannot push the synchronous
+            recovery past the watchdog window.
     """
+    def _feed():
+        if wdt_feed is None:
+            return
+        try:
+            wdt_feed()
+        except Exception:
+            pass
     try:
         if not _IS_DEVICE:
             return (True, sd, spi) if return_instances else True
@@ -174,13 +185,17 @@ def is_mounted(sd, spi=None, return_instances: bool = False, debug_callback=None
             if debug_callback:
                 debug_callback("is_mounted: MBR failed, reinitializing")
             _safe_umount()
+            _feed()
             try:
                 if spi is not None:
                     spi.deinit()
             except Exception:
                 pass
+            _feed()
             time.sleep_ms(200)
+            _feed()
             sd, spi = _init_sd_local()
+            _feed()
             _read_mbr(sd)
             return (True, sd, spi) if return_instances else True
     except Exception:

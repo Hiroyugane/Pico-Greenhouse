@@ -287,7 +287,13 @@ class HardwareFactory:
             self._wdt_feed()
             time.sleep_ms(sd_retry_delay_ms)
             try:
-                result = is_mounted(None, None, return_instances=True, debug_callback=self._debug)
+                result = is_mounted(
+                    None,
+                    None,
+                    return_instances=True,
+                    debug_callback=self._debug,
+                    wdt_feed=self._wdt_feed,
+                )
                 if isinstance(result, tuple) and len(result) == 3 and result[0]:
                     self.sd = result[1]
                     self.spi = result[2] or self.spi
@@ -477,7 +483,13 @@ class HardwareFactory:
         Returns True if SD is accessible after refresh, False otherwise.
         """
         try:
-            result = is_mounted(self.sd, self.spi, return_instances=True, debug_callback=self._debug)
+            result = is_mounted(
+                self.sd,
+                self.spi,
+                return_instances=True,
+                debug_callback=self._debug,
+                wdt_feed=self._wdt_feed,
+            )
             if isinstance(result, tuple) and len(result) == 3:
                 ok, sd, spi = result
                 self.sd = sd

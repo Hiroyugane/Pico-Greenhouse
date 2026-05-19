@@ -5,6 +5,40 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-19 · SD-update canonical path + /boot.log mirror
+
+**Branch:** `main`
+**Why hardware-only:** Deploy task now writes to `G:\ota\pending` (canonical
+`/sd/ota/pending` on Pico). New code path mirrors every `Updater.log()` line
+into `/boot.log` on internal flash. Both behaviors only verifiable on a real
+Pico + real SD card with the actual USB-MSC readback flow.
+**Pre-flight:** SD card mounted as `G:`. Pre-existing `G:\update\` may be
+left in place or wiped; either way the canonical path must win. Pico ready
+to power-cycle and be re-mounted over USB MSC after the run.
+
+### Deploy
+
+- [ ] Run VS Code task `deploy-update-to-sdcard-nocheck` — completes without
+  the `destination parent does not exist` error.
+- [ ] After the task, `G:\ota\pending\manifest.json` exists and
+  `G:\ota\pending\lib\` contains the compiled `.mpy` set.
+
+### On-Pico verify
+
+- [ ] Power-cycle Pico. Loading-screen LEDs run, fail/success/noop
+  jingle plays per the apply outcome.
+- [ ] `/sd/logs/updates.log` opens with `payload detected` (no
+  trailing `at legacy …` suffix) — confirms canonical path was used.
+- [ ] After the boot completes (or after fail jingle), mount Pico
+  internal flash over USB MSC. `/boot.log` contains `[updater]`
+  lines matching every line that appeared (or *should* have appeared)
+  in `/sd/logs/updates.log` — including the `verify_fail` /
+  `apply_fail` reason if the apply failed.
+
+### Notes (post-test)
+
+>
+
 ## 2026-05-19 · R8 (MISO series resistor) removed from PCB
 
 **Branch:** `main`

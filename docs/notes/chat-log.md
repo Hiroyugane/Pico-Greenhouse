@@ -5,6 +5,42 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-19 · SD-update deploy path + updater log mirror
+
+### issue · deploy task was writing to legacy /sd/update, hiding canonical layout from operators
+
+`.vscode/tasks.json` `deploy-update-to-sdcard[-nocheck]` shipped with
+`--copy-to G:/update` from the pre-2026-05-15 layout. Every deploy
+landed in the legacy fallthrough path, so `/sd/logs/updates.log` always
+opened with `payload detected at legacy /sd/update` even on fresh
+builds. Repointed both tasks at `G:/ota/pending` (canonical).
+
+### deviation · `tools/build_update_payload.py` now `mkdir -p`s the parent when SD root exists
+
+Repointing exposed a second bug: the `--copy-to G:/ota/pending`
+destination had no parent (`G:\ota`) on the SD card, so the deploy
+crashed with `destination parent does not exist`. Loosened the
+pre-check to verify only the drive **root** (`G:\`) — the SD-mounted
+state — and `mkdir parents=True` for everything below it. Operators
+no longer have to hand-create canonical subdirs on a freshly migrated
+card.
+
+### decision · mirror every `updater.log()` line into `/boot.log` on internal flash
+
+A failing on-hardware update produced only the `start` line in
+`/sd/logs/updates.log` — no `verify_fail` / `apply_fail` followed,
+despite the fail jingle and red-status feedback playing. The leading
+hypothesis is that the SD-side append silently failed after the first
+write (best-effort log path in [updater.py:338](../../lib/updater.py#L338)).
+The updater already mirrored to stdout for USB-serial debugging, but
+that's invisible on a standalone Pico. Added a third sink: each
+`Updater.log()` call now also writes through `lib.boot_log.write()`
+into `/boot.log`. Reusing `boot_log` rather than introducing a new
+flash log keeps the cap-controlled append path single-sourced and
+costs no new config knobs. The success path (`apply_ok` → `machine.reset()`)
+loses the entry on the next-boot truncation, which is fine; the failure
+path preserves it because no reset fires.
+
 ## 2026-05-19 · R8 (MISO series resistor) identified as root cause of SD bit errors
 
 ### issue · earlier "40 MHz too aggressive" call was wrong — the resistor was the culprit

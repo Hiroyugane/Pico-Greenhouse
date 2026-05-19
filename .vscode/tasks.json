@@ -376,9 +376,9 @@
         },
         {
             "label": "deploy-update-to-sdcard",
-            "detail": "Compile, build SD-update payload (config + lib compiled to .mpy), and copy to G:\\update (auto-confirms overwrite)",
+            "detail": "Compile, build SD-update payload (config + lib compiled to .mpy), and copy to G:\\ota\\pending (auto-confirms overwrite)",
             "type": "shell",
-            "command": "python tools/build_update_payload.py --compiled --copy-to G:/update --no-confirm",
+            "command": "python tools/build_update_payload.py --compiled --copy-to G:/ota/pending --no-confirm",
             "options": {
                 "cwd": "${workspaceFolder}"
             },
@@ -395,9 +395,9 @@
         },
         {
             "label": "deploy-update-to-sdcard-nocheck",
-            "detail": "Compile, build SD-update payload (config + lib compiled to .mpy), and copy to G:\\update without running tests first",
+            "detail": "Compile, build SD-update payload (config + lib compiled to .mpy), and copy to G:\\ota\\pending without running tests first",
             "type": "shell",
-            "command": "python tools/build_update_payload.py --compiled --copy-to G:/update --no-confirm",
+            "command": "python tools/build_update_payload.py --compiled --copy-to G:/ota/pending --no-confirm",
             "options": {
                 "cwd": "${workspaceFolder}"
             },

@@ -488,6 +488,8 @@ DEVICE_CONFIG = {
         "log_max_size": 50000,  # Bytes; rotate to <name>_<ts>.log past this
         "max_retries": 3,  # Per-file write retry count on apply failure
         "retry_delay_ms": 200,  # Delay between write retries (ms)
+        "verify_max_retries": 3,  # Per-file stat/hash retry count on SD glitch during verify
+        "verify_retry_delay_ms": 200,  # Delay between verify retries (ms)
         "allowed_paths": ["main.py", "config.py", "config.mpy", "lib/"],  # Whitelist; anything outside fails verify
         # Legacy update_dir locations checked when the canonical update_dir
         # holds no manifest. Lets payloads dropped at the pre-2026-05-15
@@ -779,6 +781,8 @@ def validate_config():
             "log_max_size",
             "max_retries",
             "retry_delay_ms",
+            "verify_max_retries",
+            "verify_retry_delay_ms",
             "allowed_paths",
             "legacy_update_dirs",
         ],
@@ -1101,6 +1105,10 @@ def validate_config():
         raise ValueError("updater.max_retries must be an int >= 1")
     if not isinstance(upd_cfg["retry_delay_ms"], int) or upd_cfg["retry_delay_ms"] < 0:
         raise ValueError("updater.retry_delay_ms must be an int >= 0")
+    if not isinstance(upd_cfg["verify_max_retries"], int) or upd_cfg["verify_max_retries"] < 0:
+        raise ValueError("updater.verify_max_retries must be an int >= 0")
+    if not isinstance(upd_cfg["verify_retry_delay_ms"], int) or upd_cfg["verify_retry_delay_ms"] < 0:
+        raise ValueError("updater.verify_retry_delay_ms must be an int >= 0")
     if not isinstance(upd_cfg["allowed_paths"], list) or not upd_cfg["allowed_paths"]:
         raise ValueError("updater.allowed_paths must be a non-empty list")
     for entry in upd_cfg["allowed_paths"]:

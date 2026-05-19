@@ -263,6 +263,41 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["updater"]["max_retries"] = original
 
+    def test_updater_verify_max_retries_negative_raises(self):
+        """updater.verify_max_retries < 0 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["updater"]["verify_max_retries"]
+        config.DEVICE_CONFIG["updater"]["verify_max_retries"] = -1
+        try:
+            with pytest.raises(ValueError, match="updater.verify_max_retries"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["updater"]["verify_max_retries"] = original
+
+    def test_updater_verify_retry_delay_ms_negative_raises(self):
+        """updater.verify_retry_delay_ms < 0 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["updater"]["verify_retry_delay_ms"]
+        config.DEVICE_CONFIG["updater"]["verify_retry_delay_ms"] = -10
+        try:
+            with pytest.raises(ValueError, match="updater.verify_retry_delay_ms"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["updater"]["verify_retry_delay_ms"] = original
+
+    def test_updater_verify_max_retries_zero_allowed(self):
+        """Zero verify_max_retries disables retries (no error)."""
+        import config
+
+        original = config.DEVICE_CONFIG["updater"]["verify_max_retries"]
+        config.DEVICE_CONFIG["updater"]["verify_max_retries"] = 0
+        try:
+            assert config.validate_config() is True
+        finally:
+            config.DEVICE_CONFIG["updater"]["verify_max_retries"] = original
+
     def test_updater_empty_allowed_paths_raises(self):
         """updater.allowed_paths must be a non-empty list."""
         import config

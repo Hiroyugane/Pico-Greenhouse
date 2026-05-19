@@ -203,7 +203,9 @@ class Updater:
         files = manifest.get("files", [])
         if not files:
             errors.append("manifest.files is empty")
+            self._breadcrumb("verify done errors=1 (empty manifest)")
             return errors
+        self._breadcrumb("verify start files=%d" % len(files))
         for entry in files:
             self._step_feedback(audio=True)
             try:
@@ -212,31 +214,41 @@ class Updater:
                 expected_size = int(entry["bytes"])
             except (KeyError, TypeError, ValueError):
                 errors.append("manifest entry malformed: %r" % entry)
+                self._breadcrumb("verify ? malformed_entry")
                 continue
 
             if not self._is_path_allowed(rel):
                 errors.append("path not allowed: %s" % rel)
+                self._breadcrumb("verify %s not_allowed" % rel)
                 continue
 
             abs_path = self.update_dir + "/" + rel
             if not _exists(abs_path):
                 errors.append("missing file: %s" % rel)
+                self._breadcrumb("verify %s missing" % rel)
                 continue
             try:
                 actual_size = os.stat(abs_path)[6]
             except OSError as e:
                 errors.append("stat failed for %s: %s" % (rel, e))
+                self._breadcrumb("verify %s stat_fail %s" % (rel, e))
                 continue
             if actual_size != expected_size:
                 errors.append("size mismatch for %s: %d != %d" % (rel, actual_size, expected_size))
+                self._breadcrumb("verify %s size_mismatch %d/%d" % (rel, actual_size, expected_size))
                 continue
             try:
                 actual_hash = self._hash_file(abs_path)
             except OSError as e:
                 errors.append("hash failed for %s: %s" % (rel, e))
+                self._breadcrumb("verify %s hash_fail %s" % (rel, e))
                 continue
             if actual_hash.lower() != expected_hash.lower():
                 errors.append("sha256 mismatch for %s" % rel)
+                self._breadcrumb("verify %s hash_mismatch" % rel)
+                continue
+            self._breadcrumb("verify %s ok" % rel)
+        self._breadcrumb("verify done errors=%d" % len(errors))
         return errors
 
     def is_already_applied(self, manifest):
@@ -283,7 +295,9 @@ class Updater:
     def apply(self, manifest):
         flash_root = _FLASH_ROOT
         flash_root_clean = flash_root.rstrip("/").rstrip("\\")
-        for entry in manifest["files"]:
+        files = manifest["files"]
+        self._breadcrumb("apply start files=%d" % len(files))
+        for entry in files:
             self._step_feedback(audio=True)
             rel = entry["path"]
             src = self.update_dir + "/" + rel
@@ -304,8 +318,11 @@ class Updater:
                     last_err = e
                     _sleep_ms(self.retry_delay_ms)
             if last_err is not None:
+                self._breadcrumb("apply %s fail %s" % (rel, last_err))
                 raise UpdateError("apply: %s failed after %d retries: %s" % (rel, self.max_retries, last_err))
+            self._breadcrumb("apply %s ok" % rel)
             self._feed_wdt()
+        self._breadcrumb("apply done")
 
     def finalize(self, manifest):
         version = manifest.get("version") or "unknown"
@@ -427,6 +444,19 @@ class Updater:
             return
         try:
             self.feedback.step(audio=audio)
+        except Exception:
+            pass
+
+    def _breadcrumb(self, message):
+        """Append a verify/apply progress crumb to /boot.log only.
+
+        Independent of self.log() so a per-file trail survives even when
+        the SD-side updates.log append silently fails mid-run.
+        """
+        try:
+            from lib import boot_log
+
+            boot_log.write("[updater.crumb] " + message)
         except Exception:
             pass
 

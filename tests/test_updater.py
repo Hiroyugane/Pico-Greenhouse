@@ -229,6 +229,39 @@ class TestUpdaterUnit:
         assert "apply_ok" in log_path.read_text()
         assert "x" * 200 not in log_path.read_text()
 
+    def test_verify_emits_per_file_breadcrumbs(self, updater_factory, sd_root, good_payload, tmp_path):
+        from lib import boot_log
+
+        flash_log = tmp_path / "boot.log"
+        boot_log.configure(path=str(flash_log), max_bytes=10 * 1024)
+        boot_log._reset_for_test()
+        manifest, _ = good_payload
+        u = updater_factory()
+        errors = u.verify_payload(manifest)
+        assert errors == []
+        text = flash_log.read_text()
+        assert "verify start files=3" in text
+        assert "verify main.py ok" in text
+        assert "verify lib/relay.py ok" in text
+        assert "verify done errors=0" in text
+
+    def test_verify_breadcrumb_records_hash_mismatch(self, updater_factory, sd_root, good_payload, tmp_path):
+        from lib import boot_log
+
+        flash_log = tmp_path / "boot.log"
+        boot_log.configure(path=str(flash_log), max_bytes=10 * 1024)
+        boot_log._reset_for_test()
+        manifest, files = good_payload
+        # Corrupt one file so verify fails on it.
+        (sd_root / "update" / "main.py").write_bytes(b"corrupted")
+        u = updater_factory()
+        errors = u.verify_payload(manifest)
+        assert errors  # at least one error
+        text = flash_log.read_text()
+        assert "verify main.py" in text
+        assert ("size_mismatch" in text) or ("hash_mismatch" in text)
+        assert "verify done errors=" in text
+
     def test_log_mirrors_to_boot_log(self, updater_factory, sd_root, tmp_path):
         from lib import boot_log
 

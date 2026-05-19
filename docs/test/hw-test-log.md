@@ -5,6 +5,67 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-19 · VSYS rail validation (interim buck bump + next-rev Schottky)
+
+**Branch:** `main`
+**Why hardware-only:** VSYS rail behaviour under SD inrush only
+reproduces on the real PCB with the XL4015 + 1N4002 input chain; no
+host or pytest equivalent. See
+[chat-log.md](../notes/chat-log.md#2026-05-19--external-5-v-supply-starves-vsys--1n4002-drop-traced)
+for root cause.
+**Pre-flight:**
+
+1. Confirm by continuity that **only the Pico** sits downstream of
+   the input diodes. If SHT31, OLED, or any other 5 V-rated device
+   shares the post-diode rail, **stop** and do the Schottky swap
+   below instead of raising the buck.
+2. Have a multimeter ready, set to DC volts.
+
+### Interim workaround — raise XL4015 output to ~6.0 V
+
+- [ ] Disconnect Pico from buck. Adjust CV trimpot to **6.0 V**
+  no-load. Verify with multimeter at the buck output terminals.
+- [ ] Sticker / label the buck: `DO NOT TURN — 6.0 V workaround
+  pending Schottky swap`.
+- [ ] Reconnect Pico. Measure VSYS (Pico pin 39) at idle:
+  expect ~5.0 V. **Must be ≤ 5.5 V (Pico VSYS abs max).**
+- [ ] Provoke SD inrush (power-cycle; the SD mount runs early).
+  VSYS during inrush should stay above ~4.4 V. A brief dip below
+  that means the bulk cap is needed sooner rather than later.
+- [ ] Boot reaches main loop. `/boot.log` shows `SD mounted at /sd`.
+  No sd+error countdown loop.
+
+### Interim workaround — bulk cap at Pico VSYS
+
+- [ ] Solder a **470 µF–1000 µF** low-ESR electrolytic + **100 nF**
+  ceramic between Pico VSYS (pin 39) and GND, leads as short as
+  practical.
+- [ ] Re-measure VSYS through power-up and SD inrush. The dip during
+  inrush should be visibly smaller / shorter than the pre-cap run.
+
+### Next PCB revision — Schottky swap verification
+
+> Run after the next-rev board is fabricated and 1N4002 is replaced
+> with SS14 / 1N5817 / MBRS340. Same supply, same Pico.
+
+- [ ] Measure voltage drop across each replacement diode at typical
+  load (~50 mA idle) and at SD-inrush peak (~200 mA).
+  Expect ~0.25–0.4 V per diode.
+- [ ] With XL4015 set to **5.0 V** no-load, measure VSYS at Pico:
+  expect ~4.6–4.7 V under load, ~4.7–4.8 V at idle. **Revert the
+  buck back to 5.0 V** when this confirms — the 6.0 V interim
+  setting must not survive the diode swap.
+- [ ] Confirm the second diode in series is either retained for
+  OR-ing two sources, or removed as redundant reverse-protection.
+  Document which in the schematic notes.
+- [ ] Run a full boot cycle: SD mounts, sensors initialize, loop
+  reaches steady state. No brown-outs, no WDT resets in the first
+  10 minutes of operation.
+
+### Notes (post-test)
+
+> Fill in here.
+
 ## 2026-05-19 · Confirm reformat recovers SD + ENODEV diagnostic lands
 
 **Branch:** `main`

@@ -38,6 +38,28 @@ import machine
 import uasyncio as asyncio
 from machine import ADC, UART, WDT, Pin
 
+from config import DEVICE_CONFIG, validate_config
+from lib import boot_log
+from lib.buffer_manager import BufferManager
+from lib.buzzer import BuzzerController
+from lib.co2_logger import CO2Logger
+from lib.event_logger import EventLogger
+from lib.fan_controllers import AlwaysOnFanController, HeaterFollowerFanController
+from lib.fan_output import Pca9685FanOutput, RelayFanOutput
+from lib.hardware_factory import HardwareFactory
+from lib.heater import HeaterController
+from lib.led_button import LEDButtonHandler, ServiceReminder
+from lib.mcp4725 import MCP4725
+from lib.oled_display import OLEDDisplay
+from lib.relay import FanController, GrowlightController, RelayController
+from lib.sht31 import SHT31
+from lib.soil_logger import SoilLogger
+from lib.status_manager import StatusManager
+from lib.temp_humidity_logger import TempHumidityLogger
+from lib.time_provider import RTCTimeProvider
+from lib.updater import run_pending_update
+from lib.write_queue_manager import WriteQueueManager
+
 
 def _describe_reset_cause() -> str:
     """Return a human-readable label for ``machine.reset_cause()``.
@@ -66,29 +88,6 @@ def _describe_reset_cause() -> str:
             name_map[value] = name
     label = name_map.get(code, f"code={code}")
     return label
-
-
-from config import DEVICE_CONFIG, validate_config
-from lib import boot_log
-from lib.buffer_manager import BufferManager
-from lib.buzzer import BuzzerController
-from lib.co2_logger import CO2Logger
-from lib.event_logger import EventLogger
-from lib.fan_controllers import AlwaysOnFanController, HeaterFollowerFanController
-from lib.fan_output import Pca9685FanOutput, RelayFanOutput
-from lib.hardware_factory import HardwareFactory
-from lib.heater import HeaterController
-from lib.led_button import LEDButtonHandler, ServiceReminder
-from lib.mcp4725 import MCP4725
-from lib.oled_display import OLEDDisplay
-from lib.relay import FanController, GrowlightController, RelayController
-from lib.sht31 import SHT31
-from lib.soil_logger import SoilLogger
-from lib.status_manager import StatusManager
-from lib.temp_humidity_logger import TempHumidityLogger
-from lib.time_provider import RTCTimeProvider
-from lib.updater import run_pending_update
-from lib.write_queue_manager import WriteQueueManager
 
 
 async def feed_watchdog(wdt, interval_ms, logger=None):

@@ -212,8 +212,15 @@ class TestMainStartup:
 
         assert len(created_tasks) > 0
 
-    async def test_startup_clears_fallback_when_supported(self, monkeypatch):
-        """main() calls BufferManager.clear_fallback_startup when present."""
+    async def test_startup_drains_fallback_when_sd_mounted(self, monkeypatch):
+        """main() drains the previous boot's fallback rows via migrate_fallback().
+
+        Why: clear_fallback_startup() destroyed legitimate data buffered
+        during the prior boot's SD outage. Boot-time migration preserves
+        that data; if migration is bounded and the backlog is large, the
+        boot calls migrate_fallback at most twice before handing off to
+        the health-check loop.
+        """
         import main as main_module
 
         monkeypatch.setattr(main_module, "validate_config", lambda: True)
@@ -225,7 +232,8 @@ class TestMainStartup:
         monkeypatch.setattr(main_module, "HardwareFactory", lambda *a, **kw: mock_hw)
 
         mock_buffer = Mock()
-        mock_buffer.clear_fallback_startup = Mock(return_value=True)
+        # Two non-empty drain passes, then a zero — caller should stop after the zero.
+        mock_buffer.migrate_fallback = Mock(side_effect=[5, 0])
         mock_buffer.get_metrics.return_value = {
             "buffer_entries": 0,
             "writes_to_fallback": 0,
@@ -265,7 +273,95 @@ class TestMainStartup:
             with pytest.raises(asyncio.CancelledError):
                 await main_module.main()
 
-        mock_buffer.clear_fallback_startup.assert_called_once()
+        # First pass migrated, second pass returned 0 → loop exits early.
+        # Health-check loop later also calls migrate_fallback, so total >= 2.
+        assert mock_buffer.migrate_fallback.call_count >= 2
+
+    async def test_startup_skips_fallback_drain_when_sd_unmounted(self, monkeypatch):
+        """When SD is not mounted at boot, migrate_fallback is not invoked.
+
+        Why: migrate_fallback() short-circuits internally when primary is
+        down, but we don't even reach BufferManager during the
+        require_sd_startup degraded path. The startup drain block must
+        guard on is_sd_mounted() to keep that path clean.
+        """
+        import main as main_module
+
+        monkeypatch.setattr(main_module, "validate_config", lambda: True)
+
+        # require_sd_startup defaults to True, so an unmounted SD enters
+        # the failure-state countdown and main() returns without touching
+        # BufferManager. We override the system block to skip the gate
+        # so we can prove the drain block itself is guarded.
+        from config import DEVICE_CONFIG
+
+        orig = DEVICE_CONFIG["system"]["require_sd_startup"]
+        DEVICE_CONFIG["system"]["require_sd_startup"] = False
+
+        try:
+            mock_hw = Mock()
+            mock_hw.setup.return_value = True
+            mock_hw.get_rtc.return_value = Mock()
+            mock_hw.is_sd_mounted.return_value = False
+            monkeypatch.setattr(main_module, "HardwareFactory", lambda *a, **kw: mock_hw)
+
+            mock_buffer = Mock()
+            mock_buffer.migrate_fallback = Mock(return_value=0)
+            mock_buffer.get_metrics.return_value = {
+                "buffer_entries": 0,
+                "writes_to_fallback": 0,
+                "fallback_migrations": 0,
+                "writes_to_primary": 0,
+                "write_failures": 0,
+            }
+            mock_buffer.is_primary_available.return_value = False
+            mock_buffer._buffers = {}
+            monkeypatch.setattr(main_module, "BufferManager", lambda *a, **kw: mock_buffer)
+
+            mock_logger = Mock()
+            monkeypatch.setattr(main_module, "EventLogger", lambda *a, **kw: mock_logger)
+            monkeypatch.setattr(main_module, "TempHumidityLogger", lambda *a, **kw: Mock())
+            monkeypatch.setattr(main_module, "FanController", lambda *a, **kw: Mock())
+            monkeypatch.setattr(main_module, "GrowlightController", lambda *a, **kw: Mock())
+            monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
+            monkeypatch.setattr(main_module, "ServiceReminder", lambda *a, **kw: Mock())
+            mock_buzzer = Mock()
+            mock_buzzer.startup = AsyncMock()
+            monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
+            monkeypatch.setattr(
+                main_module, "StatusManager", lambda *a, **kw: Mock(run_post=AsyncMock(return_value=True))
+            )
+            monkeypatch.setattr(main_module.asyncio, "create_task", lambda t: Mock())
+
+            startup_drain_calls = []
+
+            def track_drain(*args, **kwargs):
+                startup_drain_calls.append((args, kwargs))
+                return 0
+
+            # Snapshot the call count before the health loop runs.
+            async def first_sleep_records(duration):
+                # Record drain calls up to this point (before health loop fires)
+                startup_drain_calls.append(("HEALTH_LOOP_REACHED",))
+                raise asyncio.CancelledError()
+
+            mock_buffer.migrate_fallback = Mock(side_effect=track_drain)
+            monkeypatch.setattr(main_module.asyncio, "sleep", first_sleep_records)
+            monkeypatch.setattr(main_module.asyncio, "sleep_ms", first_sleep_records)
+
+            with patch("time.localtime", return_value=FAKE_LOCALTIME):
+                with pytest.raises(asyncio.CancelledError):
+                    await main_module.main()
+
+            # Drain must NOT have been called before the health loop kicked in.
+            calls_before_health_loop = [
+                c for c in startup_drain_calls if c != ("HEALTH_LOOP_REACHED",)
+            ]
+            assert calls_before_health_loop == [], (
+                "migrate_fallback was called at boot despite SD unmounted"
+            )
+        finally:
+            DEVICE_CONFIG["system"]["require_sd_startup"] = orig
 
 
 @pytest.mark.asyncio

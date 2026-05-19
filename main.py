@@ -290,10 +290,22 @@ async def main():
         migrate_batch_max=system_config.get("fallback_migrate_batch_max", 20),
         wdt_feed=feed_wdt,
     )
-    # Start each run with a clean fallback file.
-    clear_fallback = getattr(buffer_manager, "clear_fallback_startup", None)
-    if callable(clear_fallback):
-        clear_fallback()
+    # Drain any fallback rows that accumulated during the previous boot's
+    # SD outage instead of wiping them. Migration is bounded by
+    # fallback_migrate_batch_max, so a backlog drains across the first few
+    # health-check cycles even when the queue is large. SD must be mounted
+    # for migration to succeed; on a degraded boot the rows stay parked.
+    # Bounded loop: at most two batches at boot so init time stays
+    # predictable. The health loop picks up any leftovers.
+    if hardware.is_sd_mounted():
+        for _ in range(2):
+            try:
+                migrated = int(buffer_manager.migrate_fallback() or 0)
+            except Exception:
+                break
+            if migrated <= 0:
+                break
+            print(f"[STARTUP] Drained {migrated} fallback row(s) from previous boot")
     # Step 4b: Create WriteQueueManager (async SD write batching)
     system_config = DEVICE_CONFIG.get("system", {})
     write_queue = WriteQueueManager(

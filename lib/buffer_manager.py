@@ -38,6 +38,8 @@ class BufferManager:
         max_fallback_size_kb=50,
         debug_callback=None,
         logger=None,
+        migrate_batch_max=20,
+        wdt_feed=None,
     ):
         """
         Initialize BufferManager with SD and fallback paths.
@@ -52,6 +54,12 @@ class BufferManager:
             max_fallback_size_kb (int): Emergency fallback file size limit in KB (default: 50)
             debug_callback: Optional callable(str) for debug output (avoids circular dep with EventLogger)
             logger: Optional EventLogger for debug/diagnostic messages (default: None)
+            migrate_batch_max (int): Max fallback rows migrated per migrate_fallback() call
+                (default: 20). Caps the synchronous SD work so a backlog cannot exceed the
+                event-loop watchdog timeout; remaining rows drain on subsequent calls.
+            wdt_feed: Optional callable() that feeds the hardware watchdog. Invoked
+                between fallback-row writes during migration so a legitimately large
+                drain pass does not trip the watchdog mid-loop.
         """
         # Host compatibility: map /sd and /local to local folders on CPython
         if self._is_host():
@@ -64,6 +72,8 @@ class BufferManager:
         self.max_fallback_size_kb = max_fallback_size_kb
         self._debug = debug_callback
         self._logger = logger
+        self._migrate_batch_max = int(migrate_batch_max) if migrate_batch_max else 0
+        self._wdt_feed = wdt_feed
 
         if self._is_host():
             try:
@@ -677,7 +687,16 @@ class BufferManager:
             self._in_io = False
 
     def _migrate_fallback_inner(self) -> int:
-        """Inner migration logic (called with _in_io guard held)."""
+        """Inner migration logic (called with _in_io guard held).
+
+        Migrates at most ``self._migrate_batch_max`` rows per call. When the
+        fallback file holds more rows than the cap, the oldest rows are
+        consumed and the remainder is rewritten back. The cap exists so the
+        synchronous SD work this method performs cannot exceed the event-loop
+        watchdog window — callers that need a full drain (e.g. a quiet
+        moment after SD recovery) call this in a loop. ``wdt_feed`` is
+        invoked between rows so a full batch is also safe.
+        """
         if not self.is_primary_available():
             self._log_debug("SD not available during migration")
             return 0
@@ -698,11 +717,19 @@ class BufferManager:
                 self._log_debug("No lines to migrate from fallback")
                 return 0
 
-            if self._debug:
-                self._debug(f"migrate_fallback: {len(lines)} lines to migrate")
+            batch_max = self._migrate_batch_max if self._migrate_batch_max > 0 else len(lines)
+            batch = lines[:batch_max]
+            remainder = lines[batch_max:]
 
-            # Migrate each entry
-            for line in lines:
+            if self._debug:
+                self._debug(
+                    f"migrate_fallback: {len(batch)} of {len(lines)} lines this pass"
+                    f" (remainder={len(remainder)})"
+                )
+
+            # Migrate each entry; feed WDT between rows so a full batch is
+            # safe even on a slow SD.
+            for line in batch:
                 try:
                     if "|" not in line:
                         self._log_debug(f"Malformed fallback line: {line.strip()}")
@@ -719,25 +746,44 @@ class BufferManager:
                     entries_migrated += 1
                 except Exception as e:
                     self._log_debug(f"Failed to migrate line: {line.strip()} | Error: {e}")
+                finally:
+                    self._feed_wdt()
 
-            # Clear fallback file on success
+            # Rewrite fallback with whatever wasn't drained this pass. Empty
+            # remainder collapses to a zero-byte file; non-empty remainder
+            # preserves chronological order for the next call.
             if entries_migrated > 0:
                 try:
                     with open(self.fallback_path, "w") as f:
-                        f.write("")
+                        for leftover in remainder:
+                            f.write(leftover)
                     self.fallback_migrations += 1
                     self._log_debug(
-                        "fallback cleared",
+                        "fallback drained partial" if remainder else "fallback cleared",
                         entries_migrated=entries_migrated,
+                        remaining=len(remainder),
                     )
                 except Exception as e:
-                    self._log_debug(f"Failed to clear fallback after migration: {e}")
+                    self._log_debug(f"Failed to rewrite fallback after migration: {e}")
 
-            self._log_debug("Migration complete", entries_migrated=entries_migrated)
+            self._log_debug(
+                "Migration pass complete",
+                entries_migrated=entries_migrated,
+                remaining=len(remainder),
+            )
             return entries_migrated
         except Exception as e:
             self._log_debug(f"Migration failed: {e}")
             return 0
+
+    def _feed_wdt(self) -> None:
+        """Invoke the injected watchdog-feed callback, if any. Errors swallowed."""
+        if self._wdt_feed is None:
+            return
+        try:
+            self._wdt_feed()
+        except Exception:
+            pass
 
     async def start_fallback_prune_task(self, check_interval=10) -> None:
         """

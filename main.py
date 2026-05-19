@@ -287,6 +287,8 @@ async def main():
         max_buffer_entries=buffer_config.get("max_buffer_entries", 200),
         max_fallback_size_kb=buffer_config.get("max_fallback_size_kb", 50),
         debug_callback=_dbg_cb,
+        migrate_batch_max=system_config.get("fallback_migrate_batch_max", 20),
+        wdt_feed=feed_wdt,
     )
     # Start each run with a clean fallback file.
     clear_fallback = getattr(buffer_manager, "clear_fallback_startup", None)

@@ -199,6 +199,97 @@ class TestBufferManagerMigration:
         """migrate_fallback returns 0 when fallback is empty."""
         assert buffer_manager.migrate_fallback() == 0
 
+    def test_migrate_respects_batch_max(self, tmp_path):
+        """migrate_fallback drains at most migrate_batch_max rows per call.
+
+        Why: synchronous SD writes during migration must not exceed the
+        event-loop watchdog window. The cap forces the drain to spread
+        across multiple health-check cycles.
+        """
+        from lib.buffer_manager import BufferManager
+
+        sd_dir = tmp_path / "sd"
+        sd_dir.mkdir()
+        fallback = tmp_path / "local" / "fallback.csv"
+        fallback.parent.mkdir()
+        # Five rows, batch cap of 2 → first call drains 2, three remain.
+        fallback.write_text("a.csv|r1\na.csv|r2\na.csv|r3\na.csv|r4\na.csv|r5\n")
+
+        bm = BufferManager(
+            sd_mount_point=str(sd_dir),
+            fallback_path=str(fallback),
+            migrate_batch_max=2,
+        )
+
+        assert bm.migrate_fallback() == 2
+        leftover = fallback.read_text()
+        assert leftover == "a.csv|r3\na.csv|r4\na.csv|r5\n"
+
+        # Second pass drains the next two; one row left.
+        assert bm.migrate_fallback() == 2
+        assert fallback.read_text() == "a.csv|r5\n"
+
+        # Third pass drains the last row; fallback now empty.
+        assert bm.migrate_fallback() == 1
+        assert fallback.read_text() == ""
+
+        # Primary file received rows in chronological order.
+        assert (sd_dir / "a.csv").read_text() == "r1\nr2\nr3\nr4\nr5\n"
+
+    def test_migrate_feeds_watchdog_between_rows(self, tmp_path):
+        """wdt_feed is invoked at least once per migrated row.
+
+        Why: a multi-row drain on a slow SD can take seconds; without
+        watchdog feeding inside the loop, a legitimate batch can trip
+        the WDT and trigger a silent reset.
+        """
+        from lib.buffer_manager import BufferManager
+
+        sd_dir = tmp_path / "sd"
+        sd_dir.mkdir()
+        fallback = tmp_path / "local" / "fallback.csv"
+        fallback.parent.mkdir()
+        fallback.write_text("a.csv|r1\na.csv|r2\na.csv|r3\n")
+
+        feeds = []
+
+        def fake_feed():
+            feeds.append(1)
+
+        bm = BufferManager(
+            sd_mount_point=str(sd_dir),
+            fallback_path=str(fallback),
+            migrate_batch_max=10,
+            wdt_feed=fake_feed,
+        )
+
+        assert bm.migrate_fallback() == 3
+        # At least one feed per row processed.
+        assert len(feeds) >= 3
+
+    def test_migrate_wdt_feed_exceptions_are_swallowed(self, tmp_path):
+        """A misbehaving wdt_feed callable must not abort migration."""
+        from lib.buffer_manager import BufferManager
+
+        sd_dir = tmp_path / "sd"
+        sd_dir.mkdir()
+        fallback = tmp_path / "local" / "fallback.csv"
+        fallback.parent.mkdir()
+        fallback.write_text("a.csv|r1\n")
+
+        def angry_feed():
+            raise RuntimeError("hardware is on fire")
+
+        bm = BufferManager(
+            sd_mount_point=str(sd_dir),
+            fallback_path=str(fallback),
+            wdt_feed=angry_feed,
+        )
+
+        # Migration still succeeds even though the WDT callback throws.
+        assert bm.migrate_fallback() == 1
+        assert fallback.read_text() == ""
+
     def test_write_drains_ram_to_fallback_before_new_entry(self, tmp_path):
         """When primary is down and RAM has entries, write() drains RAM to fallback first."""
         from lib.buffer_manager import BufferManager

@@ -5,6 +5,49 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-19 · R8 (MISO series resistor) removed from PCB
+
+**Branch:** `main`
+**Why hardware-only:** R8 was physically desoldered / bridged on the
+board between GP12 and SD_CON pin 3. Only an eyes-on bench run can
+confirm the SD link is now stable and that the prior 32× `SD status
+changed: FAILED` cluster does not recur. Firmware change in this turn
+is documentation only — no code path to unit-test.
+**Pre-flight:** Visually inspect that R8 is gone (or replaced with a
+0 Ω jumper) and the pads have continuity end-to-end on a multimeter
+between Pico GP12 and SD_CON pin 3. Reseat SD card; record make /
+model. Wipe `/sd/logs/system.log` so the new run is easy to read.
+
+### Continuity / hardware sanity
+
+- [ ] Multimeter continuity beep between GP12 (Pico pin 16) and
+  SD_CON pin 3 with the Pico powered off.
+- [ ] R10 on MOSI is still present and intact — only R8 should have
+  moved.
+- [ ] No solder bridges to neighbouring pads (visual + 10× loupe).
+
+### SD link stability at the current 10 MHz baudrate
+
+- [ ] Boot and let the system run for ≥ 2 h.
+- [ ] `grep -c "SD status changed: FAILED" /sd/logs/system.log`
+  returns `0` over the 2-h window (previous regime: 32 in ~42 h).
+- [ ] `grep -c "Write went to fallback" /sd/logs/system.log` returns
+  `0` over the same window (no SPI bit errors forcing fallback).
+
+### Optional: confirm 40 MHz is now safe (separate session)
+
+- [ ] In a separate bench run, temporarily set
+  `DEVICE_CONFIG["spi"]["baudrate"] = 40_000_000`, re-flash, run for
+  ≥ 2 h, and check both grep counts above are still `0`.
+- [ ] If stable, ship a `chore(config): restore SD SPI baudrate to
+  40 MHz` commit and update [chat-log.md](../notes/chat-log.md). If
+  any FAILED reappears, leave the 10 MHz setting in place and log
+  the result.
+
+### Notes (post-test)
+
+> Fill in here. Add `[!]` items with failure mode and a short repro.
+
 ## 2026-05-19 · SD reliability + watchdog-feed pass
 
 **Branch:** `main`
@@ -1129,7 +1172,7 @@ T/H_CON, CO2_CON, ADC_CON and at least one I2C_CON breakout per the new PCB.
 - [ ] `I2C_CON1/2/3` breakouts read back the expected bus traffic on a logic analyzer (GP0=SDA, GP1=SCL).
 - [ ] MCP4725 grow-light DAC (new, at 0x60) ACKs on the bus — even if no driver is wired yet.
 
-### SD card (SPI1 via R8/R10 series resistors)
+### SD card (SPI1; MOSI via R10, MISO direct after R8 removal)
 
 - [ ] `system.log` shows successful SD mount within the first health-check cycle.
 - [ ] DHT log file appears at `/sd/dht_log_YYYY-MM-DD.csv` and grows every 30 s.

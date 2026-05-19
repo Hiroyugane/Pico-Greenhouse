@@ -5,6 +5,47 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-19 · R8 (MISO series resistor) identified as root cause of SD bit errors
+
+### issue · earlier "40 MHz too aggressive" call was wrong — the resistor was the culprit
+
+The same 2026-05-16/18 field run that produced 32× `SD status changed:
+FAILED` over 42 h has been re-investigated on the bench. The cause was
+not the 40 MHz SPI baudrate or the cabling — it was the series resistor
+**R8** on the MISO line (GP12 ↔ SD_CON pin 3). R8 has been removed and
+MISO is now a direct trace; SD mount and read/write have been stable
+since.
+
+### decision · keep `spi.baudrate` at 10 MHz for now, revisit on next bench run
+
+The 10 MHz setting from earlier today is left in place as a precaution
+until the next bench session confirms 40 MHz is reliable without R8.
+Bandwidth is not the bottleneck (CSV rows are ~30 bytes), so the
+downside of the conservative setting is zero; the upside of leaving
+margin on the link is real until we have data. When the bench
+confirms, bump `DEVICE_CONFIG["spi"]["baudrate"]` back to 40 MHz in a
+separate commit.
+
+### deviation · update earlier chat-log "drop default SPI baudrate" entry framing
+
+The 2026-05-19 entry below ("drop default SPI baudrate from 40 MHz →
+10 MHz") attributes the field failure to "40 MHz over the Pico SD_CON
+path with series resistors R8/R10". That framing is now known to be
+wrong: R10 (on MOSI) is fine; R8 (on MISO) was the failure mode. The
+entry is left in place for history — read it together with this new
+entry.
+
+### note · PCB schematic and pin-map docs updated in the same turn
+
+[config.py:30-40](../../config.py#L30-L40),
+[config.py:92-108](../../config.py#L92-L108), and
+[docs/notes/2026-05-14-pcb-codebase-gap-plan.md:33](2026-05-14-pcb-codebase-gap-plan.md#L33)
+all dropped the "via R8" notation on MISO. The schematic JSON under
+[docs/SCH_Pico-Greenhouse-PCB_2026-05-14.json](../SCH_Pico-Greenhouse-PCB_2026-05-14.json)
+is the original board design and is intentionally **not** rewritten —
+it stays as the as-designed reference; the bypass is captured in the
+PCB-revision changelog instead.
+
 ## 2026-05-19 · SD reliability + watchdog resilience pass
 
 ### issue · Pico restarted ~86× in 42 h with no exceptions in the log

@@ -23,6 +23,36 @@
 
 Newest entry on top.
 
+## 2026-05-19 · Remove R8 (MISO series resistor on SD_CON)
+
+- **Status:** done-on-current-board (R8 bypassed/removed); confirmed
+  as the SD-failure root cause on the bench. Next PCB spin should
+  delete the footprint from the schematic.
+- **Source:** [`sd/logs/system.log`](../../sd/logs/system.log)
+  field run 2026-05-16/18 (32× `SD status changed: FAILED` in 42 h);
+  bench re-test 2026-05-19;
+  [chat-log 2026-05-19 R8 entry](chat-log.md).
+- **Net / refdes:** `SPI1_MISO` between `GP12` (Pico) and
+  `SD_CON` pin 3. Affected refdes: **R8**.
+- **Change:** remove R8 and bridge the pads (or replace with a
+  0 Ω jumper). MISO becomes a direct trace from GP12 to SD_CON
+  pin 3. R10 on MOSI stays — only MISO was implicated.
+- **Why:** the series resistor on the SD-card's return path
+  attenuated the read signal enough to produce intermittent SPI
+  bit errors at 40 MHz, presenting as MBR read failures and
+  forced re-mounts. Removing R8 made the link stable on the bench.
+  R10 on MOSI never showed symptoms — likely because the Pico's
+  output drive overcomes the series resistance on the forward
+  path, while the SD card's output is the weaker driver on MISO.
+- **Firmware workaround:** [`config.py:92-108`](../../config.py#L92-L108)
+  drops `spi.baudrate` from 40 MHz to 10 MHz. This was originally
+  shipped to mask the R8 symptom and is left in place as a
+  precaution until the next bench session validates 40 MHz on the
+  bypassed board. Once validated, bump the baudrate back in a
+  separate commit. Watchdog / migrate-fallback resilience changes
+  from the same 2026-05-19 session stay — they cover unrelated
+  silent-reset paths.
+
 ## 2026-05-15 · Relay IN-line pull-ups (REL_CON pins 2–8)
 
 - **Status:** pending

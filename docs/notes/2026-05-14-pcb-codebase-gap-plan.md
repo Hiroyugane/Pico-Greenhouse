@@ -30,7 +30,7 @@
 | GP9                  | `GP9`             | MEN_BTN pin 2                            | `button_menu`                   | `led_button`                 | ✅                  | ✅ |
 | GP10                 | `GP10`            | SD_CON pin 5 (SCK)                       | `spi.sck`                       | `sdcard` + `sd_integration`  | ✅                  | ✅ |
 | GP11                 | `GP11`            | R10 → SD_CON pin 4 (MOSI)                | `spi.mosi`                      | same                         | ✅                  | ✅ |
-| GP12                 | `GP12`            | R8 → SD_CON pin 3 (MISO)                 | `spi.miso`                      | same                         | ✅                  | ✅ |
+| GP12                 | `GP12`            | SD_CON pin 3 (MISO direct, R8 removed)   | `spi.miso`                      | same                         | ✅                  | ✅ |
 | GP13                 | `GP13`            | SD_CON pin 6 (CS)                        | `spi.cs`                        | same                         | ✅                  | ✅ |
 | GP14                 | `GP14`            | BUZ_CON pin 3 + R3 pulldown              | `buzzer`                        | `buzzer.BuzzerController`    | ✅                  | ✅ |
 | GP15                 | `GP15`            | T/H_CON pin 4 (DHT22 data)               | `dht22`                         | `dht_logger`                 | ✅                  | ✅ |

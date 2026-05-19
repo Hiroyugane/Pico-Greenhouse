@@ -33,8 +33,11 @@ DEVICE_CONFIG = {
     #   GP7:       Error LED      (LED_CON)
     #   GP8:       Service / reminder LED (LED_CON)
     #   GP9:       Menu button (MEN_BTN, short=cycle, long=action)
-    #   GP10-GP13: SPI1 (SD card via SD_CON). MOSI uses R10, MISO uses R8
-    #              as series resistors between Pico and SD_CON.
+    #   GP10-GP13: SPI1 (SD card via SD_CON). MOSI uses R10 as a series
+    #              resistor between Pico and SD_CON; MISO is direct
+    #              (R8 was identified as the root cause of SD bit errors
+    #              over 2026-05-16/18 and removed — see chat-log
+    #              2026-05-19).
     #   GP14:      Passive buzzer (BUZ_CON, with R3 pulldown to GND)
     #   GP15:      Free (formerly DHT22 data on T/H_CON pin 4; SHT31 now
     #              shares the I2C0 bus, GP15 is available for future use)
@@ -89,20 +92,21 @@ DEVICE_CONFIG = {
         # On-board LED
         "onboard_led": 25,  # GP25 — Pico on-board LED (heartbeat)
     },
-    # SPI Configuration (SD Card via SD_CON; MOSI/MISO use series resistors R10/R8)
+    # SPI Configuration (SD Card via SD_CON; MOSI uses series resistor R10, MISO is direct)
     #
-    # baudrate: 40 MHz was found to trigger frequent SD bit-error / re-mount
-    # cycles in the field (see chat-log 2026-05-19) — series resistors R8/R10
-    # plus typical SD cabling don't comfortably handle the upper end. 10 MHz
-    # is the field-tested setting for this PCB; bandwidth is not the
-    # bottleneck (CSV rows are ~30 bytes), so the trade-off is pure
-    # reliability win.
+    # baudrate: a field run on 2026-05-16/18 produced 32× `SD status
+    # changed: FAILED` over 42 h, traced to series resistor R8 on the
+    # MISO line (GP12 ↔ SD_CON pin 3). R8 has since been removed and
+    # MISO is now a direct trace. Baudrate kept at 10 MHz as a
+    # precaution until the next bench run confirms 40 MHz is safe
+    # without R8; bandwidth is not the bottleneck (CSV rows are ~30
+    # bytes), so leaving headroom on the link is the conservative call.
     "spi": {
         "id": 1,
         "baudrate": 10000000,
         "sck": 10,  # GP10 → SD_CON.SCK
         "mosi": 11,  # GP11 → R10 → SD_CON.MOSI
-        "miso": 12,  # GP12 → R8 → SD_CON.MISO
+        "miso": 12,  # GP12 → SD_CON.MISO (direct; R8 removed)
         "cs": 13,  # GP13 → SD_CON.CS
         "mount_point": "/sd",
     },

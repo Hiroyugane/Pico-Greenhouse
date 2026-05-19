@@ -34,6 +34,37 @@ def _is_mount_busy_error(exc: Exception) -> bool:
     return False
 
 
+def _is_no_filesystem_error(exc: Exception) -> bool:
+    """Detect ENODEV from VfsFat (no valid FAT signature on the block device).
+
+    MicroPython's ``os.mount`` raises ``OSError(19)`` / ENODEV when it
+    cannot find a FAT header on sector 0 — i.e. the card is either raw
+    (unformatted) or has a corrupted filesystem. This is distinct from a
+    bus glitch: retries against ENODEV won't help, only reformat will.
+    """
+    args = getattr(exc, "args", ())
+    if args and args[0] == 19:
+        return True
+    return "ENODEV" in str(exc)
+
+
+def _probe_block_read(sd) -> bool:
+    """Read block 0 raw to confirm the SDCard driver still talks to the card.
+
+    Used after a mount failure to distinguish "card responds but FAT is
+    bad" (block read succeeds → reformat) from "card / SPI is dead"
+    (block read also fails → bus or hardware issue).
+    """
+    if sd is None:
+        return False
+    try:
+        buf = bytearray(512)
+        sd.readblocks(0, buf)
+        return True
+    except Exception:
+        return False
+
+
 def _probe_mount_rw(mount_point: str) -> bool:
     """Verify mount point is writable via write/read/remove probe file."""
     probe_path = f"{mount_point}/.probe"
@@ -86,6 +117,26 @@ def mount_sd(spi, cs_pin, mount_point: str = "/sd", debug_callback=None):
                     if debug_callback:
                         debug_callback(f"SD mount busy/already-mounted; reusing existing mount at {mount_point}")
                     return True, sd
+            # ENODEV from VfsFat means the card responded to SPI init but
+            # has no readable FAT signature. Distinguish "FS corrupt"
+            # (block read OK) from "card / bus dead" (block read fails)
+            # so the operator knows whether to reformat or check wiring.
+            if _is_no_filesystem_error(e):
+                if _probe_block_read(sd):
+                    detail = (
+                        f"SD mount failed at {mount_point}: {e} -- "
+                        "card responds but has NO FILESYSTEM (reformat the SD card as FAT32)"
+                    )
+                else:
+                    detail = (
+                        f"SD mount failed at {mount_point}: {e} -- "
+                        "raw block read also failed (SPI bus / card unresponsive)"
+                    )
+                if debug_callback:
+                    debug_callback(detail)
+                else:
+                    print(f"[SD] {detail}")
+                return False, None
             raise
         if debug_callback:
             debug_callback(f"SD mounted at {mount_point}")

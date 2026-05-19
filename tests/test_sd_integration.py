@@ -113,6 +113,91 @@ class TestMountSD:
         assert ok is True
         assert sd is mock_sd
 
+    def test_mount_device_enodev_with_responsive_card_logs_reformat_hint(self):
+        """ENODEV from os.mount + successful raw block read → 'NO FILESYSTEM' diagnostic."""
+        import lib.sd_integration as sd_mod
+
+        mock_sd = Mock()
+        mock_sd.readblocks = Mock(return_value=None)  # succeeds
+        mock_sdcard = MagicMock()
+        mock_sdcard.SDCard.return_value = mock_sd
+        captured = []
+
+        with patch.object(sd_mod, "_IS_DEVICE", True):
+            with _patch_lib_sdcard(mock_sdcard):
+                with patch("os.mount", create=True, side_effect=OSError(19, "ENODEV")):
+                    ok, sd = sd_mod.mount_sd(
+                        Mock(), Mock(), "/sd", debug_callback=captured.append
+                    )
+
+        assert ok is False
+        assert sd is None
+        joined = "\n".join(captured)
+        assert "NO FILESYSTEM" in joined
+        assert "reformat" in joined.lower()
+
+    def test_mount_device_enodev_with_dead_card_logs_bus_hint(self):
+        """ENODEV from os.mount + failing raw block read → 'SPI bus / card unresponsive' diagnostic."""
+        import lib.sd_integration as sd_mod
+
+        mock_sd = Mock()
+        mock_sd.readblocks = Mock(side_effect=OSError("timeout"))
+        mock_sdcard = MagicMock()
+        mock_sdcard.SDCard.return_value = mock_sd
+        captured = []
+
+        with patch.object(sd_mod, "_IS_DEVICE", True):
+            with _patch_lib_sdcard(mock_sdcard):
+                with patch("os.mount", create=True, side_effect=OSError(19, "ENODEV")):
+                    ok, sd = sd_mod.mount_sd(
+                        Mock(), Mock(), "/sd", debug_callback=captured.append
+                    )
+
+        assert ok is False
+        joined = "\n".join(captured)
+        assert "raw block read also failed" in joined
+        assert "unresponsive" in joined
+
+
+class TestNoFilesystemDetection:
+    """Tests for the ENODEV classifier and raw block probe helpers."""
+
+    def test_is_no_filesystem_error_recognises_errno_19(self):
+        from lib.sd_integration import _is_no_filesystem_error
+
+        assert _is_no_filesystem_error(OSError(19, "ENODEV")) is True
+
+    def test_is_no_filesystem_error_recognises_enodev_in_message(self):
+        from lib.sd_integration import _is_no_filesystem_error
+
+        assert _is_no_filesystem_error(OSError("ENODEV: no filesystem")) is True
+
+    def test_is_no_filesystem_error_rejects_other_codes(self):
+        from lib.sd_integration import _is_no_filesystem_error
+
+        assert _is_no_filesystem_error(OSError(16, "EBUSY")) is False
+        assert _is_no_filesystem_error(OSError("timeout")) is False
+
+    def test_probe_block_read_none_sd_returns_false(self):
+        from lib.sd_integration import _probe_block_read
+
+        assert _probe_block_read(None) is False
+
+    def test_probe_block_read_success(self):
+        from lib.sd_integration import _probe_block_read
+
+        sd = Mock()
+        sd.readblocks = Mock(return_value=None)
+        assert _probe_block_read(sd) is True
+        sd.readblocks.assert_called_once()
+
+    def test_probe_block_read_failure(self):
+        from lib.sd_integration import _probe_block_read
+
+        sd = Mock()
+        sd.readblocks = Mock(side_effect=OSError("spi dead"))
+        assert _probe_block_read(sd) is False
+
 
 class TestIsMounted:
     """Tests for is_mounted() function."""

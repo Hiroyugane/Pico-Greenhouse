@@ -5,6 +5,43 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-19 · Confirm reformat recovers SD + ENODEV diagnostic lands
+
+**Branch:** `main`
+**Why hardware-only:** ENODEV from `os.mount` only reproduces on a
+card with corrupted FAT; host pytest mocks the error class but cannot
+prove the diagnostic + reformat cycle actually recovers the device.
+**Pre-flight:**
+
+1. On a host PC, FAT32-format the SD card (Quick format is fine).
+   Confirm the card mounts on the PC and is empty.
+2. Reinsert into the Pico.
+3. Flash latest `main` (post-classifier) to the Pico.
+
+### Reformatted card boots cleanly
+
+- [ ] Power-cycle Pico with freshly-formatted card inserted.
+- [ ] No 10 s sd_led+error_led countdown; boot reaches main loop.
+- [ ] `/sd/logs/system.log` is created within ~1 minute and contains
+  normal startup lines.
+- [ ] `/boot.log` shows `SD mounted at /sd` (no ENODEV line).
+
+### Diagnostic line lands on a deliberately bad card
+
+- [ ] Use a card with no FAT filesystem (raw or zeroed). Insert.
+- [ ] Power-cycle Pico. Expect reset loop (require_sd_startup).
+- [ ] After the first 10 s countdown, read `/boot.log` over USB MSC.
+  Expect:
+  `SD mount failed at /sd: [Errno 19] ENODEV -- card responds but
+  has NO FILESYSTEM (reformat the SD card as FAT32)`
+- [ ] On a card with disconnected DAT0 / no card inserted, expect
+  instead:
+  `... -- raw block read also failed (SPI bus / card unresponsive)`
+
+### Notes (post-test)
+
+> Fill in here.
+
 ## 2026-05-19 · Confirm SD detection after reverting mount-time mkdir
 
 **Branch:** `main`

@@ -5,6 +5,36 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-19 · Boot.log proves ENODEV on mount; classify and reformat
+
+### issue · all 3 mount_sd attempts return ENODEV on the operator's card
+
+Post-revert boot.log capture confirms the SD card has no readable FAT
+filesystem: every `os.mount(sd, '/sd')` raises `OSError(19) / ENODEV`,
+which on MicroPython's VfsFat means "no FAT signature on sector 0".
+Three retries + the `is_mounted` fallback all return the same code, so
+this is **not** a transient bus glitch — it's persistent filesystem
+corruption. Most plausible cause: the prior [a4f3acc](a4f3acc) fix did
+unfed-WDT mkdir writes immediately after mount; a watchdog reset
+mid-write would have left the FAT table inconsistent. Recovery is
+manual: reformat the card on a PC as FAT32, then reflash.
+
+### decision · classify ENODEV in mount_sd and emit a recovery hint
+
+`lib/sd_integration.py` now distinguishes two failure flavours when
+`os.mount` returns ENODEV:
+
+- `_probe_block_read(sd)` succeeds → card responds at the SPI block
+  layer, filesystem is the problem → log "NO FILESYSTEM (reformat
+  the SD card as FAT32)".
+- `_probe_block_read(sd)` fails → card or bus is dead → log "raw
+  block read also failed (SPI bus / card unresponsive)".
+
+This is diagnostic-only; behavior (return `(False, None)`) is
+unchanged. The operator who opens `/boot.log` after a reset loop now
+sees which path to take (reformat the card vs. check wiring) instead
+of just the raw errno.
+
 ## 2026-05-19 · Revert SD path-tree creation at mount
 
 ### issue · _ensure_sd_layout at mount caused detection regression

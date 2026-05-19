@@ -229,6 +229,18 @@ class TestUpdaterUnit:
         assert "apply_ok" in log_path.read_text()
         assert "x" * 200 not in log_path.read_text()
 
+    def test_log_mirrors_to_boot_log(self, updater_factory, sd_root, tmp_path):
+        from lib import boot_log
+
+        flash_log = tmp_path / "boot.log"
+        boot_log.configure(path=str(flash_log), max_bytes=10 * 1024)
+        boot_log._reset_for_test()
+        u = updater_factory(log_path=str(sd_root / "missing_dir" / "updates.log"))
+        u.log("verify_fail", "v9", detail="size mismatch")
+        assert flash_log.exists()
+        assert "verify_fail" in flash_log.read_text()
+        assert "size mismatch" in flash_log.read_text()
+
     def test_log_max_size_zero_disables_rotation(self, updater_factory, sd_root):
         log_path = sd_root / "updates.log"
         log_path.write_text("x" * 200)

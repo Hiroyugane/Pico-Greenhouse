@@ -328,6 +328,14 @@ class Updater:
             print("[updater]", line)
         except Exception:
             pass
+        # Mirror to Pico internal flash (/boot.log) so the same entries
+        # survive an SD card that's read-OK / write-flaky mid-update.
+        try:
+            from lib import boot_log
+
+            boot_log.write("[updater] " + line)
+        except Exception:
+            pass
         try:
             parent = _dirname(self.log_path)
             if parent:

@@ -366,6 +366,112 @@ class TestHardwareFactorySD:
         assert result is False
         assert any("SD init failed" in e for e in factory.errors)
 
+    def test_init_sd_creates_standard_layout_on_empty_card(self, tmp_path):
+        """Fresh FAT-formatted card (no /sd/logs etc.) gets the path tree post-mount.
+
+        Regression: previously a card with no logs/ folder would mount but the
+        first EventLogger write raced against missing parents, causing the
+        require_sd_startup path to declare SD undetected and trigger a reset
+        loop. After mount we explicitly mkdir every DEVICE_CONFIG["paths"]
+        entry under the mount point so writers find their parents.
+        """
+        from lib.hardware_factory import HardwareFactory
+
+        mount_point = str(tmp_path / "sd")
+        config = {
+            "spi": {"mount_point": mount_point},
+            "paths": {
+                "sensor_root": mount_point + "/sensors",
+                "logs_dir": mount_point + "/logs",
+                "ota_pending_dir": mount_point + "/ota/pending",
+                "ota_applied_dir": mount_point + "/ota/applied",
+                "diagnostics_dir": mount_point + "/diagnostics",
+            },
+        }
+        factory = HardwareFactory(config=config)
+
+        # Host path of _init_sd creates the mount point and runs layout.
+        assert factory._init_sd() is True
+        assert factory.sd_mounted is True
+
+        for path in config["paths"].values():
+            import os as _os
+
+            assert _os.path.isdir(path), f"missing {path}"
+
+    def test_init_sd_layout_idempotent_when_dirs_exist(self, tmp_path):
+        """Re-running layout creation over an already-populated card is a no-op."""
+        from lib.hardware_factory import HardwareFactory
+
+        mount_point = str(tmp_path / "sd")
+        import os as _os
+
+        _os.makedirs(mount_point + "/logs")
+        _os.makedirs(mount_point + "/sensors")
+        # Drop a file under logs so we can prove the layout step doesn't wipe content.
+        existing = mount_point + "/logs/system.log"
+        with open(existing, "w") as f:
+            f.write("kept")
+
+        config = {
+            "spi": {"mount_point": mount_point},
+            "paths": {
+                "sensor_root": mount_point + "/sensors",
+                "logs_dir": mount_point + "/logs",
+                "diagnostics_dir": mount_point + "/diagnostics",
+            },
+        }
+        factory = HardwareFactory(config=config)
+        assert factory._init_sd() is True
+        with open(existing) as f:
+            assert f.read() == "kept"
+        assert _os.path.isdir(mount_point + "/diagnostics")
+
+    def test_init_sd_layout_failure_keeps_mount_alive(self, monkeypatch):
+        """A failing mkdir during layout creation logs an error but does not unmount.
+
+        Detection must not flip back to False when one of the path entries
+        cannot be created — the card is mounted and writable at the root,
+        and downstream writers will fall back to in-memory buffering for
+        the affected subtree.
+        """
+        from lib.hardware_factory import HardwareFactory
+
+        config = {
+            "spi": {"mount_point": "/sd"},
+            "paths": {"logs_dir": "/sd/logs"},
+        }
+        factory = HardwareFactory(config=config)
+
+        def _boom(path: str) -> None:
+            raise OSError("read-only")
+
+        monkeypatch.setattr(HardwareFactory, "_mkdir_p", staticmethod(_boom))
+        factory._ensure_sd_layout("/sd")
+
+        assert any("SD layout mkdir failed" in e for e in factory.errors)
+
+    def test_init_sd_layout_skips_paths_outside_mount(self, tmp_path):
+        """Path entries that don't live under the mount point are skipped, not created."""
+        from lib.hardware_factory import HardwareFactory
+
+        mount_point = str(tmp_path / "sd")
+        outside = str(tmp_path / "elsewhere" / "stray")
+        config = {
+            "spi": {"mount_point": mount_point},
+            "paths": {
+                "logs_dir": mount_point + "/logs",
+                "stray": outside,
+            },
+        }
+        factory = HardwareFactory(config=config)
+        assert factory._init_sd() is True
+
+        import os as _os
+
+        assert _os.path.isdir(mount_point + "/logs")
+        assert not _os.path.exists(outside)
+
 
 class TestHardwareFactoryPins:
     """Tests for GPIO pin initialization."""

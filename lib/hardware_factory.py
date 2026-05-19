@@ -229,6 +229,7 @@ class HardwareFactory:
                     os.makedirs(mount_point, exist_ok=True)
                 except Exception:
                     pass
+                self._ensure_sd_layout(mount_point)
                 self.sd_mounted = True
                 return True
             if not self.spi:
@@ -264,6 +265,7 @@ class HardwareFactory:
                     self.sd_mounted = True
                     if self._debug:
                         self._debug(f"SD mounted: attempt={attempt + 1}, mount_point={mount_point}")
+                    self._ensure_sd_layout(mount_point)
                     return True
                 if attempt < max_retries - 1:
                     boot_log.log(
@@ -299,6 +301,7 @@ class HardwareFactory:
                     self.spi = result[2] or self.spi
                     self.sd_mounted = True
                     boot_log.log("[HardwareFactory] SD mounted via is_mounted fallback")
+                    self._ensure_sd_layout(mount_point)
                     return True
             except Exception as e:
                 self.errors.append(f"is_mounted fallback raised: {e}")
@@ -327,6 +330,59 @@ class HardwareFactory:
             self._init_spi()
         except Exception as e:
             self.errors.append(f"SPI reinit failed: {e}")
+
+    def _ensure_sd_layout(self, mount_point: str) -> None:
+        """Create the standard ``DEVICE_CONFIG["paths"]`` tree on the SD root.
+
+        Called after every successful mount so a freshly FAT-formatted card
+        (no /sd/logs, no /sd/sensors, etc.) gets the directory layout the
+        writers expect, before EventLogger or any logger attempts its first
+        write. Without this, the first writer to hit a missing parent dir
+        falls through to the fallback path, which on a require_sd_startup
+        boot is what manifests as "SD not detected" + reset loop.
+
+        Failures are non-fatal: a path that cannot be created is appended
+        to ``self.errors`` and the mount stays alive. Only paths under
+        ``mount_point`` are touched.
+        """
+        paths_cfg = self.config.get("paths", {})
+        if not isinstance(paths_cfg, dict) or not paths_cfg:
+            return
+        mp = mount_point.rstrip("/") or "/"
+        for key, path in paths_cfg.items():
+            if not isinstance(path, str) or not path:
+                continue
+            if path != mp and not path.startswith(mp + "/"):
+                continue
+            try:
+                self._mkdir_p(path)
+                if self._debug:
+                    self._debug(f"SD layout ensured: {key}={path}")
+            except Exception as e:
+                self.errors.append(f"SD layout mkdir failed for {key}={path}: {e}")
+
+    @staticmethod
+    def _mkdir_p(path: str) -> None:
+        """MicroPython-friendly recursive ``os.mkdir``; idempotent.
+
+        On host (CPython) ``os.makedirs(exist_ok=True)`` covers this in one
+        call, but MicroPython's ``os`` lacks ``makedirs`` so we walk the
+        components ourselves and ignore "already exists" errors via
+        ``os.stat`` probing.
+        """
+        if not path:
+            return
+        norm = path.replace("\\", "/")
+        parts = [p for p in norm.split("/") if p]
+        current = "/" if norm.startswith("/") else ""
+        for part in parts:
+            current = current + part if current in ("", "/") else current + "/" + part
+            try:
+                os.stat(current)
+                continue
+            except OSError:
+                pass
+            os.mkdir(current)
 
     @staticmethod
     def _safe_umount(mount_point: str) -> None:

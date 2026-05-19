@@ -164,6 +164,8 @@ class Updater:
         time_provider=None,
         feedback=None,
         log_max_size=50000,
+        verify_max_retries=3,
+        verify_retry_delay_ms=200,
     ):
         self.update_dir = update_dir.rstrip("/").rstrip("\\")
         self.applied_dir = applied_dir.rstrip("/").rstrip("\\")
@@ -175,6 +177,8 @@ class Updater:
         self.time_provider = time_provider
         self.feedback = feedback
         self.log_max_size = int(log_max_size)
+        self.verify_max_retries = int(verify_max_retries)
+        self.verify_retry_delay_ms = int(verify_retry_delay_ms)
 
     # --- Public API --------------------------------------------------
 
@@ -223,33 +227,53 @@ class Updater:
                 continue
 
             abs_path = self.update_dir + "/" + rel
-            if not _exists(abs_path):
-                errors.append("missing file: %s" % rel)
-                self._breadcrumb("verify %s missing" % rel)
-                continue
+            outcome = self._verify_one_with_retry(abs_path, rel, expected_size, expected_hash)
+            if outcome is None:
+                self._breadcrumb("verify %s ok" % rel)
+            else:
+                kind, detail = outcome
+                errors.append(detail)
+                self._breadcrumb("verify %s %s" % (rel, kind))
+        self._breadcrumb("verify done errors=%d" % len(errors))
+        return errors
+
+    def _verify_one_with_retry(self, abs_path, rel, expected_size, expected_hash):
+        """Stat + hash one file; retry on OSError up to verify_max_retries.
+
+        Returns None on success, or (breadcrumb_kind, detail_string) on terminal
+        failure. Semantic mismatches (size_mismatch, hash_mismatch) return
+        immediately without retrying — they're not bus glitches. OSError on
+        stat or hash retries with verify_retry_delay_ms between attempts so a
+        transient SD bus stall is given a chance to recover.
+        """
+        attempts = self.verify_max_retries + 1
+        last_kind = "stat_fail"
+        last_detail = "stat failed for %s: unknown" % rel
+        for attempt in range(attempts):
+            if attempt > 0:
+                _sleep_ms(self.verify_retry_delay_ms)
+                self._feed_wdt()
             try:
                 actual_size = os.stat(abs_path)[6]
             except OSError as e:
-                errors.append("stat failed for %s: %s" % (rel, e))
-                self._breadcrumb("verify %s stat_fail %s" % (rel, e))
+                last_kind = "stat_fail %s" % e
+                last_detail = "stat failed for %s: %s" % (rel, e)
                 continue
             if actual_size != expected_size:
-                errors.append("size mismatch for %s: %d != %d" % (rel, actual_size, expected_size))
-                self._breadcrumb("verify %s size_mismatch %d/%d" % (rel, actual_size, expected_size))
-                continue
+                return (
+                    "size_mismatch %d/%d" % (actual_size, expected_size),
+                    "size mismatch for %s: %d != %d" % (rel, actual_size, expected_size),
+                )
             try:
                 actual_hash = self._hash_file(abs_path)
             except OSError as e:
-                errors.append("hash failed for %s: %s" % (rel, e))
-                self._breadcrumb("verify %s hash_fail %s" % (rel, e))
+                last_kind = "hash_fail %s" % e
+                last_detail = "hash failed for %s: %s" % (rel, e)
                 continue
             if actual_hash.lower() != expected_hash.lower():
-                errors.append("sha256 mismatch for %s" % rel)
-                self._breadcrumb("verify %s hash_mismatch" % rel)
-                continue
-            self._breadcrumb("verify %s ok" % rel)
-        self._breadcrumb("verify done errors=%d" % len(errors))
-        return errors
+                return ("hash_mismatch", "sha256 mismatch for %s" % rel)
+            return None
+        return (last_kind, last_detail)
 
     def is_already_applied(self, manifest):
         """Return True if every manifest file already exists on flash with matching size + sha256.
@@ -508,6 +532,8 @@ def run_pending_update(config, hardware, wdt=None):
         retry_delay_ms=upd_cfg.get("retry_delay_ms", 200),
         wdt=wdt,
         log_max_size=upd_cfg.get("log_max_size", 50000),
+        verify_max_retries=upd_cfg.get("verify_max_retries", 3),
+        verify_retry_delay_ms=upd_cfg.get("verify_retry_delay_ms", 200),
     )
 
     if not updater.has_pending_update():

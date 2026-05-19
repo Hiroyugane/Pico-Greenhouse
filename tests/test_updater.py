@@ -299,6 +299,8 @@ class TestRunPendingUpdate:
                 "log_path": str(sd_root / "updates.log"),
                 "max_retries": 3,
                 "retry_delay_ms": 0,
+                "verify_max_retries": 3,
+                "verify_retry_delay_ms": 0,
                 "allowed_paths": ["main.py", "config.py", "lib/"],
             }
         }
@@ -323,6 +325,8 @@ class TestRunPendingUpdate:
                 "log_path": str(sd_root / "updates.log"),
                 "max_retries": 3,
                 "retry_delay_ms": 0,
+                "verify_max_retries": 3,
+                "verify_retry_delay_ms": 0,
                 "allowed_paths": ["main.py", "config.py", "lib/"],
             }
         }
@@ -354,6 +358,8 @@ class TestRunPendingUpdate:
                 "log_path": str(sd_root / "updates.log"),
                 "max_retries": 3,
                 "retry_delay_ms": 0,
+                "verify_max_retries": 3,
+                "verify_retry_delay_ms": 0,
                 "allowed_paths": ["main.py", "config.py", "lib/"],
             }
         }
@@ -478,6 +484,65 @@ class TestUpdaterErrorPaths:
         for rel, content in files:
             assert (flash_root / rel).read_bytes() == content
 
+    def test_verify_retries_transient_hash_oserror(self, updater_factory, good_payload, sd_root, monkeypatch):
+        """A transient OSError on _hash_file recovers on retry without surfacing an error."""
+        import lib.updater as upd_mod
+
+        manifest, _ = good_payload
+        original_hash = upd_mod.Updater._hash_file
+        call_state = {"count": 0}
+
+        def flaky_hash(self, abs_path):
+            if "lib/relay.py" in abs_path.replace("\\", "/"):
+                call_state["count"] += 1
+                if call_state["count"] == 1:
+                    raise OSError("timeout waiting for response")
+            return original_hash(self, abs_path)
+
+        monkeypatch.setattr(upd_mod.Updater, "_hash_file", flaky_hash)
+        u = updater_factory(verify_max_retries=3, verify_retry_delay_ms=0)
+        errors = u.verify_payload(manifest)
+        assert errors == []
+        assert call_state["count"] == 2  # first call raised, second succeeded
+
+    def test_verify_exhausts_retries_on_persistent_hash_oserror(self, updater_factory, good_payload, monkeypatch):
+        """A persistent OSError surfaces as hash_fail after retries exhaust."""
+        import lib.updater as upd_mod
+
+        manifest, _ = good_payload
+
+        def always_fail(self, abs_path):
+            raise OSError("bus wedged")
+
+        monkeypatch.setattr(upd_mod.Updater, "_hash_file", always_fail)
+        u = updater_factory(verify_max_retries=2, verify_retry_delay_ms=0)
+        errors = u.verify_payload(manifest)
+        assert any("hash failed" in e and "bus wedged" in e for e in errors)
+
+    def test_verify_does_not_retry_real_size_mismatch(self, updater_factory, sd_root, monkeypatch):
+        """size_mismatch is semantic, not a bus glitch — no retries, fast fail."""
+        import lib.updater as upd_mod
+
+        good = b"X" * 16
+        bad = b"YY"  # different size on purpose
+        _write(sd_root / "update" / "main.py", bad)
+        manifest = {
+            "version": "x",
+            "files": [{"path": "main.py", "sha256": _sha256_bytes(good), "bytes": len(good)}],
+        }
+        hash_calls = {"n": 0}
+        original_hash = upd_mod.Updater._hash_file
+
+        def counting_hash(self, abs_path):
+            hash_calls["n"] += 1
+            return original_hash(self, abs_path)
+
+        monkeypatch.setattr(upd_mod.Updater, "_hash_file", counting_hash)
+        u = updater_factory(verify_max_retries=5, verify_retry_delay_ms=0)
+        errors = u.verify_payload(manifest)
+        assert errors and "size mismatch" in errors[0]
+        assert hash_calls["n"] == 0  # size mismatch short-circuits before hashing
+
     def test_apply_exhausts_retries(self, updater_factory, good_payload, sd_root, monkeypatch):
         import lib.updater as upd_mod
         from lib.updater import UpdateError
@@ -591,6 +656,8 @@ class TestRunPendingUpdateBranches:
                 "log_path": str(sd_root / "updates.log"),
                 "max_retries": 3,
                 "retry_delay_ms": 0,
+                "verify_max_retries": 3,
+                "verify_retry_delay_ms": 0,
                 "allowed_paths": ["main.py", "config.py", "lib/"],
             }
         }

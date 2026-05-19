@@ -5,6 +5,43 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-19 · SD-update verify/apply breadcrumbs to /boot.log
+
+**Branch:** `main`
+**Why hardware-only:** New `Updater._breadcrumb()` writes per-file
+verify/apply progress crumbs directly to `/boot.log` on internal
+flash. Only verifiable on real hardware because the diagnostic value
+is "what file did verify die on when the SD log silently stopped" —
+host tests cannot reproduce a flaky SD bus.
+**Pre-flight:** Flash the new updater + boot_log to Pico via
+`flash-mpremote-nocheck` (bypasses SD update so the new breadcrumb
+code is live before any SD update is attempted). Delete `/boot.log`
+on Pico flash so the new boot starts clean. Build a fresh payload
+with `deploy-update-to-sdcard-nocheck`; do not power-cycle yet.
+
+### Capture breadcrumbs on a failing run
+
+- [ ] Power-cycle Pico with the payload in `G:\ota\pending\`.
+  Observe the loading-screen LEDs + jingle outcome.
+- [ ] Mount Pico internal flash over USB MSC. Read `/boot.log`.
+- [ ] `/boot.log` contains `[updater.crumb] verify start files=<N>`
+  matching the payload's file count.
+- [ ] `/boot.log` lists either `verify <rel> ok` for every file (in
+  which case the failure is in apply, not verify) OR exactly one
+  non-ok line with the file path that died and the failure kind
+  (`hash_fail`, `size_mismatch`, `hash_mismatch`, `missing`,
+  `stat_fail`, `not_allowed`).
+- [ ] `/boot.log` ends with `[updater.crumb] verify done errors=<n>`
+  matching the number of non-ok lines.
+- [ ] If verify passed but apply failed, `/boot.log` contains
+  `[updater.crumb] apply start files=<N>` followed by per-file
+  `apply <rel> ok` lines and an `apply <rel> fail <err>` line at
+  the failure point.
+
+### Notes (post-test)
+
+>
+
 ## 2026-05-19 · SD-update canonical path + /boot.log mirror
 
 **Branch:** `main`

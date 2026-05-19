@@ -5,6 +5,47 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-19 · SD-update verify/apply breadcrumbs
+
+### issue · Pico's `start` line lands on SD, no follow-up line lands, fail jingle still plays
+
+On-hardware test after the path-fix deploy produced TWO consecutive
+`start ? payload detected` lines in `/sd/logs/updates.log` (canonical
+path confirmed) with NO `verify_fail` / `apply_fail` follow-up,
+despite the two-tone descending fail jingle playing each time. The
+boot_log mirror added in [1b5baae](1b5baae) cannot help here yet
+because the new updater is in the *payload on SD*; the Pico's flash
+still runs the pre-mirror updater. Chicken-and-egg.
+
+Concurrent observation in `/sd/logs/system.log`: the 14:42 boot enters
+`SD status changed: FAILED` at 14:43:26 and stays in fallback for ~45
+minutes, so the SD bus is dropping during sustained traffic even
+after R8 removal. Most likely failure mode: `_hash_file` raises
+`OSError` mid-verify, `verify_payload` records the error, but the
+subsequent `updater.log("verify_fail", …)` SD append silently fails
+because the same bus glitch is still in flight.
+
+### decision · add per-file `[updater.crumb]` breadcrumbs to `/boot.log`
+
+Added `_breadcrumb(message)` on `Updater` and wired it into every
+verify branch (start, ok, missing, not_allowed, malformed_entry,
+stat_fail, size_mismatch, hash_fail, hash_mismatch, done) plus apply
+(start, per-file ok / fail, done). Writes go through
+`lib.boot_log.write()` only — bypasses both SD and the regular
+`Updater.log()` path, so the trail survives even when the SD-side
+append is the thing that's silently broken. Operator can mount Pico
+flash over USB MSC and read where verify died: filename + reason.
+
+Independent from the existing `updates.log` mirror; both fire. The
+breadcrumb is verbose-per-file, the mirror is the structured event.
+
+### note · breadcrumbs only help once the new updater is on flash
+
+The same chicken-and-egg applies. To get the new breadcrumb-emitting
+updater live, flash via `flash-mpremote-nocheck` (bypasses SD update).
+After that, re-trigger an SD update; `/boot.log` will then contain
+`[updater.crumb] verify <path> <kind>` lines pinpointing the failure.
+
 ## 2026-05-19 · SD-update deploy path + updater log mirror
 
 ### issue · deploy task was writing to legacy /sd/update, hiding canonical layout from operators

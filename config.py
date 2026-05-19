@@ -90,9 +90,16 @@ DEVICE_CONFIG = {
         "onboard_led": 25,  # GP25 — Pico on-board LED (heartbeat)
     },
     # SPI Configuration (SD Card via SD_CON; MOSI/MISO use series resistors R10/R8)
+    #
+    # baudrate: 40 MHz was found to trigger frequent SD bit-error / re-mount
+    # cycles in the field (see chat-log 2026-05-19) — series resistors R8/R10
+    # plus typical SD cabling don't comfortably handle the upper end. 10 MHz
+    # is the field-tested setting for this PCB; bandwidth is not the
+    # bottleneck (CSV rows are ~30 bytes), so the trade-off is pure
+    # reliability win.
     "spi": {
         "id": 1,
-        "baudrate": 40000000,
+        "baudrate": 10000000,
         "sck": 10,  # GP10 → SD_CON.SCK
         "mosi": 11,  # GP11 → R10 → SD_CON.MOSI
         "miso": 12,  # GP12 → R8 → SD_CON.MISO

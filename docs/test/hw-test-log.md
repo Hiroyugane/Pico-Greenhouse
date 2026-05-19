@@ -5,6 +5,38 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-19 · Confirm SD detection after reverting mount-time mkdir
+
+**Branch:** `main`
+**Why hardware-only:** The reset loop with `/sd/logs` present was
+observed on the real Pico after [a4f3acc](a4f3acc) and could not be
+reproduced on host. The revert needs eyes-on confirmation that
+boot now completes on the same card that was failing.
+**Pre-flight:** Flash the latest `main` (post-revert) to the Pico
+via `flash-mpremote-nocheck`. Use the same SD card that exhibited
+the reset loop, without changing its contents.
+
+### Boot completes with /sd/logs present
+
+- [ ] Power-cycle Pico with card inserted.
+- [ ] No 10 s sd_led+error_led countdown, no reset loop.
+- [ ] `/sd/logs/system.log` continues to grow with normal entries.
+
+### Boot completes with /sd/logs absent
+
+- [ ] Delete `/sd/logs/` from the card on a host, reinsert.
+- [ ] Power-cycle Pico.
+- [ ] Boot reaches main loop without reset loop. `/sd/logs/` is
+  re-created lazily by `BufferManager._ensure_parent_dir` on the
+  first EventLogger write; `/sd/logs/system.log` exists within
+  ~1 minute.
+
+### Notes (post-test)
+
+> Fill in here. If the reset loop still happens with `/sd/logs`
+> absent, the original symptom was unrelated to the directory and
+> we need a /boot.log capture before further code changes.
+
 ## 2026-05-19 · SD detected on empty / no-logs cards at boot
 
 **Branch:** `main`

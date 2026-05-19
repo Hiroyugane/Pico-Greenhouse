@@ -5,6 +5,40 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-19 · Revert SD path-tree creation at mount
+
+### issue · _ensure_sd_layout at mount caused detection regression
+
+After [a4f3acc](a4f3acc) shipped, the operator reported the
+require_sd_startup reset loop *even with `/sd/logs` already present*
+on the card. Same Pico, same card that booted fine before the
+commit. So the fix made detection worse, not better.
+
+### deviation · revert the mount-time layout step
+
+Reverted the `_ensure_sd_layout` / `_mkdir_p` helpers and their
+three call sites in `_init_sd`. Tree creation at mount-time did
+five synchronous SD writes with **no WDT feeding**, on a bus that
+the chat-log already documents as flaky under sustained write
+traffic ([10257d9](10257d9), [4692303](4692303)). The plausible
+failure modes are (a) watchdog tripping mid-mkdir and leaving the
+FAT inconsistent for the next mount, and (b) bus glitches turning
+the post-mount writes into a destabilising salvo. Either way,
+adding writes to the mount-success path is the wrong move.
+
+### note · lazy parent creation already covers the original symptom
+
+The original "missing /sd/logs causes reset loop" hypothesis is
+not actually supported by the code: `BufferManager._ensure_parent_dir`
+([lib/buffer_manager.py:302](../../lib/buffer_manager.py#L302)) and
+`Updater._makedirs` ([lib/updater.py:68](../../lib/updater.py#L68))
+both create parent dirs recursively on first write. EventLogger
+and the updater therefore already tolerate a missing `/sd/logs`.
+The real root cause of the original symptom is more likely the
+SD bus stability work already in flight (verify retries, baud-rate
+drop, R8 removal) — see [4692303](4692303) and prior entries.
+Re-investigate from boot.log when the operator can capture it.
+
 ## 2026-05-19 · SD detection tolerant of missing /sd/logs and empty cards
 
 ### issue · fresh FAT-formatted card with no /sd/logs triggers reset loop

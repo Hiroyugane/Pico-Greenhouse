@@ -264,6 +264,53 @@ class TestDrainTask:
         assert write_queue_manager._failed_drains == 3
         assert write_queue_manager.get_queue_size() == 0
 
+    async def test_drain_feeds_watchdog_between_writes(self, mock_buffer_manager, mock_logger):
+        """_drain_batch invokes wdt_feed at least once per write.
+
+        Why: each write hits the SD over SPI and can take tens of ms on a
+        slow card. A full batch of 5 with a card hiccup can exceed the
+        8 s watchdog window unless the loop feeds between writes.
+        """
+        feeds = []
+        wq = WriteQueueManager(
+            buffer_manager=mock_buffer_manager,
+            logger=mock_logger,
+            max_queue_size=10,
+            drain_interval_ms=100,
+            batch_size=5,
+            wdt_feed=lambda: feeds.append(1),
+        )
+
+        for i in range(3):
+            wq.enqueue_write("test.csv", f"line{i}\n")
+
+        await wq._drain_batch()
+        assert len(feeds) >= 3
+
+    async def test_drain_watchdog_feed_continues_on_failure(self, mock_buffer_manager, mock_logger):
+        """wdt_feed runs even when an individual write raises.
+
+        Why: a failing write is exactly when the SD is slowest and most
+        likely to push the loop past the watchdog window. The feed must
+        fire on the failure path too — `finally:` block, not `else:`.
+        """
+        mock_buffer_manager.write.side_effect = OSError("SD error")
+        feeds = []
+        wq = WriteQueueManager(
+            buffer_manager=mock_buffer_manager,
+            logger=mock_logger,
+            max_queue_size=10,
+            drain_interval_ms=100,
+            batch_size=5,
+            wdt_feed=lambda: feeds.append(1),
+        )
+
+        for i in range(3):
+            wq.enqueue_write("test.csv", f"line{i}\n")
+
+        await wq._drain_batch()
+        assert len(feeds) >= 3
+
 
 # ---------------------------------------------------------------------------
 # Tests: Graceful Shutdown

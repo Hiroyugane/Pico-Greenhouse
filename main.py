@@ -314,6 +314,7 @@ async def main():
         max_queue_size=system_config.get("write_queue_max_size", 500),
         drain_interval_ms=system_config.get("queue_drain_interval_ms", 100),
         batch_size=system_config.get("queue_batch_size", 5),
+        wdt_feed=feed_wdt,
     )
     # Step 5: Create EventLogger
     logger = EventLogger(

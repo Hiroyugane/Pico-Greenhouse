@@ -52,6 +52,7 @@ class WriteQueueManager:
         max_queue_size=500,
         drain_interval_ms=100,
         batch_size=5,
+        wdt_feed=None,
     ):
         """
         Initialize WriteQueueManager.
@@ -62,12 +63,16 @@ class WriteQueueManager:
             max_queue_size (int): Max queue entries before overflow to fallback (default: 500)
             drain_interval_ms (int): Milliseconds between drain cycles (default: 100)
             batch_size (int): Max writes per drain cycle (default: 5)
+            wdt_feed: Optional callable() that feeds the hardware watchdog. Invoked
+                between writes inside each drain cycle so a legitimate burst of
+                SPI work cannot exceed the watchdog window.
         """
         self.buffer_manager = buffer_manager
         self.logger: "EventLogger | None" = logger
         self._max_queue_size = max_queue_size
         self._drain_interval_ms = drain_interval_ms
         self._batch_size = batch_size
+        self._wdt_feed = wdt_feed
         self._queue = []
         self._running = False
         self._drain_task = None
@@ -181,9 +186,20 @@ class WriteQueueManager:
                     error=str(e),
                     failed_drains=self._failed_drains,
                 )
+            finally:
+                self._feed_wdt()
 
         # Remove processed entries from queue
         self._queue = self._queue[self._batch_size :]
+
+    def _feed_wdt(self) -> None:
+        """Invoke the injected watchdog-feed callback, if any. Errors swallowed."""
+        if self._wdt_feed is None:
+            return
+        try:
+            self._wdt_feed()
+        except Exception:
+            pass
 
     async def _flush_all(self) -> None:
         """

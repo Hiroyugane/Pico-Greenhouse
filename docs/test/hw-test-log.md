@@ -5,6 +5,48 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-19 · SD detected on empty / no-logs cards at boot
+
+**Branch:** `main`
+**Why hardware-only:** The reset-loop symptom only manifests on the
+real Pico with `require_sd_startup=True` and the actual SD card +
+SPI bus. Host tests prove the directory tree is created post-mount;
+only the device proves the boot completes without entering the
+sd_led+error_led failure state.
+**Pre-flight:** Take an SD card the Pico previously booted from and
+either (a) delete `/sd/logs/` entirely, or (b) reformat the card
+(FAT32, quick) so it has no files. Re-seat the card. Flash latest
+`main` to the Pico.
+
+### Empty FAT-formatted card boots cleanly
+
+- [ ] Power-cycle Pico with the empty card inserted.
+- [ ] Boot reaches the main loop — no 10 s sd_led+error_led
+  countdown, no reset loop.
+- [ ] After ~1 minute, `/sd/logs/` exists on the card, contains
+  `system.log` with normal startup lines.
+- [ ] `/sd/sensors/`, `/sd/ota/pending/`, `/sd/ota/applied/`,
+  `/sd/diagnostics/` all exist as empty directories.
+
+### Missing-logs-only card boots cleanly
+
+- [ ] Repeat the above with a card that has `/sd/sensors/` and
+  `/sd/ota/` populated from a prior boot but `/sd/logs/` manually
+  deleted.
+- [ ] Boot completes; `/sd/logs/system.log` is recreated.
+
+### Layout-creation failure stays non-fatal
+
+- [ ] (Optional, advanced) Mount the card read-only on a host,
+  delete `/sd/logs`, then re-insert. The Pico mounts, attempts to
+  mkdir `/sd/logs`, fails, and continues booting — fallback file
+  fills with the lost log lines. `/boot.log` shows
+  `SD layout mkdir failed for logs_dir=...`.
+
+### Notes (post-test)
+
+> Fill in here.
+
 ## 2026-05-19 · Verify retry-on-OSError under SD bus stalls
 
 **Branch:** `main`

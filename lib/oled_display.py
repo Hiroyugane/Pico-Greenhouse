@@ -149,9 +149,7 @@ class OLEDDisplay:
         self._debug_status_show_ms = int(debug_status_show_ms)
         self._debug_test_heater_s = debug_test_heater_s
         self._debug_test_growlight_pulse_s = debug_test_growlight_pulse_s
-        self._debug_test_growlight_dim_levels_pct = list(
-            debug_test_growlight_dim_levels_pct or [0, 25, 50, 75, 100, 0]
-        )
+        self._debug_test_growlight_dim_levels_pct = list(debug_test_growlight_dim_levels_pct or [0, 25, 50, 75, 100, 0])
         self._debug_test_growlight_dim_step_s = debug_test_growlight_dim_step_s
         self._debug_test_relay_pulse_s = debug_test_relay_pulse_s
 
@@ -568,9 +566,7 @@ class OLEDDisplay:
                 # Timeout: return to default menu after inactivity
                 if self._menu_timeout_s > 0:
                     idle_ms = _ticks_ms() - self._last_interaction_ms
-                    if idle_ms >= self._menu_timeout_s * 1000 and (
-                        self.current_menu != 0 or self._debug_mode
-                    ):
+                    if idle_ms >= self._menu_timeout_s * 1000 and (self.current_menu != 0 or self._debug_mode):
                         if self._debug_mode and not self._debug_running:
                             self._exit_debug_mode()
                         self.current_menu = 0

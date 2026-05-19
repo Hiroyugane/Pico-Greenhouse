@@ -774,8 +774,10 @@ class TestOLEDDebugMenu:
         # Replace the cycle_relays handler with one that raises.
         for action in debug_oled._debug_actions:
             if action["id"] == "cycle_relays":
+
                 async def _boom():
                     raise RuntimeError("nope")
+
                 action["handler"] = _boom
                 debug_oled._debug_action_idx = debug_oled._debug_actions.index(action)
                 break
@@ -850,6 +852,7 @@ class TestOLEDDebugMenu:
             raise RuntimeError("stop")
 
         import time as _time
+
         with patch("lib.oled_display._ticks_ms", return_value=int(_time.time() * 1000)):
             with patch("lib.oled_display.asyncio.sleep", side_effect=_fake_sleep):
                 with pytest.raises(RuntimeError, match="stop"):

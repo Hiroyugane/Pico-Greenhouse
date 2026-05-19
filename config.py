@@ -552,9 +552,7 @@ def _validate_fans(fans_cfg, pins_cfg):
                 raise ValueError(f"Missing config key: {prefix}.relay_pin_key")
             pk = cfg["relay_pin_key"]
             if not isinstance(pk, str) or pk not in pins_cfg:
-                raise ValueError(
-                    f"{prefix}.relay_pin_key must reference a pin in pins section (got {pk!r})"
-                )
+                raise ValueError(f"{prefix}.relay_pin_key must reference a pin in pins section (got {pk!r})")
             if pk in used_relay_keys:
                 raise ValueError(f"{prefix}.relay_pin_key={pk!r} is used by another fan")
             used_relay_keys.add(pk)
@@ -917,9 +915,7 @@ def validate_config():
     if co2_cfg["override_ppm_off"] < 0:
         raise ValueError("co2_logger.override_ppm_off must be >= 0")
     if co2_cfg["override_fan"] not in DEVICE_CONFIG.get("fans", {}):
-        raise ValueError(
-            f"co2_logger.override_fan must be a key in fans dict (got {co2_cfg['override_fan']!r})"
-        )
+        raise ValueError(f"co2_logger.override_fan must be a key in fans dict (got {co2_cfg['override_fan']!r})")
     if not isinstance(co2_cfg["sensor_type"], str) or not co2_cfg["sensor_type"]:
         raise ValueError("co2_logger.sensor_type must be a non-empty string")
 
@@ -1067,9 +1063,7 @@ def validate_config():
         raise ValueError("status_leds.walk_order entries must be unique")
     for role in walk:
         if role not in valid_walk_roles:
-            raise ValueError(
-                f"status_leds.walk_order entries must be one of {valid_walk_roles}"
-            )
+            raise ValueError(f"status_leds.walk_order entries must be one of {valid_walk_roles}")
 
     # Validate paths section: every entry must be a non-empty absolute path.
     # All five live on the SD card, so each must start with the SPI mount

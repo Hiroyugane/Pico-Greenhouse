@@ -354,12 +354,8 @@ class TestMainStartup:
                     await main_module.main()
 
             # Drain must NOT have been called before the health loop kicked in.
-            calls_before_health_loop = [
-                c for c in startup_drain_calls if c != ("HEALTH_LOOP_REACHED",)
-            ]
-            assert calls_before_health_loop == [], (
-                "migrate_fallback was called at boot despite SD unmounted"
-            )
+            calls_before_health_loop = [c for c in startup_drain_calls if c != ("HEALTH_LOOP_REACHED",)]
+            assert calls_before_health_loop == [], "migrate_fallback was called at boot despite SD unmounted"
         finally:
             DEVICE_CONFIG["system"]["require_sd_startup"] = orig
 

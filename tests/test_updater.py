@@ -49,10 +49,7 @@ def good_payload(sd_root):
     manifest = {
         "version": "2026-05-15.1",
         "created_at": "2026-05-15T14:32:00Z",
-        "files": [
-            {"path": rel, "sha256": _sha256_bytes(content), "bytes": len(content)}
-            for rel, content in files
-        ],
+        "files": [{"path": rel, "sha256": _sha256_bytes(content), "bytes": len(content)} for rel, content in files],
     }
     (sd_root / "update" / "manifest.json").write_text(json.dumps(manifest))
     return manifest, files
@@ -137,9 +134,7 @@ class TestUpdaterUnit:
         errors = u.verify_payload(manifest)
         assert errors  # any non-empty list is acceptable
 
-    def test_is_already_applied_true_when_flash_matches(
-        self, updater_factory, good_payload, sd_root, monkeypatch
-    ):
+    def test_is_already_applied_true_when_flash_matches(self, updater_factory, good_payload, sd_root, monkeypatch):
         manifest, files = good_payload
         flash_root = sd_root / "flash"
         flash_root.mkdir()
@@ -151,9 +146,7 @@ class TestUpdaterUnit:
         u = updater_factory()
         assert u.is_already_applied(manifest) is True
 
-    def test_is_already_applied_false_when_one_file_differs(
-        self, updater_factory, good_payload, sd_root, monkeypatch
-    ):
+    def test_is_already_applied_false_when_one_file_differs(self, updater_factory, good_payload, sd_root, monkeypatch):
         manifest, files = good_payload
         flash_root = sd_root / "flash"
         flash_root.mkdir()
@@ -167,9 +160,7 @@ class TestUpdaterUnit:
         u = updater_factory()
         assert u.is_already_applied(manifest) is False
 
-    def test_is_already_applied_false_when_flash_missing(
-        self, updater_factory, good_payload, sd_root, monkeypatch
-    ):
+    def test_is_already_applied_false_when_flash_missing(self, updater_factory, good_payload, sd_root, monkeypatch):
         manifest, _ = good_payload
         flash_root = sd_root / "flash"
         flash_root.mkdir()
@@ -382,17 +373,13 @@ class TestUpdaterErrorPaths:
 
     def test_verify_payload_missing_file_on_disk(self, updater_factory):
         u = updater_factory()
-        errors = u.verify_payload(
-            {"version": "x", "files": [{"path": "main.py", "sha256": "0" * 64, "bytes": 0}]}
-        )
+        errors = u.verify_payload({"version": "x", "files": [{"path": "main.py", "sha256": "0" * 64, "bytes": 0}]})
         assert errors and any("missing" in e.lower() for e in errors)
 
     def test_verify_payload_size_mismatch(self, updater_factory, sd_root):
         _write(sd_root / "update" / "main.py", b"hello")
         u = updater_factory()
-        errors = u.verify_payload(
-            {"version": "x", "files": [{"path": "main.py", "sha256": "0" * 64, "bytes": 999}]}
-        )
+        errors = u.verify_payload({"version": "x", "files": [{"path": "main.py", "sha256": "0" * 64, "bytes": 999}]})
         assert errors and any("size" in e.lower() for e in errors)
 
     def test_is_path_allowed_non_string(self, updater_factory):
@@ -699,10 +686,7 @@ class TestRunPendingUpdateLegacyFallback:
             _write(base_dir / rel, content)
         manifest = {
             "version": "legacy-v1",
-            "files": [
-                {"path": rel, "sha256": _sha256_bytes(content), "bytes": len(content)}
-                for rel, content in files
-            ],
+            "files": [{"path": rel, "sha256": _sha256_bytes(content), "bytes": len(content)} for rel, content in files],
         }
         (base_dir / "manifest.json").write_text(json.dumps(manifest))
         return manifest, files

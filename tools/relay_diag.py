@@ -46,9 +46,9 @@ from machine import Pin
 
 # Dwell timings for the diagnostic only. Not in DEVICE_CONFIG because
 # this script is a one-off bench tool, not part of the runtime path.
-DWELL_S = 1.0      # how long each relay stays ON during sweep
-GAP_S = 0.5        # quiet time between relays during sweep
-STRESS_S = 2.0     # how long all relays stay ON during the stress phase
+DWELL_S = 1.0  # how long each relay stays ON during sweep
+GAP_S = 0.5  # quiet time between relays during sweep
+STRESS_S = 2.0  # how long all relays stay ON during the stress phase
 
 # (label, gpio_number) — order is the test order.
 RELAYS = (

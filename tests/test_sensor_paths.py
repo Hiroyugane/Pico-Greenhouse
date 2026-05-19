@@ -6,28 +6,19 @@ import pytest
 def test_daily_csv_path_basic():
     from lib.sensor_paths import daily_csv_path
 
-    assert (
-        daily_csv_path("/sd/sensors", "co2", 2026, 5, 15)
-        == "/sd/sensors/co2/2026/co2_2026-05-15.csv"
-    )
+    assert daily_csv_path("/sd/sensors", "co2", 2026, 5, 15) == "/sd/sensors/co2/2026/co2_2026-05-15.csv"
 
 
 def test_daily_csv_path_strips_trailing_slash():
     from lib.sensor_paths import daily_csv_path
 
-    assert (
-        daily_csv_path("/sd/sensors/", "th", 2026, 1, 1)
-        == "/sd/sensors/th/2026/th_2026-01-01.csv"
-    )
+    assert daily_csv_path("/sd/sensors/", "th", 2026, 1, 1) == "/sd/sensors/th/2026/th_2026-01-01.csv"
 
 
 def test_daily_csv_path_pads_month_and_day():
     from lib.sensor_paths import daily_csv_path
 
-    assert (
-        daily_csv_path("/sd/sensors", "soil", 2026, 3, 7)
-        == "/sd/sensors/soil/2026/soil_2026-03-07.csv"
-    )
+    assert daily_csv_path("/sd/sensors", "soil", 2026, 3, 7) == "/sd/sensors/soil/2026/soil_2026-03-07.csv"
 
 
 @pytest.mark.parametrize(

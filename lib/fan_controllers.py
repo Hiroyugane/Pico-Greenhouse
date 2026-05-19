@@ -174,9 +174,7 @@ class HeaterFollowerFanController:
                         )
                 elif self._afterrun_remaining_s > 0:
                     # Heater just stopped — burn down the afterrun budget.
-                    self._afterrun_remaining_s = max(
-                        0, self._afterrun_remaining_s - self.poll_interval_s
-                    )
+                    self._afterrun_remaining_s = max(0, self._afterrun_remaining_s - self.poll_interval_s)
                     if not self._output.is_on():
                         self._output.set_duty(self.duty_pct)
                     if self._afterrun_remaining_s == 0:
@@ -203,14 +201,10 @@ class HeaterFollowerFanController:
 
             except asyncio.CancelledError:
                 self._output.set_duty(0)
-                self.logger.warning(
-                    "HeaterFollowerFanController", f"{self.name} cycle cancelled"
-                )
+                self.logger.warning("HeaterFollowerFanController", f"{self.name} cycle cancelled")
                 raise
             except Exception as e:
-                self.logger.error(
-                    "HeaterFollowerFanController", f"{self.name} unexpected error: {e}"
-                )
+                self.logger.error("HeaterFollowerFanController", f"{self.name} unexpected error: {e}")
                 await asyncio.sleep(1)
 
     def get_state(self) -> dict:

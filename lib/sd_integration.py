@@ -112,6 +112,7 @@ def is_mounted(sd, spi=None, return_instances: bool = False, debug_callback=None
             of the recovery path so a slow card cannot push the synchronous
             recovery past the watchdog window.
     """
+
     def _feed():
         if wdt_feed is None:
             return
@@ -119,6 +120,7 @@ def is_mounted(sd, spi=None, return_instances: bool = False, debug_callback=None
             wdt_feed()
         except Exception:
             pass
+
     try:
         if not _IS_DEVICE:
             return (True, sd, spi) if return_instances else True

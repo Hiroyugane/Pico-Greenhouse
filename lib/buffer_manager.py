@@ -723,8 +723,7 @@ class BufferManager:
 
             if self._debug:
                 self._debug(
-                    f"migrate_fallback: {len(batch)} of {len(lines)} lines this pass"
-                    f" (remainder={len(remainder)})"
+                    f"migrate_fallback: {len(batch)} of {len(lines)} lines this pass (remainder={len(remainder)})"
                 )
 
             # Migrate each entry; feed WDT between rows so a full batch is

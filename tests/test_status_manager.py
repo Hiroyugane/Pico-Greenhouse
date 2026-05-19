@@ -399,7 +399,7 @@ class TestStatusManagerPOST:
             ("heartbeat", sm._heartbeat_led),
             ("reminder", reminder),
         ):
-            led.pin.on.side_effect = (lambda t=tag: on_order.append(t))  # type: ignore[attr-defined]
+            led.pin.on.side_effect = lambda t=tag: on_order.append(t)  # type: ignore[attr-defined]
 
         await sm.run_post(
             step_ms=1,
@@ -431,7 +431,7 @@ class TestStatusManagerPOST:
             ("error", sm._error_led),
             ("heartbeat", sm._heartbeat_led),
         ):
-            led.pin.on.side_effect = (lambda t=tag: on_order.append(t))  # type: ignore[attr-defined]
+            led.pin.on.side_effect = lambda t=tag: on_order.append(t)  # type: ignore[attr-defined]
 
         await sm.run_post(
             step_ms=1,

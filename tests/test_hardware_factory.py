@@ -589,4 +589,3 @@ class TestHardwareFactoryPCA9685:
 
         factory = HardwareFactory()
         assert factory.get_pca9685() is None
-

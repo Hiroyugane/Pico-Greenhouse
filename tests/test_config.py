@@ -824,9 +824,9 @@ class TestValidateConfig:
         import config
 
         original = config.DEVICE_CONFIG["fans"]["case"]["pca9685_ch"]
-        config.DEVICE_CONFIG["fans"]["case"]["pca9685_ch"] = (
-            config.DEVICE_CONFIG["fans"]["growroom_center"]["pca9685_ch"]
-        )
+        config.DEVICE_CONFIG["fans"]["case"]["pca9685_ch"] = config.DEVICE_CONFIG["fans"]["growroom_center"][
+            "pca9685_ch"
+        ]
         try:
             with pytest.raises(ValueError, match="is used by another fan"):
                 config.validate_config()
@@ -1229,8 +1229,9 @@ class TestValidateConfig:
         """display warmup delays of 0 are accepted (used in tests)."""
         import config
 
-        originals = {k: config.DEVICE_CONFIG["display"][k] for k in
-                     ("startup_banner_s", "vram_clear_delay_s", "invert_delay_s")}
+        originals = {
+            k: config.DEVICE_CONFIG["display"][k] for k in ("startup_banner_s", "vram_clear_delay_s", "invert_delay_s")
+        }
         for k in originals:
             config.DEVICE_CONFIG["display"][k] = 0
         try:

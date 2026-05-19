@@ -12,9 +12,7 @@ BUILD_SCRIPT = TOOLS_DIR / "build_update_payload.py"
 
 @pytest.fixture(scope="module")
 def build_module():
-    spec = importlib.util.spec_from_file_location(
-        "build_update_payload", BUILD_SCRIPT
-    )
+    spec = importlib.util.spec_from_file_location("build_update_payload", BUILD_SCRIPT)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -22,26 +20,19 @@ def build_module():
 
 class TestShortHashFromVersion:
     def test_extracts_trailing_hash_from_auto_version(self, build_module):
-        assert (
-            build_module._short_hash_from_version("20260517T143052Z-c195be2")
-            == "c195be2"
-        )
+        assert build_module._short_hash_from_version("20260517T143052Z-c195be2") == "c195be2"
 
     def test_returns_string_unchanged_when_no_dash(self, build_module):
         assert build_module._short_hash_from_version("v1.2.3") == "v1.2.3"
 
     def test_takes_only_final_segment_when_multiple_dashes(self, build_module):
-        assert (
-            build_module._short_hash_from_version("custom-tag-deadbee") == "deadbee"
-        )
+        assert build_module._short_hash_from_version("custom-tag-deadbee") == "deadbee"
 
 
 class TestWriteBuildInfo:
     def test_writes_version_and_build_time(self, build_module, tmp_path):
         target = tmp_path / "lib" / "build_info.py"
-        build_module._write_build_info(
-            target, "20260517T120000Z-abc1234", "2026-05-17T12:00:00Z"
-        )
+        build_module._write_build_info(target, "20260517T120000Z-abc1234", "2026-05-17T12:00:00Z")
 
         spec = importlib.util.spec_from_file_location("build_info_test", target)
         module = importlib.util.module_from_spec(spec)

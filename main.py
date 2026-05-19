@@ -67,6 +67,7 @@ def _describe_reset_cause() -> str:
     label = name_map.get(code, f"code={code}")
     return label
 
+
 from config import DEVICE_CONFIG, validate_config
 from lib import boot_log
 from lib.buffer_manager import BufferManager

@@ -591,9 +591,7 @@ class TestDebugCallbackPaths:
         mock_machine.Pin = MagicMock(return_value=Mock())
         mock_machine.SPI = MagicMock(return_value=Mock())
 
-        cfg = {
-            "spi": {"id": 1, "baudrate": 1, "sck": 10, "mosi": 11, "miso": 12, "cs": 13, "mount_point": "/sd"}
-        }
+        cfg = {"spi": {"id": 1, "baudrate": 1, "sck": 10, "mosi": 11, "miso": 12, "cs": 13, "mount_point": "/sd"}}
         calls = []
         with patch.object(sd_mod, "_IS_DEVICE", True):
             with _patch_lib_sdcard(mock_sdcard_mod):
@@ -620,9 +618,7 @@ class TestDebugCallbackPaths:
         mock_machine.Pin = MagicMock(return_value=Mock())
         mock_machine.SPI = MagicMock(return_value=Mock())
 
-        cfg = {
-            "spi": {"id": 1, "baudrate": 1, "sck": 10, "mosi": 11, "miso": 12, "cs": 13, "mount_point": "/sd"}
-        }
+        cfg = {"spi": {"id": 1, "baudrate": 1, "sck": 10, "mosi": 11, "miso": 12, "cs": 13, "mount_point": "/sd"}}
         calls = []
         with patch.object(sd_mod, "_IS_DEVICE", True):
             with _patch_lib_sdcard(mock_sdcard_mod):
@@ -648,9 +644,7 @@ class TestDebugCallbackPaths:
         mock_machine.Pin = MagicMock(return_value=Mock())
         mock_machine.SPI = MagicMock(return_value=Mock())
 
-        cfg = {
-            "spi": {"id": 1, "baudrate": 1, "sck": 10, "mosi": 11, "miso": 12, "cs": 13, "mount_point": "/sd"}
-        }
+        cfg = {"spi": {"id": 1, "baudrate": 1, "sck": 10, "mosi": 11, "miso": 12, "cs": 13, "mount_point": "/sd"}}
         calls = []
         with patch.object(sd_mod, "_IS_DEVICE", True):
             with _patch_lib_sdcard(mock_sdcard_mod):

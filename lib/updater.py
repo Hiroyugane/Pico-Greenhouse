@@ -527,9 +527,7 @@ def run_pending_update(config, hardware, wdt=None):
         except Exception as e:
             updater.log("noop", version, detail="finalize warn: %s" % str(e)[:200])
         else:
-            updater.log(
-                "noop", version, detail="already up to date; files=%d" % len(manifest.get("files", []))
-            )
+            updater.log("noop", version, detail="already up to date; files=%d" % len(manifest.get("files", [])))
         if feedback is not None:
             try:
                 feedback.already_applied()

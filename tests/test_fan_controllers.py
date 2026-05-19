@@ -48,9 +48,7 @@ class TestAlwaysOnFanControllerInit:
         output.name = "OutputName"
         output.set_duty = Mock()
         output.is_on = Mock(return_value=False)
-        ctrl = AlwaysOnFanController(
-            output=output, logger=Mock(), duty_pct=50, refresh_interval_s=60
-        )
+        ctrl = AlwaysOnFanController(output=output, logger=Mock(), duty_pct=50, refresh_interval_s=60)
         assert ctrl.name == "OutputName"
 
 
@@ -73,9 +71,7 @@ class TestAlwaysOnFanControllerActions:
         output.set_duty.side_effect = fake_set_duty
         output.is_on.side_effect = fake_is_on
         logger = Mock()
-        ctrl = AlwaysOnFanController(
-            output=output, logger=logger, duty_pct=60, refresh_interval_s=300, name="Case"
-        )
+        ctrl = AlwaysOnFanController(output=output, logger=logger, duty_pct=60, refresh_interval_s=300, name="Case")
         return ctrl, output, logger
 
     def test_turn_off_zeros_duty(self, setup):
@@ -107,9 +103,7 @@ class TestAlwaysOnFanControllerActions:
         output.pin = "PIN_OBJ"
         output.set_duty = Mock()
         output.is_on = Mock(return_value=False)
-        ctrl = AlwaysOnFanController(
-            output=output, logger=Mock(), duty_pct=50, refresh_interval_s=60
-        )
+        ctrl = AlwaysOnFanController(output=output, logger=Mock(), duty_pct=50, refresh_interval_s=60)
         assert ctrl.pin == "PIN_OBJ"
 
 
@@ -124,13 +118,17 @@ class TestAlwaysOnFanControllerStartCycle:
         output.set_duty = Mock()
         output.is_on = Mock(return_value=duty_pct > 0)
         logger = Mock()
-        return AlwaysOnFanController(
-            output=output,
-            logger=logger,
-            duty_pct=duty_pct,
-            refresh_interval_s=refresh_interval_s,
-            name="Case",
-        ), output, logger
+        return (
+            AlwaysOnFanController(
+                output=output,
+                logger=logger,
+                duty_pct=duty_pct,
+                refresh_interval_s=refresh_interval_s,
+                name="Case",
+            ),
+            output,
+            logger,
+        )
 
     def test_cycle_reasserts_duty(self):
         ctrl, output, _ = self._make()
@@ -270,8 +268,12 @@ class TestHeaterFollowerFanControllerInit:
         output.set_duty = Mock()
         output.is_on = Mock(return_value=False)
         ctrl = HeaterFollowerFanController(
-            output=output, heater=Mock(), logger=Mock(),
-            duty_pct=50, post_run_s=10, poll_interval_s=1,
+            output=output,
+            heater=Mock(),
+            logger=Mock(),
+            duty_pct=50,
+            post_run_s=10,
+            poll_interval_s=1,
         )
         assert ctrl.name == "OutputName"
 
@@ -399,7 +401,11 @@ class TestHeaterFollowerFanControllerActions:
         output.set_duty = Mock()
         output.is_on = Mock(return_value=False)
         ctrl = HeaterFollowerFanController(
-            output=output, heater=Mock(), logger=Mock(),
-            duty_pct=50, post_run_s=10, poll_interval_s=1,
+            output=output,
+            heater=Mock(),
+            logger=Mock(),
+            duty_pct=50,
+            post_run_s=10,
+            poll_interval_s=1,
         )
         assert ctrl.pin == "PIN_OBJ"

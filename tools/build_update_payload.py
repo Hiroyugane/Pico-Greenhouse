@@ -116,9 +116,7 @@ def _collect_sources() -> list[tuple[str, Path]]:
 def _collect_sources_compiled(build_dir: Path) -> list[tuple[str, Path]]:
     """Return [(relative_path, absolute_path), ...] from a build-mpy tree."""
     if not build_dir.is_dir():
-        raise FileNotFoundError(
-            f"missing build directory: {build_dir} — run the build-mpy task first"
-        )
+        raise FileNotFoundError(f"missing build directory: {build_dir} — run the build-mpy task first")
     sources: list[tuple[str, Path]] = []
 
     main_src = build_dir / "main.py"
@@ -136,9 +134,7 @@ def _collect_sources_compiled(build_dir: Path) -> list[tuple[str, Path]]:
         raise FileNotFoundError(f"missing {lib_dir} — run build-mpy first")
     lib_files = sorted(f for f in lib_dir.iterdir() if f.is_file() and f.suffix == ".mpy")
     if not lib_files:
-        raise FileNotFoundError(
-            f"no compiled .mpy files in {lib_dir} — run build-mpy first"
-        )
+        raise FileNotFoundError(f"no compiled .mpy files in {lib_dir} — run build-mpy first")
     for entry in lib_files:
         sources.append((f"lib/{entry.name}", entry))
     return sources
@@ -231,9 +227,7 @@ def _copy_to_sd(out_dir: Path, dest: Path, *, confirm: bool) -> None:
     dest = dest.resolve() if dest.exists() else dest
     parent = dest.parent
     if not parent.exists():
-        raise FileNotFoundError(
-            f"destination parent does not exist: {parent} — is the SD card mounted?"
-        )
+        raise FileNotFoundError(f"destination parent does not exist: {parent} — is the SD card mounted?")
     if dest.exists():
         if confirm:
             answer = input(f"Replace existing {dest}? [y/N]: ").strip().lower()

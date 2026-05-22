@@ -167,7 +167,22 @@
 
 ## Mechanical / enclosure
 
-> (none queued yet)
+### [ ] Board size reduction, footprint clearances, enclosure simplification
+
+**Filed:** 2026-05-22 ·
+[chat-log entry](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes)
+
+- Shrink overall board size — current revision is larger than the
+  components warrant.
+- Reduce enclosure shell from a 4-wall structure to **only 2
+  connecting walls** so the smaller PCB sits in a lighter housing.
+- **Ambient fan switch mounting holes:** current hole spacing is
+  wrong for the actual switch — re-measure and fix.
+- **External fan connector** is physically larger than the footprint
+  it sits on — widen the footprint or move it.
+- The **XT60 board-edge clearance** issue is also tracked under
+  "External power connectors and silkscreen polish" in the
+  Electrical / PCB section.
 
 ## Wiring / harness
 

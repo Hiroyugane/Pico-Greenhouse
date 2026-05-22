@@ -14,6 +14,23 @@
 
 ## Electrical / PCB
 
+### [ ] Relay connector cleanup — flip, pull-ups, GND fix, mains-only
+
+**Filed:** 2026-05-22 ·
+[chat-log entry](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes)
+
+- **Flip the relay connector orientation** — current orientation is
+  wrong for the harness.
+- Add a **10 kΩ pull-up on each relay IN line** to the relay module's
+  VCC, so inputs sit at the inactive (HIGH) level during Pico boot
+  and reset (active-low relays).
+- The "3V3" pin on the current relay connector goes nowhere (dead).
+  **Tie it to GND** so the connector pinout is meaningful.
+- After fans move to PCA9685 + IRLZ44N (see fan entry below), the
+  remaining relays carry **only 230 V mains loads** (grow light,
+  heater). Update connector spec / spacing for mains creepage and
+  clearance.
+
 ### [ ] I²C / RJ12 connector layout — rename, add second outward bus
 
 **Filed:** 2026-05-22 ·

@@ -36,13 +36,25 @@
 
 ### [ ] Move fans from 2× relays to PCA9685 + IRLZ44N MOSFETs
 
-**Filed:** 2026-05-16 ·
+**Filed:** 2026-05-16 · updated 2026-05-22 ·
+[chat-log: 2026-05-22 planning](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes) ·
 [memory: project-fan-hardware-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_fan_hardware_revision.md)
 
 - Replace 2-relay fan control with a **PCA9685** 16-ch PWM driver
   on I2C0 (shared with SHT31), each channel driving an **IRLZ44N**
   MOSFET. Frees the two relay GPIOs, scales to 5+ fans, unlocks
   variable speed.
+- **Per-fan stage:** PCA9685 channel → series gate resistor (low
+  value, ~150 Ω) → IRLZ44N gate. Fan between rail and drain
+  (low-side switching); source to GND. **1N4007 (or UF4007) flyback
+  diode antiparallel across each fan** to clamp inductive kick on
+  spin-down.
+- **Socket the PCA9685** (DIP socket, not soldered direct) so the
+  chip can be swapped for variant boards or after failure.
+- After fans move off relays, **the remaining relays carry only
+  230 V mains loads** (grow light, heater). Update relay connector
+  spec / spacing / silkscreen accordingly — tracked under the
+  "Relay connector cleanup" entry above.
 - Planned fan roster: exhaust, growroom walls, growroom center,
   heater distribution, case.
 - Steps 1–4 of the suggested build order in the memory entry are

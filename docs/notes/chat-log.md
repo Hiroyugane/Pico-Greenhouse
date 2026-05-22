@@ -5,6 +5,79 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-22 · Next-revision planning from bench notes
+
+### note · operator handed over a flat list of bench observations
+
+Single batch of accumulated bench notes (mix of layout fixes, missed
+features, and component choices) consolidated into
+[docs/hardware/next-revision.md](../hardware/next-revision.md). Each
+note filed as its own entry under the existing Electrical / PCB or
+Mechanical / enclosure section. This entry captures the decisions and
+non-obvious interpretations behind the consolidation; the individual
+queue items live in next-revision.md.
+
+### decision · chosen Schottky part is MBR20100CT
+
+The 2026-05-19 entry listed SS14 / 1N5817 / MBRS340 as candidates.
+Operator has settled on **MBR20100CT** (TO-220, 20 A / 100 V). Massive
+overkill for a 5 V input rail at well under 1 A, but it's already on
+hand and the headroom costs nothing in this footprint. The smaller SMA
+and DO-41 parts stay as fallback if the TO-220 doesn't fit the next
+layout. Bulk cap value also pinned at **1000 µF** (upper bound of the
+previous 470–1000 µF range), in parallel with 100 nF ceramic.
+
+### decision · button topology — menu_btn debounced, reset_btn direct
+
+Earlier note (2026-05-19) sketched GP9/reset_btn with a 10 kΩ pull-up,
+1 kΩ series, and a "needs testing" capacitor. After bench thought,
+revised: **reset_btn is direct contact only** (no pull-up, no series,
+no cap), and **menu_btn carries the 10 kΩ pull-up + debounce cap.**
+The menu button is the one actually broken on the current board, so
+the debounce and pull-up belong there. The 3V3_EN → GND capacitor
+that was previously sketched is also dropped — not needed. A separate
+10 kΩ pull-up on GP12 to 3V3 is queued alongside.
+
+### decision · banana plugs on 12 V and 19 V only; 5 V stays as-is
+
+Power input survey concluded with banana-plug breakouts for the 12 V
+and 19 V rails (the two rails most likely to be probed during bench
+work and external load testing). 5 V stays on the existing connector —
+it's already constrained by the XL4015 + Schottky / VSYS work, and
+adding a banana plug there would invite probes into a rail with little
+abs-max margin.
+
+### decision · relays carry only 230 V mains after fan move
+
+Once the PCA9685 + IRLZ44N stage lands and fans move off the relays,
+the remaining relays carry **only 230 V mains loads** (grow light,
+heater). This changes the connector spec (creepage / clearance,
+terminal block style) and the silkscreen labels for the relay section
+in the new rev. The dead "3V3" pin on the current relay connector
+gets re-tied to GND in the same pass so the pinout is meaningful.
+
+### decision · soil-moisture ADC divider is 10 kΩ + 15 kΩ
+
+Soil-moisture sensor outputs 0–5 V analog; Pico ADC is 0–3.3 V max.
+Divider chosen: **10 kΩ top + 15 kΩ bottom** between sensor output and
+ADC pin. 5 V full-scale → ~3.0 V at the Pico (margin under abs max).
+ADC connector also gains a 3V3 pin so 3V3-powered analog peripherals
+can be powered from the same jack.
+
+### note · I²C / RJ12 layout is about external accessibility
+
+The terse note "i2c port 1 → sht31, t/h port: gp port (and another
+i2c please)" is **not** about renaming bus addresses or moving
+peripherals between buses. It's about the **outward-facing RJ12
+connectors** on the enclosure wall. Plan: rename the silkscreen
+label of the existing I²C connector to "SHT31" (since that's the
+only device that uses it), add a **second outward-facing RJ12
+connector** for an additional I²C drop, and replace the current
+DHT21-style port with an I²C-compatible one for the SHT31 itself.
+Bus topology (one I²C bus or two) stays flexible — what matters is
+the second exposed jack on the case so future I²C peripherals don't
+need bus stubs through the wall.
+
 ## 2026-05-19 · External 5 V supply starves VSYS — 1N4002 drop traced
 
 ### issue · root cause of SD / boot failures on external 5 V supply

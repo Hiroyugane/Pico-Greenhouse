@@ -14,6 +14,17 @@
 
 ## Electrical / PCB
 
+### [ ] SD card module → Adafruit Micro SD breakout footprint
+
+**Filed:** 2026-05-22 ·
+[chat-log entry](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes)
+
+- Change the SD connector footprint to match the **Adafruit Micro SD
+  breakout** — more reliable on hot-swap than the current module.
+- **[~] Deferred — pending bench verification:** remove the 10 kΩ
+  resistor currently on the SD card line. Keep in place by default;
+  only drop after the Adafruit module proves it isn't needed.
+
 ### [ ] External power connectors and silkscreen polish
 
 **Filed:** 2026-05-22 ·

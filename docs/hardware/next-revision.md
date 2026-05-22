@@ -14,6 +14,19 @@
 
 ## Electrical / PCB
 
+### [ ] Case fan voltage selector + ambient fan Pico control
+
+**Filed:** 2026-05-22 ·
+[chat-log entry](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes)
+
+- Add a **second 2-pole voltage selector switch** for the case fan,
+  mirroring the existing ambient fan voltage switch (so each fan can
+  be tied to a different rail without re-wiring).
+- Make the **ambient fan Pico-controllable** — currently it's
+  hardwired and bypasses the Pico. Route it through the new
+  PCA9685 + IRLZ44N stage so it joins the rest of the fan control
+  surface (see fan entry further below).
+
 ### [ ] SD card module → Adafruit Micro SD breakout footprint
 
 **Filed:** 2026-05-22 ·

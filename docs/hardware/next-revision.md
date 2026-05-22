@@ -14,6 +14,24 @@
 
 ## Electrical / PCB
 
+### [ ] External power connectors and silkscreen polish
+
+**Filed:** 2026-05-22 ·
+[chat-log entry](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes)
+
+- **XT60 board-edge clearance:** the connector body overhangs / doesn't
+  seat because the board edge is too close. Move the XT60 inboard or
+  extend the board edge in that area. (Interacts with the board-size
+  shrink in the mechanical section — re-check after layout.)
+- **Banana plug connectors for 12 V and 19 V rails.** 5 V stays on the
+  current connector style (no banana plug — avoids extra probe surface
+  on a rail with little abs-max margin).
+- **Silkscreen polarity marks (+/-) on the 19 V terminals.**
+- **Rename silkscreen label "VCC" → "5V"** — ambiguous given the mix
+  of 3V3 / 5V / 12V / 19V rails on the board.
+- **Label voltage direction on the ambient fan switch** (and on the
+  new case fan switch) — which switch position selects which rail.
+
 ### [ ] Replace 1N4002 input diodes with Schottky (+ bulk cap at VSYS)
 
 **Filed:** 2026-05-19 · updated 2026-05-22 ·

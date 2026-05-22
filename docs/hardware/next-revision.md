@@ -14,6 +14,21 @@
 
 ## Electrical / PCB
 
+### [ ] I²C / RJ12 connector layout — rename, add second outward bus
+
+**Filed:** 2026-05-22 ·
+[chat-log entry](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes)
+
+- Replace the existing **DHT21 connector with an I²C-friendly RJ12
+  connector** so the SHT31 plugs in directly (current rev still has
+  the DHT21-style port).
+- **Rename silkscreen label "I2C con_1" → "SHT31"** — the port
+  carries exactly one sensor and the label should say so.
+- **Add one more outward-facing RJ12 connector** for an additional
+  I²C drop on the enclosure wall. Bus topology (one I²C bus vs two)
+  stays flexible — the requirement is a second exposed jack so future
+  I²C peripherals don't need bus stubs through the case.
+
 ### [ ] ADC / soil-moisture interface
 
 **Filed:** 2026-05-22 ·

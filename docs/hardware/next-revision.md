@@ -14,6 +14,25 @@
 
 ## Electrical / PCB
 
+### [ ] Button connector rework — menu_btn debounced, reset_btn direct
+
+**Filed:** 2026-05-22 ·
+[chat-log entry](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes)
+
+- Combine `reset_btn` and `menu_btn` into a **single 3-pin connector,
+  two-split layout** (one shared ground, two signal pins).
+- **Menu button:** 10 kΩ pull-up to 3V3 on its signal line + a
+  debounce capacitor on that line. The menu button is non-functional
+  on the current board; missing pull-up / debounce is the suspected
+  cause.
+- **Reset button:** direct contact only — no pull-up, no series
+  resistor, no capacitor. Supersedes the earlier draft of a 10 kΩ
+  pull-up and 1 kΩ series resistor on GP9.
+- **Drop** the capacitor previously sketched between **3V3_EN and
+  GND** — not needed.
+- Add a separate **10 kΩ pull-up on GP12 to 3V3** (not button-related,
+  but caught in the same pass).
+
 ### [ ] Relay connector cleanup — flip, pull-ups, GND fix, mains-only
 
 **Filed:** 2026-05-22 ·

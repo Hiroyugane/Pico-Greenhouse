@@ -14,6 +14,18 @@
 
 ## Electrical / PCB
 
+### [ ] ADC / soil-moisture interface
+
+**Filed:** 2026-05-22 ·
+[chat-log entry](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes)
+
+- Soil-moisture sensor outputs 0–5 V analog. Pico ADC is 0–3.3 V max.
+  Add a **10 kΩ (top) + 15 kΩ (bottom)** voltage divider between the
+  sensor output and the ADC pin: 5 V full-scale → ~3.0 V at the Pico
+  (under abs max, with margin).
+- **Route 3V3 to the ADC connector** alongside GND and the ADC signal
+  so 3V3-powered analog peripherals can be powered from the same jack.
+
 ### [ ] Case fan voltage selector + ambient fan Pico control
 
 **Filed:** 2026-05-22 ·

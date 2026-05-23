@@ -27,9 +27,12 @@ for the full rationale per item.
 
 - [ ] Confirm D5 = MBR20100CT (TO-220) is installed on the heater path.
   Measure forward drop across D5 at the heater steady-state current
-  (~3.4 A on a 100 W / 24 V heater): expect ~0.4 V.
-- [ ] Confirm D1, D2, D3, D4, D6 = SS54 (SMA) are installed. Measure
-  forward drop at typical load: expect ~0.3 V per diode.
+  (3.4 A single heater, 6.8 A parallel heaters): expect ~0.4–0.5 V.
+- [ ] Confirm D1, D2, D3, D4, D6 = **MBRD1045 (D-PAK / TO-252)** are
+  installed. Measure forward drop at typical load: expect ~0.3 V per
+  diode.
+- [ ] Confirm 5 V VSYS bulk cap is **1000 µF / 16 V** (not the earlier
+  6.3 V draft). Quick check: read voltage rating off the part body.
 - [ ] Verify F1 is now **upstream of D5** in the series order
   (19V_IN → F1 → D5 → bulk cap → HE_MOSFET). Trace continuity from
   19V_IN-2 to F1 input first, then F1 output to D5.
@@ -94,6 +97,27 @@ for the full rationale per item.
 - [ ] Press menu button repeatedly — no firmware glitches or
   spurious resets.
 
+### Heater MOSFET gate driver (MCP1416)
+
+- [ ] Confirm **MCP1416T-E/OT** (SOT-23-5) is installed at the new
+  gate-driver footprint between Pico GP3 and the IRLZ44N gate.
+- [ ] Confirm MCP1416 V_DD (pin 1) is wired to the 5 V rail and pin 3
+  to GND; verify 100 nF decoupling cap is present.
+- [ ] Confirm **R6 = 47 Ω** (was 100 Ω) between MCP1416 OUT and
+  IRLZ44N gate.
+- [ ] Confirm **10 kΩ pull-down** from IRLZ44N gate to source/GND.
+- [ ] Power on with Pico held in reset (or before firmware starts):
+  measure IRLZ44N V_GS — expect 0 V. Heater must be fully off during
+  Pico boot.
+- [ ] Drive GP3 HIGH from firmware. Measure IRLZ44N V_GS: expect ~5 V
+  (was ~3.3 V with direct drive).
+- [ ] Measure HE_MOSFET drain-source voltage with heater current
+  flowing: expect ~0.15 V at 6.8 A (R_DS(on) ~0.022 Ω × 6.8 A) —
+  improvement over the ~0.4 V seen at 3.3 V V_GS.
+- [ ] Scope the gate edge during turn-on / turn-off. Expect clean
+  monotonic transition, rise/fall under 1 µs, no ringing > 10 % of
+  steady-state.
+
 ### Heater MOSFET thermal
 
 - [ ] Confirm clip-on heatsink (SK 104-25 STS or equivalent) is
@@ -138,6 +162,39 @@ for the full rationale per item.
 
 - [ ] Verify silkscreen now reads `RPI-PICO-V1` (or the matching
   V1-labelled footprint in EasyEDA).
+
+### Power input connectors (XT60 × 3) + F1 fuse
+
+- [ ] Confirm **XT60** connectors installed on **all three** power
+  input rails (5 V, 12 V, 19 V).
+- [ ] Confirm silkscreen labels next to each XT60 read `5V`, `12V`,
+  `19V` with `+` / `-` polarity marks.
+- [ ] Verify board-edge clearance allows full XT60 seating on all
+  three connectors (no overhang).
+- [ ] Confirm F1 is a **10 A 5×20 mm T-rated (slow-blow)** glass
+  cartridge in a through-hole holder, positioned **upstream of D5**
+  (`19V_IN → F1 → D5 → bulk cap → HE_MOSFET drain → HE_CON`).
+- [ ] Power on with both heaters in parallel switched ON via
+  firmware. Heater steady-state current = ~6.8 A. F1 must not nuisance
+  trip during the bulk-cap inrush spike at power-on.
+- [ ] Short the heater output briefly (controlled test only — use a
+  dummy load and current-limited bench supply at 19 V): F1 must clear
+  in under 2 s at 2× rated current.
+
+### PCB stackup and trace widths
+
+- [ ] Confirm fab order specifies **2 oz copper** on both outer
+  layers (verify with the JLCPCB / EasyEDA order screenshot or the
+  certificate of conformity).
+- [ ] Verify heater current path (F1 → D5 → bulk cap → HE_MOSFET →
+  HE_CON) has minimum **3 mm trace width**. Spot-check at the
+  narrowest point.
+- [ ] Verify 12 V buck output trace has minimum **2.5 mm trace
+  width**.
+- [ ] Verify default trace clearance is **0.15 mm** on the signal
+  nets and **0.3 mm** on the power traces. Quick check: any DRC
+  warnings remaining in EasyEDA at the chosen clearance values
+  must be reviewed and dismissed deliberately.
 
 ### Notes (post-test)
 

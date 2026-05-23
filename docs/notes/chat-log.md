@@ -33,18 +33,113 @@ spec) to **R4 = 10 kΩ / R5 = 4.7 kΩ** (gain = 1 + 10/4.7 = 3.13 → 10.3 V
 max). Firmware clips to 10 V via `growlight.max_level_pct` so brief
 over-spec excursions can't happen.
 
-### decision · two-SKU Schottky plan — MBR20100CT for D5, SS54 elsewhere
+### decision · two-SKU Schottky plan — MBR20100CT for D5, MBRD1045 elsewhere
 
 Earlier note (2026-05-22) settled on MBR20100CT for all six diodes
 "because it's on hand". Critical re-read reveals D5 alone needs the
 20 A package — at 3.4 A heater current the existing 1N4002 is at 3.4×
 continuous rating and is a fire hazard, not just an efficiency issue.
-The other five diodes only need ≤1 A continuous (5 V budget) or
-brief-fault current (shunt diodes). New plan: **D5 → MBR20100CT**
-(TO-220, 20 A / 100 V) on the heater path, **D1–D4 and D6 → SS54**
-(SMA, 5 A / 40 V) everywhere else. Two SKUs, ~$1.14 BOM cost, drops V_f
-from ~0.8 V to ~0.3 V at every node. SMA package keeps the queued
-board-size shrink viable.
+Initial follow-up draft used **SS54** (5 A SMA) for the other five
+diodes, but cross-checking against rail capacities (5 V/5 A, 12 V/9 A,
+19 V/9.2 A) shows SS54 at the 12 V or 19 V buck would run at or above
+its rated current. Final plan: **D5 → MBR20100CT** (TO-220, 20 A) on
+the heater path, **D1–D4 and D6 → MBRD1045** (D-PAK, 10 A / 45 V)
+everywhere else. Two SKUs across the rail-protection diodes
+(~$0.45 × 5 = $2.25 + MBR20100CT), 10 A headroom across all buck
+capacities, larger D-PAK tab also helps thermal margin. V_f drops
+from ~0.8 V to ~0.3 V at every node. SS14 stays as a third SKU for
+the VBUS / DEBUG_CON backfeed-protection diodes (different package,
+low current path).
+
+### decision · power-input connectors standardised on XT60 across all three rails
+
+Current PCB mixes connectors per rail (5 V Phoenix block, 12 V JST
+B2B-XH at ~3 A rating against a 9 A buck, 19 V XT60). The 12 V JST is
+a thermal liability under multi-fan load. Decision: all three input
+rails get **XT60** connectors. XT60 is rated 30 A continuous, single
+connector family across the board, one cable type in the harness,
+massive headroom for every rail. Silkscreen labels `5V` / `12V` /
+`19V` plus `+` / `-` polarity marks next to each XT60 — XT60 is keyed
+but redundant polarity labelling catches reversed crimps during
+harness assembly. Board-edge clearance issue already tracked under
+"External power connectors and silkscreen polish" needs re-checking
+for all three XT60s after layout.
+
+### decision · PCB stackup → 2 oz copper, heater trace 3 mm, 0.15 mm clearance
+
+Three layout decisions land together because they all trade off
+copper weight against trace width and clearance. Fab order specifies
+**2 oz copper on both outer layers** (vs default 1 oz) — roughly
+doubles current-carrying capacity per mm of trace width and assists
+the TO-220 thermal pour. **Heater current path = 3 mm minimum trace
+width** on 2 oz copper (handles 6.8 A parallel-heater case at <30 °C
+rise per IPC-2221); **12 V buck output = 2.5 mm minimum** (handles
+9 A). **Default trace clearance: 0.15 mm** (down from 0.2 mm) to free
+layout real estate for the bulk caps, TVS clamps, and new gate
+driver footprints near the input area — safe for sub-50 V nets.
+Power traces keep 0.3 mm clearance to the adjacent net.
+
+### decision · 5 V VSYS bulk cap voltage rating bumped from 6.3 V to 16 V
+
+Earlier entry pinned the 5 V VSYS bulk cap as 1000 µF / **6.3 V** —
+79 % voltage derating at 5 V nominal, tight for long-life
+electrolytics with TVS clamp transients in the picture. Bumping to
+**1000 µF / 16 V** drops derating to 31 %, costs ~$0.10 more, same
+footprint family. The 12 V and 19 V bulk caps already specified are
+fine (220 µF / 25 V = 48 % derating, 470 µF / 35 V = 56 % derating).
+
+### decision · F1 = 10 A 5×20 mm slow-blow glass cartridge
+
+Single MOSFET channel with two parallel 100 W / 24 V heaters at
+19.6 V draws 6.8 A steady-state. Fuse spec: **10 A T (slow-blow),
+5×20 mm glass cartridge** in through-hole holder — Littelfuse
+0234010.MXP or equivalent. T-rating tolerates the bulk-cap inrush
+spike without nuisance trips; 10 A clears on a hard short well
+within the trace-fusing limit of 3 mm at 2 oz copper. Replaces the
+earlier 5 A fast-blow placeholder. Position: upstream of D5.
+
+### decision · MCP1416T-E/OT gate driver for HE_MOSFET (PWM-ready)
+
+Direct-driving the IRLZ44N gate from Pico GP3 at 3.3 V leaves the
+MOSFET in the linear region of its V_GS curve: R_DS(on) ~0.05–0.08 Ω,
+~2 W package dissipation at 3.4 A heater current. At 6.8 A
+(parallel-heater single-channel decision above) the gate-drive
+shortfall becomes a thermal cliff. Add **MCP1416T-E/OT** (SOT-23-5,
+1.5 A peak, ~$0.40) powered from the 5 V rail. Drives the gate
+0 → 5 V cleanly; R_DS(on) drops to ~0.022 Ω → ~1 W dissipation at
+6.8 A. Wiring: GP3 → MCP1416 IN → MCP1416 OUT → R6 = 47 Ω (was
+100 Ω, shrunk now that the driver can source the current) → IRLZ44N
+gate. Add **10 kΩ pull-down from MOSFET gate to source/GND** so the
+heater stays OFF during Pico boot / reset (otherwise the gate floats
+while GP3 is high-Z, partial turn-on possible). Side benefit: GPIO
+sources only µA, switching edges become clean, EMI improves.
+
+### decision · single-channel heater + parallel heaters + PWM-later
+
+Three open items collapse into one decision. Operator confirms two
+heaters always run in parallel (surface-area / wattage goal, no
+selective-control use case). That points to **single-MOSFET
+channel (option a)**, not the earlier "recommended" dual-channel
+plan. Current handled by the F1 / D5 / MCP1416 / IRLZ44N / trace
+stack-up specced above. **Heater PWM is queued for a later firmware
+revision** — the MCP1416 makes audio-frequency PWM electrically
+viable on GP3; firmware adds duty-cycle modulation when the control
+loop wants finer than on/off. Schematic / PCB lands the gate driver
+now to keep the door open.
+
+### decision · MBRD1045 vs SS54 trade-off
+
+Diode comparison summary captured for future reference:
+**SS54** (SMA, 5 A / 40 V, ~$0.15) — small footprint, low cost,
+adequate for a 5 A buck rail but **at the rated limit** for the
+12 V/9 A and 19 V/9.2 A bucks. **MBRD1045** (D-PAK, 10 A / 45 V,
+~$0.45) — 3× cost, 2× footprint area, ~150 pF junction capacitance
+(vs ~120 pF for SS54, negligible at rail-protection frequencies),
+same V_F at operating current, larger thermal tab. Net: replacing
+all SS54s with MBRD1045 costs ~$1.50 per board for 2× current
+headroom across every rail-protection diode. Decision goes to
+reliability over cost on a system meant to run weeks without
+intervention.
 
 ### decision · keep R8 = 33 Ω; fix the firmware comment instead
 

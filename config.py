@@ -33,11 +33,15 @@ DEVICE_CONFIG = {
     #   GP7:       Error LED      (LED_CON)
     #   GP8:       Service / reminder LED (LED_CON)
     #   GP9:       Menu button (MEN_BTN, short=cycle, long=action)
-    #   GP10-GP13: SPI1 (SD card via SD_CON). MOSI uses R10 as a series
-    #              resistor between Pico and SD_CON; MISO is direct
-    #              (R8 was identified as the root cause of SD bit errors
-    #              over 2026-05-16/18 and removed — see chat-log
-    #              2026-05-19).
+    #   GP10-GP13: SPI1 (SD card via SD_CON). Both MOSI (R10) and MISO
+    #              (R8 = 33 Ω) carry series damping resistors between
+    #              Pico and SD_CON. R8 was initially suspected during
+    #              the 2026-05-16/18 SD bit-error incident, but the
+    #              root cause turned out to be VSYS starvation from the
+    #              1N4002 input diodes (see chat-log 2026-05-19). R8
+    #              stays on the next-rev PCB as a useful SPI signal
+    #              damper at 10 MHz baud — see chat-log 2026-05-23
+    #              "keep R8 = 33 Ω; fix the firmware comment instead".
     #   GP14:      Passive buzzer (BUZ_CON, with R3 pulldown to GND)
     #   GP15:      Free (formerly DHT22 data on T/H_CON pin 4; SHT31 now
     #              shares the I2C0 bus, GP15 is available for future use)

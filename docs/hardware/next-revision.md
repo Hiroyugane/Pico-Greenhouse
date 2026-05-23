@@ -14,6 +14,112 @@
 
 ## Electrical / PCB
 
+### [ ] MCP1416 gate driver for HE_MOSFET (IRLZ44N)
+
+**Filed:** 2026-05-23 ·
+[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
+
+- Current PCB drives IRLZ44N gate directly from Pico GP3 (3.3 V).
+  At V_GS = 3.3 V, R_DS(on) is ~0.05–0.08 Ω (linear region, not
+  saturated) → ~2 W dissipation at 3.4 A heater current. At 6.8 A
+  (parallel-heater option a) the gate-drive shortfall becomes a
+  thermal cliff.
+- **Add MCP1416T-E/OT** (SOT-23-5, 1.5 A peak, V_DD 4.5–18 V, ~$0.40).
+  Drives the MOSFET gate from 0 → 5 V (or 12 V), pushing IRLZ44N
+  fully into saturation: R_DS(on) drops to ~0.022 Ω at V_GS = 5 V →
+  conduction loss halves (~1 W at 6.8 A vs ~2.5 W direct-drive).
+- **Wiring:** Pico GP3 → MCP1416 IN (pin 2) → MCP1416 OUT (pin 5) →
+  **R6 = 47 Ω** (was 100 Ω; lower value for faster switching now that
+  the driver can source the current) → IRLZ44N gate. **Power MCP1416
+  from 5 V** (pin 1 to 5 V, pin 3 to GND, 100 nF decoupling).
+- **Add 10 kΩ gate pull-down** from IRLZ44N gate to source/GND so the
+  MOSFET stays OFF during Pico boot / reset (otherwise the gate
+  floats while GP3 is high-Z and could partially turn on the heater).
+- **Side benefit:** GP3 only sources logic-level current (~µA) instead
+  of trying to charge a ~2 nF gate through 100 Ω — switching edges
+  become clean, EMI improves, no overshoot.
+- **PWM-readiness:** the MCP1416 also makes future heater PWM viable
+  (see "Heater channel count" entry below) — direct-drive at 3.3 V
+  through 100 Ω can't switch fast enough for audio-frequency PWM.
+
+### [ ] Power input connectors → XT60 across all three rails
+
+**Filed:** 2026-05-23 ·
+[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
+
+- Current PCB mixes connectors on the three input rails (5 V Phoenix
+  block, 12 V JST B2B-XH, 19 V XT60). The 12 V JST B2B-XH is rated
+  ~3 A — well under the 12 V buck's 9 A capacity and a fire risk if
+  multi-fan load lands on that rail.
+- **Standardise on XT60 for all three input rails** (5 V, 12 V, 19 V).
+  XT60 is rated 30 A continuous, 60 A burst — massive headroom for
+  all three rails. Single connector SKU = one cable family in the
+  field, one mating-tool requirement, simpler harness build.
+- **Silkscreen voltage label next to each XT60:** `5V`, `12V`, `19V`,
+  plus `+` / `-` polarity marks. XT60 is keyed but polarity-label
+  redundancy catches reversed crimps during harness assembly.
+- **Board-edge clearance:** the existing 19 V XT60 already has the
+  overhang issue tracked under "External power connectors and
+  silkscreen polish" — re-evaluate clearance for all three after
+  layout.
+
+### [ ] PCB stackup → 2 oz copper, heater trace width + 0.15 mm spacing
+
+**Filed:** 2026-05-23 ·
+[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
+
+- **Fab order: 2 oz copper on both outer layers** (up from default
+  1 oz). Roughly doubles current-carrying capacity per mm of trace
+  width and improves the TO-220 thermal pour effectiveness. Cost
+  delta on JLCPCB / EasyEDA is small at production quantities.
+- **Heater current path (19 V rail, F1 → D5 → bulk cap → HE_MOSFET
+  drain → HE_CON):** **3 mm minimum trace width** on 2 oz copper
+  (handles 6.8 A parallel-heater case at <30 °C rise per IPC-2221).
+  Pour copper rather than narrow traces where possible.
+- **12 V buck output trace (D4 → 12 V rail):** **2.5 mm minimum** on
+  2 oz copper (handles 9 A buck capacity at <30 °C rise).
+- **Default clearance: 0.15 mm** (was 0.2 mm). Frees layout real
+  estate for the bulk caps + TVS + new gate driver footprints near
+  the input area. Safe for all sub-50 V nets on this board.
+- **Power traces keep 0.3 mm clearance** to the adjacent net for
+  fault-current robustness (one wider trace among the dense signal
+  net).
+
+### [ ] 5 V VSYS bulk cap voltage rating upgrade
+
+**Filed:** 2026-05-23 ·
+[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
+
+- Earlier entry pinned the 5 V VSYS bulk cap as **1000 µF / 6.3 V**.
+  At 5 V nominal that's **79 % voltage derating** — tight for
+  long-life electrolytics, especially with TVS transients reaching
+  the clamp voltage before settling.
+- **Bump to 1000 µF / 16 V** (or 1000 µF / 10 V minimum). Standard
+  value, identical footprint family, ~$0.10 cost delta. Voltage
+  derating drops to 31 % (16 V part) — comfortable margin for
+  10 000+ h life at 65 °C.
+- Same principle applied to the 12 V and 19 V bulk caps already
+  queued (220 µF / 25 V on 12 V = 48 % derating, 470 µF / 35 V on
+  19 V = 56 % derating). Both fine as specified.
+
+### [ ] F1 fuse — 10 A 5×20 mm slow-blow (parallel-heater ready)
+
+**Filed:** 2026-05-23 · supersedes earlier "5 A fast-blow" placeholder ·
+[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
+
+- Parallel-heater case (two 100 W / 24 V heaters at 19.6 V) draws
+  6.8 A steady-state. Single-heater case draws 3.4 A. Fuse must
+  cover both without nuisance trips.
+- **F1 = 10 A T (slow-blow), 5×20 mm glass cartridge** in
+  through-hole fuse holder. Standard part: **Littelfuse 0234010.MXP**
+  (or equivalent 5×20 mm T-rated 10 A).
+- T rating tolerates the brief inrush spike on bulk-cap charging
+  without nuisance trips, while clearing on a hard short (10 A ×
+  I²t for the heater traces at 2 oz / 3 mm is well within trace
+  fusing limits).
+- **Position:** upstream of D5 per "F1 fuse position" entry above.
+  Sequence: `19V_IN → F1 → D5 → bulk cap → HE_MOSFET drain`.
+
 ### [ ] MCP6002 op-amp → LM358 + grow-light gain retune
 
 **Filed:** 2026-05-23 ·
@@ -94,7 +200,7 @@
 - **Placement:** just downstream of input connector and series
   Schottky, before the bulk capacitor. ~$0.15 each.
 
-### [ ] Schottky diode plan — MBR20100CT for D5, SS54 elsewhere
+### [ ] Schottky diode plan — MBR20100CT for D5, MBRD1045 elsewhere
 
 **Filed:** 2026-05-23 · supersedes per-diode notes in earlier entry ·
 [chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review) ·
@@ -104,18 +210,30 @@
   rated, DO-41) on the 19 V → heater path. Heater is 24 V / 100 W →
   5.76 Ω → at 19.6 V draws ~3.4 A. D5 is being run at **3.4× its
   continuous rating**; package dissipation exceeds DO-41 limits.
-- **Two SKUs total:**
+- **Two SKUs across the input-protection diode set:**
   - **D5 → MBR20100CT** (TO-220, 20 A / 100 V) — heater path. Massive
-    headroom, very low V_f.
-  - **D1, D2, D3, D4, D6 → SS54** (SMA, 5 A / 40 V, ~$0.10) — covers
-    every other input-protection diode with 5 A safety margin and
-    SMA footprint to keep the board-shrink goal viable.
+    headroom, very low V_f, large package for the ~1 W dissipation
+    at 3.4 A.
+  - **D1, D2, D3, D4, D6 → MBRD1045** (D-PAK / TO-252, 10 A / 45 V,
+    ~$0.45) — single SKU for **every other input-protection diode**.
+    10 A headroom matches the rail capacities (5 V/5 A, 12 V/9 A,
+    19 V/9.2 A) with safety margin; large D-PAK tab assists thermal
+    dissipation if a rail brushes its rated capacity.
+- **Why MBRD1045 over SS54:** SS54 (5 A SMA) was earlier draft for
+  BOM-cost reasons, but the 5 V buck is rated 5 A and the 12 V buck
+  is rated 9 A — running a 5 A SMA part at its limit eats reliability
+  margin. MBRD1045 doubles current headroom for ~$0.30 extra per
+  diode (~$1.50 total board cost). Single SKU = simpler ordering,
+  larger thermal pad, no penalty on V_f.
 - V_f drops from ~0.8 V (1N4002) to ~0.3 V (Schottky) at every
   diode, eliminating the VSYS-starvation root cause permanently.
-- If single-SKU is strongly preferred: 6× MBR20100CT works
-  electrically but costs ~$3.84 and eats six TO-220 footprints.
+- **Separate SKU on VBUS / DEBUG_CON: SS14** (SMA, 1 A) — listed
+  under the "VBUS + DEBUG_CON 5 V backfeed protection" entry below.
+  Different package, ~10 mA peak current, no benefit upgrading.
+  Three Schottky SKUs total on the board (MBR20100CT, MBRD1045,
+  SS14).
 
-### [ ] F1 fuse position — upstream of D5, sized for parallel-heater option
+### [ ] F1 fuse position — upstream of D5
 
 **Filed:** 2026-05-23 ·
 [chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
@@ -124,33 +242,38 @@
   D5 dumps all 19 V before F1 can react.
 - **Correct order:** `19V_IN → F1 → D5 → bulk cap → HE_MOSFET drain
   → HE_CON`. Fuse goes first, then series diode, then load chain.
-- **Fuse rating depends on heater plan** (open decision below):
-  - **Single 100 W / 24 V heater (current):** F1 = 5 A fast-blow
-    keeps ~50 % headroom over 3.4 A steady-state. No change.
-  - **Two parallel 100 W heaters on one channel (option a):** total
-    draw = 6.8 A → bump F1 to **7.5 A T-rated slow-blow** and bump
-    harness to 16 AWG minimum.
-  - **Two heaters on two MOSFETs / separate fuses (option b):**
-    keep F1 = 5 A on the shared rail, add a second 5 A fuse on the
-    second channel.
+- **Fuse spec:** see "F1 fuse — 10 A 5×20 mm slow-blow" entry above
+  for the chosen part. Same fuse covers both single-heater and
+  parallel-heater operation.
 
-### [ ] Heater channel count — single vs. dual MOSFET decision
+### [ ] Heater channel count — single-MOSFET, parallel heaters, PWM-later
 
-**Filed:** 2026-05-23 · DEFERRED — pick at schematic-design time ·
+**Filed:** 2026-05-23 ·
 [chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
 
-- **Single channel (option a):** keep the current one-MOSFET layout,
-  one control GPIO (GP3). For two heaters in parallel, upsize fuse +
-  wire (see fuse entry above), keep IRLZ44N (handles 6.8 A on
-  heatsink). Simplest schematic delta, no firmware change.
-- **Dual channel (option b — RECOMMENDED for weeks-of-uptime):**
-  add a second IRLZ44N + gate resistor + flyback Schottky + fuse on
-  an unused GPIO (GP21 is the closest reserved relay channel — or
-  pick from GP15/GP22/GP26/GP27 reserved). Each channel sees ~3.4 A,
-  within today's envelope. Firmware adds a `heater_2` config block
-  mirroring `heater`. Graceful degradation if one heater fails.
-- Either choice keeps the **MBR20100CT** on the high-current path
-  and the **copper-pour-plus-clip-on-heatsink** thermal plan.
+- **Decision: single MOSFET channel (option a).** Two 100 W / 24 V
+  heaters wired in parallel on the one HE_MOSFET output, controlled
+  by Pico GP3 through the MCP1416 gate driver. Heaters always run
+  together — the goal is to spread heat over more surface area, not
+  selective control.
+- Total current = 6.8 A on the 19 V rail. Handled by:
+  - F1 = 10 A 5×20 mm T-rated (entry above)
+  - D5 = MBR20100CT 20 A (Schottky entry above)
+  - IRLZ44N with MCP1416 gate driver at 5 V V_GS → R_DS(on) ~0.022 Ω
+    → ~1 W package dissipation, manageable with the TO-220 thermal
+    pour + clip-on heatsink (thermal entry below)
+  - 3 mm heater-path trace on 2 oz copper (stackup entry above)
+  - 16 AWG harness from F1 to HE_CON
+- **Heater PWM is planned for a later firmware revision.** The
+  MCP1416 gate driver (entry above) makes audio-frequency PWM
+  electrically viable on GP3 — the current direct-3.3 V drive cannot
+  switch the gate fast enough for clean PWM at any useful frequency.
+  Schematic / PCB land the gate driver now; firmware adds PWM duty
+  control when the control loop wants finer modulation than on/off.
+- **Why not option b (dual channel):** graceful degradation isn't
+  worth a second MOSFET + driver + fuse + GPIO on a heater stage
+  the operator runs in tandem anyway. Revisit if a use case for
+  selective control ever appears.
 
 ### [ ] R3 corrected to 10 kΩ pull-down on GP14 buzzer line
 
@@ -208,8 +331,10 @@
 - **DEBUG_CON-2 = 5 V** (off the post-Schottky 5 V rail). SWD
   programmers / probes can back-feed the rail.
 - **Fix:** add an **SS14** (SMA, 1 A, ~$0.06) in series on the VBUS
-  pin of INT_CON and on the 5 V pin of DEBUG_CON. SS14 is from the
-  same family as SS54 chosen for D1–D4/D6 — keeps the SKU count flat.
+  pin of INT_CON and on the 5 V pin of DEBUG_CON. SS14 sits in its
+  own SKU (D1–D4/D6 are MBRD1045 D-PAK) — different package because
+  these are signal-header low-current paths, not rail-protection
+  diodes.
 - Alternative: drop those power pins from the headers entirely if
   no current design needs them.
 

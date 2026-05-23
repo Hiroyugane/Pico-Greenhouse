@@ -5,6 +5,164 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-23 · EasyEDA files design review
+
+### note · critical review of current schematic against next-revision queue
+
+Operator added the EasyEDA export (BOM, schematic JSON, netlist) for
+the current PCB revision under
+[docs/hardware/EasyEDA-Files/](../hardware/EasyEDA-Files/) and asked
+for a critical pass to find what the next-revision queue was missing.
+Result: 18 new queued entries in
+[next-revision.md](../hardware/next-revision.md), of which the items
+below are the load-bearing decisions or specs that don't fall out of
+the schematic on a second read.
+
+### decision · MCP6002 op-amp → LM358DR, gain divider retuned to 10 k / 4.7 k
+
+MCP6002T-I/SN abs-max V_DD-V_SS is 7.0 V; the current schematic powers
+it from the 12 V rail (op-amp pin 8 on the 12 V net). Operating
+~5 V above absolute maximum — the chip degrades silently and was the
+likely root cause of any flaky grow-light dim behaviour. Replacement:
+**LM358DR** in the same SOIC-8 footprint, V_CC max 32 V, pin-compatible
+drop-in. LM358 is not rail-to-rail at the top — that's a feature here:
+at 12 V supply the output swings to ~10.5 V max, a natural ceiling
+below the 10 V dim-signal damage threshold. Feedback divider retuned
+from the existing R4 = 47 k / R5 = 20 k (gain ≈ 3.35 → 11 V max, above
+spec) to **R4 = 10 kΩ / R5 = 4.7 kΩ** (gain = 1 + 10/4.7 = 3.13 → 10.3 V
+max). Firmware clips to 10 V via `growlight.max_level_pct` so brief
+over-spec excursions can't happen.
+
+### decision · two-SKU Schottky plan — MBR20100CT for D5, SS54 elsewhere
+
+Earlier note (2026-05-22) settled on MBR20100CT for all six diodes
+"because it's on hand". Critical re-read reveals D5 alone needs the
+20 A package — at 3.4 A heater current the existing 1N4002 is at 3.4×
+continuous rating and is a fire hazard, not just an efficiency issue.
+The other five diodes only need ≤1 A continuous (5 V budget) or
+brief-fault current (shunt diodes). New plan: **D5 → MBR20100CT**
+(TO-220, 20 A / 100 V) on the heater path, **D1–D4 and D6 → SS54**
+(SMA, 5 A / 40 V) everywhere else. Two SKUs, ~$1.14 BOM cost, drops V_f
+from ~0.8 V to ~0.3 V at every node. SMA package keeps the queued
+board-size shrink viable.
+
+### decision · keep R8 = 33 Ω; fix the firmware comment instead
+
+`config.py:36-40` claims R8 was removed after the 2026-05-16/18 SD
+bit-error incident. Physical board (per BOM and netlist) still has
+R8. The 2026-05-19 root-cause was VSYS starvation, not R8 itself —
+once the Schottky + bulk cap lands, VSYS stabilises and R8 acts as a
+useful SPI signal damper at the 10 MHz baud. Decision: leave R8 in
+place on the next rev, update the firmware comment to align with
+reality. Filed as a non-PCB cleanup to ship with the next-rev sweep.
+
+### spec · Senseair S8 UART TXD is 5 V TTL, not 3.3 V
+
+S8 datasheet says UART logic is referenced to V+ (the 5 V supply).
+Pico GPIO abs-max is 3.3 V + 0.5 V = 3.8 V — the existing 100 Ω in
+series (R11) is signal damping, not voltage protection. The Pico's
+internal clamp diodes have been shouldering ~10 mA into the 3V3 rail
+on every UART byte, which works but degrades the input pin over
+weeks of continuous logging. Fix is a divider on the RX line:
+R11 → 2.2 kΩ in series, new 3.3 kΩ to GND, output 3.0 V — well within
+Pico spec at 9600 baud over 1 m cable. R9 on the TX line stays
+100 Ω; Pico's 3.3 V drive clears the S8 RX threshold (~1.5 V) easily.
+
+### spec · heater wattage scales with V², not linearly
+
+A 24 V / 100 W resistive heater is **5.76 Ω**. At 19.6 V it dissipates
+P = V²/R = **66.7 W** and draws **3.4 A** — not the linearly-scaled
+~82 W an operator might calculate. F1 = 5 A fast-blow keeps ~50 %
+headroom over steady-state current; no fuse change needed for the
+single-heater case.
+
+### decision · parallel-heater handling — schematic choice deferred
+
+Two 24 V / 100 W heaters in parallel = 2.88 Ω → 6.8 A → 134 W at
+19.6 V. Exceeds F1 = 5 A and stresses the IRLZ44N. Three options
+queued in next-revision.md under "Heater channel count":
+(a) single MOSFET, bump fuse to 7.5 A T-rated, 16 AWG harness;
+(b) two MOSFETs on two GPIOs with two fuses (each channel sees 3.4 A
+within today's envelope, supports graceful degradation, recommended
+for weeks-of-uptime);
+(c) PWM at ~50 % duty cycle (peak current unchanged so fuse still
+trips; IRLZ44N at 100 Ω gate doesn't switch fast enough for clean
+audio-range PWM anyway). Final pick deferred to schematic-design
+time.
+
+### decision · I²C pull-ups R1/R2 → 2.2 kΩ for fast-mode rise time
+
+`config.py.system.i2c_freq = 400000` (fast mode). Bus carries 7+
+devices (Pico + RTC + OLED + DAC + SHT31 + future PCA9685 + three
+external drops) with estimated bus capacitance ~250 pF. With
+R1/R2 = 10 kΩ the RC rise time is 2.5 µs — ~8× the I²C fast-mode
+limit of 300 ns. Dropping to 2.2 kΩ brings rise time to ~550 ns,
+within spec at the device-end inputs after RC settling. Likely
+suspect for any "MCP4725 doesn't respond" or "OLED tears"
+intermittent symptoms.
+
+### decision · TVS clamp diodes use three SMA-family values
+
+One TVS part can't optimally protect 5 V, 12 V, and 19 V at the same
+time — clamp voltages differ by ~30 V across the range. Instead of
+compromising on a single high-value part, queue **three SMAJ values
+in the same SMA footprint and supplier family**: SMAJ5.0CA on 5 V,
+SMAJ15CA on 12 V, SMAJ24CA on 19 V. Three reels, uniform package,
+proper clamping at each rail. Bidirectional `CA` parts handle either
+input polarity — useful on the Phoenix terminal block where reversed
+wiring is plausible.
+
+### decision · star-ground heater current return at input node
+
+Common GND plane stays single. Layout rule: the HE_MOSFET source pad
+routes via a wide trace **directly to the 19V_IN GND terminal**, not
+into the general logic-side GND pour. Logic ground merges at the
+input GND node. Effect: heater switching current (3.4 A today, up to
+6.8 A if both heaters land on one MOSFET) loops through dedicated
+copper, not through the I²C / RTC / Pico ground return paths. Avoids
+ground bounce that could glitch the bus or reset the MCU during
+heater on/off transitions.
+
+### decision · TO-220 thermal pattern is copper pour PLUS clip-on heatsink
+
+At 3.3 V gate drive the IRLZ44N R_DS(on) is ~0.05–0.08 Ω → ~2 W
+dissipation at 5 A heater current → junction at ~150 °C in free
+air with no heatsinking (62 °C/W thermal resistance). Borderline,
+fails over weeks. Pattern for every TO-220 carrying real load: 1 sq
+inch copper pour on both layers, 6–10 thermal vias to stitch them,
+plus a clip-on SK 104-25 STS heatsink ($0.50). Net thermal resistance
+drops to ~20–30 °C/W; junction lands 40–60 °C above ambient at 2 W.
+Applied to HE_MOSFET first; also applies to any future PCA9685 +
+MOSFET fan stage.
+
+### note · PCB enclosure sits outside the greenhouse; sealing concern shifts
+
+Original review flagged conformal coating for the PCB. Operator
+clarifies: the main PCB and its enclosure live outside the greenhouse
+proper. Only the sensor cables (RJ12 to SHT31, S8, soil ADC), the
+two ambient fan cables, the case fan (in-case only), and the
+grow-light DAC cable enter the greenhouse atmosphere. Moisture
+protection accordingly applies to the cable ends and sensor breakout
+enclosures, not the main PCB. Queued under Wiring / harness.
+
+### note · LED current target 2 mA gives uniform brightness across four rails
+
+A single resistor value across all power-good LEDs gives wildly
+uneven brightness (1.3 mA on 3V3 vs. 17 mA on 19 V with 1 kΩ). At
+2 mA the LED runs comfortably below typical 20 mA max, drastically
+extending operating life across weeks of always-on use. Resistor
+values per rail: 680 Ω (3V3), 1.5 kΩ (5 V), 4.7 kΩ (12 V), 8.2 kΩ
+(19 V). Different values per rail are intentional — uniform current
+beats uniform BOM line at this scale.
+
+### note · Pico footprint label is V2 but board uses V1
+
+BOM row 37 specifies footprint `RPI-PICO-V2 COPY` but the operator
+confirms the actual part on hand is the original Pico (V1, RP2040).
+V2 was simply the best-fitting footprint at design time. Pinout is
+identical so no electrical change needed; queue a silkscreen /
+footprint label rename only.
+
 ## 2026-05-22 · Next-revision planning from bench notes
 
 ### note · operator handed over a flat list of bench observations

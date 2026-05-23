@@ -5,6 +5,144 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-23 · Next-rev post-fab verification (EasyEDA design-review items)
+
+**Branch:** `main`
+**Why hardware-only:** Every item below changes a real component
+value, footprint, or layout rule on the next PCB. None can be
+exercised on the host or by `pytest` — they need scope, multimeter,
+and oscilloscope time after the new board lands. See
+[chat-log.md](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
+for the full rationale per item.
+**Pre-flight:**
+
+1. New PCB fabricated, populated, smoke-tested for shorts before
+   power-up.
+2. XL4015 buck **reverted from the 6.0 V interim setpoint back to
+   5.0 V** (the Schottky swap eliminates the need for the workaround).
+3. Bench multimeter, USB scope, hook clips, and the LED-rail visual
+   check ready.
+
+### Power input — Schottky swap (D1-D6) and bulk caps
+
+- [ ] Confirm D5 = MBR20100CT (TO-220) is installed on the heater path.
+  Measure forward drop across D5 at the heater steady-state current
+  (~3.4 A on a 100 W / 24 V heater): expect ~0.4 V.
+- [ ] Confirm D1, D2, D3, D4, D6 = SS54 (SMA) are installed. Measure
+  forward drop at typical load: expect ~0.3 V per diode.
+- [ ] Verify F1 is now **upstream of D5** in the series order
+  (19V_IN → F1 → D5 → bulk cap → HE_MOSFET). Trace continuity from
+  19V_IN-2 to F1 input first, then F1 output to D5.
+- [ ] With a 5 A or larger heater connected and switched ON, measure
+  19 V rail at the bulk cap during switch-on transient. Expect rail
+  sag < 0.5 V (was effectively undefined before the cap).
+- [ ] Measure 12 V rail during fan startup (post-PCA9685): expect
+  sag < 0.3 V.
+- [ ] VSYS at Pico pin 39 idle: expect 4.6-4.8 V (was 3.05-3.4 V
+  pre-Schottky).
+
+### Power input — TVS clamps
+
+- [ ] Confirm SMAJ5.0CA on 5 V, SMAJ15CA on 12 V, SMAJ24CA on 19 V
+  are installed (all SMA footprint).
+- [ ] Verify standoff voltage by measuring rail voltage with TVS in
+  place during normal operation: no clamping should engage at
+  nominal rail (5 / 12 / 19.6 V).
+
+### Grow light — LM358 swap and gain retune
+
+- [ ] Confirm LM358DR (SOIC-8) is installed in GL_OP-AMP position.
+  Measure pin 8 to pin 4 voltage: expect ~12 V (the supply, no
+  abs-max violation now).
+- [ ] Confirm R4 = 10 kΩ, R5 = 4.7 kΩ.
+- [ ] Run firmware DAC sweep (`debug` menu → growlight dim test, or
+  manually set `growlight.default_level_pct` through 0, 25, 50, 75,
+  100). Measure GL_DIM+ output at the connector at each step:
+  - 0 % → ~0 V
+  - 25 % → ~2.6 V
+  - 50 % → ~5.2 V
+  - 75 % → ~7.7 V
+  - 100 % → ~10.3 V (firmware clamps to `max_level_pct = 91 %` →
+    ~9.4 V at the connector; verify the clamp is active)
+- [ ] Sweep continuously and confirm output is **monotonic** with no
+  steps, plateaus, or oscillation.
+
+### Senseair S8 — UART RX divider
+
+- [ ] Confirm R11 = 2.2 kΩ and new R_RX_DIV = 3.3 kΩ are installed.
+- [ ] With S8 connected and powered, measure DC voltage at Pico GP17
+  during S8 idle (TXD high): expect ~3.0 V (not the previous ~5 V).
+- [ ] Verify CO2 logging is still functional after the divider — the
+  `co2_logger` retry counter should not climb in 24 h normal
+  operation.
+
+### I²C bus — pull-ups dropped to 2.2 kΩ
+
+- [ ] Confirm R1 = 2.2 kΩ and R2 = 2.2 kΩ on SDA / SCL.
+- [ ] Scope SDA and SCL rise times at the far end of the bus
+  (e.g. the outward I²C RJ12 connector). Expect rise time
+  < 1 µs at 250 pF bus capacitance.
+- [ ] Run `prototypes/i2c_scan.py` (or in-firmware equivalent) and
+  confirm all expected devices respond: 0x3C (OLED), 0x44 (SHT31),
+  0x60 (MCP4725), 0x68 (DS3231), 0x40 (PCA9685 if populated).
+- [ ] 24 h soak: no I²C error counts climbing in the event log.
+
+### R3 correction and button surface
+
+- [ ] Confirm R3 = 10 kΩ (not 10 Ω). Quick continuity check from
+  GP14 to GND with the buzzer disconnected: expect ~10 kΩ.
+- [ ] Press menu button repeatedly — no firmware glitches or
+  spurious resets.
+
+### Heater MOSFET thermal
+
+- [ ] Confirm clip-on heatsink (SK 104-25 STS or equivalent) is
+  mounted on HE_MOSFET.
+- [ ] Run heater at full duty for **30 min continuous** in a sealed
+  enclosure. Measure heatsink temperature with IR thermometer or
+  thermocouple: expect < 70 °C above ambient. If hotter, layout
+  pour may be inadequate — investigate copper pour stitch density.
+
+### Power-good LEDs
+
+- [ ] Confirm LEDs light on all four rails (3V3, 5V, 12V, 19V) at
+  power-up.
+- [ ] Visual brightness should be roughly uniform across all four
+  (uniform 2 mA target). A LED that is much brighter or dimmer
+  than the others suggests a wrong resistor value.
+
+### Test points
+
+- [ ] Confirm 8 labelled test pads (3V3 / 5V / 12V / 19V / GND / GND
+  / SDA / SCL) are populated and at 2.54 mm pitch.
+- [ ] Land a 6-pin pogo-pin debug fixture on the row and verify
+  contact to all pads.
+
+### Brownout supervisor
+
+- [ ] Confirm MAX809 (or TPS3839K33) is installed on Pico RUN line
+  (pin 30).
+- [ ] Bench test: drop the input supply slowly from 5.0 V to 2.5 V
+  while observing Pico behaviour. Expect a clean reset cycle when
+  the supervisor's threshold is crossed (~3.0 V depending on part),
+  not undefined state.
+
+### VBUS / DEBUG_CON backfeed
+
+- [ ] Confirm SS14 Schottky in series on INT_CON-4 (VBUS).
+- [ ] Confirm SS14 Schottky in series on DEBUG_CON-2 (5 V).
+- [ ] With Pico USB unplugged and 5 V supply on, measure INT_CON-4:
+  expect 0 V (no backfeed from internal 5 V).
+
+### Pico footprint label
+
+- [ ] Verify silkscreen now reads `RPI-PICO-V1` (or the matching
+  V1-labelled footprint in EasyEDA).
+
+### Notes (post-test)
+
+> Fill in here. Add `[!]` items with failure mode and a short repro.
+
 ## 2026-05-19 · VSYS rail validation (interim buck bump + next-rev Schottky)
 
 **Branch:** `main`

@@ -180,29 +180,41 @@ the [interim XL4015 setpoint](#2026-05-19--external-5-v-supply-starves-vsys--1n4
 which is unrelated. The 4682 lands when the next PCB lands, which
 already needs the Schottky swap and the rest of the queued changes.
 
-## 2026-05-24 · SD-CS pull-up correction
+## 2026-05-24 · SD-MISO pull-up correction (supersedes the CS draft)
 
-### decision · add 10 kΩ from SD-CS (GP13) to 3V3 on the next PCB
+### decision · add 10 kΩ from SD-MISO (GP12) to 3V3 on the next PCB
 
-The 2026-05-22 next-revision entry was filed as "remove the 10 kΩ
-resistor currently on the SD card line." Operator correction today:
-the resistor isn't on the current PCB — the 2026-05-22 note was a
-candidate **addition**, not a removal. Reframed the entry to add the
-pull-up if electrically justified.
+The 2026-05-22 next-revision entry was originally filed as "remove the
+10 kΩ resistor currently on the SD card line." First operator
+correction said the resistor wasn't on the PCB — meaning the note was
+a candidate **addition**, not a removal. Reframed as an addition.
+Second operator correction today: the resistor is on **GP12 (MISO)**,
+not GP13 (CS). The earlier reframe assumed CS. Both the doc and this
+chat-log entry are now updated to MISO.
 
-**Electrically justified.** SD cards sample CS during their own
-internal reset to pick SDIO mode (CS low) vs SPI mode (CS high). Pico
-GP13 is Hi-Z at power-up until `HardwareFactory` drives it; a floating
-CS can lock the card into SDIO mode, after which the SPI init in
-`lib/sdcard.py` never gets a coherent response and the mount fails.
-This is a classic "first boot fails, second boot works" SD-on-Pico
-failure mode. The Adafruit Micro SD breakout has 10 kΩ pull-ups on the
-**card** side of its 74LVC125 level shifter, but those don't clamp the
-**Pico** side of CS during MCU reset.
+**Electrically justified.** MISO is tri-stated by the card outside
+response windows — CS high, no card inserted, or during the 80+ dummy
+clocks the SPI init in `lib/sdcard.py` sends before CMD0. With MISO
+floating, the Pico's SPI peripheral latches garbage (0x00 / 0xFF /
+noise depending on board capacitance and trace coupling) and the init
+state machine either misreads a false response or misses the real
+one. A 10 kΩ pull-up to 3V3 establishes a defined idle-high state —
+matches the SPI mode convention; "no response yet" reads as 0xFF,
+which is what `sdcard.py`'s timeout logic expects.
 
-Decision: add one 10 kΩ 0603 from GP13 to 3V3. No external pull-ups on
-MOSI/MISO/SCK — R8 and R10 (33 Ω dampers) handle those per the
-2026-05-23 EasyEDA review.
+It coexists cleanly with R8 (33 Ω MISO damper): R8 sits in series on
+the trace for edge damping; the 10 kΩ is a shunt to 3V3 on the Pico
+side. The Adafruit 4682 has an onboard pull-up on MISO at unspecified
+value; the external 10 kΩ guarantees the idle state regardless of the
+4682's internal topology and keeps the combined value inside SD spec
+(≤ 100 kΩ on DAT lines).
+
+Decision: add one 10 kΩ 0603 from GP12 to 3V3. No external pull-ups
+on CS / MOSI / SCK — those are actively driven by the Pico or by the
+card during transactions and don't need idle clamping. The GP12 line
+was originally noted in the button-rework bench notes by accident;
+moved to the SD section in next-revision.md where it belongs
+electrically.
 
 ## 2026-05-24 · LM358 footprint switch to DIP-8 socket
 

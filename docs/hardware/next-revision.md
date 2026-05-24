@@ -436,8 +436,9 @@ SOIC-8 to DIP-8 socket to use the LM358N already in stock) ·
   pull-up and 1 kΩ series resistor on GP9.
 - **Drop** the capacitor previously sketched between **3V3_EN and
   GND** — not needed.
-- Add a separate **10 kΩ pull-up on GP12 to 3V3** (not button-related,
-  but caught in the same pass).
+- (The 10 kΩ pull-up originally noted on GP12 in this batch belongs
+  electrically with the SD section — GP12 is SD-MISO. Moved to the
+  [SD module entry](#--sd-card-module--adafruit-4682-3-v-micro-sd-spisdio-bypass).)
 
 ### [ ] Relay connector cleanup — flip, pull-ups, GND fix, mains-only
 
@@ -500,7 +501,7 @@ SOIC-8 to DIP-8 socket to use the LM358N already in stock) ·
 
 **Filed:** 2026-05-22 · updated 2026-05-24 (full module swap delta) ·
 [chat-log: original footprint note](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes) ·
-[chat-log: SD-CS pull-up correction](../notes/chat-log.md#2026-05-24--sd-cs-pull-up-correction) ·
+[chat-log: SD-MISO pull-up correction](../notes/chat-log.md#2026-05-24--sd-miso-pull-up-correction-supersedes-the-cs-draft) ·
 [chat-log: module switch + 74LVC125 correction](../notes/chat-log.md#2026-05-24--sd-card-module-switch--azdelivery--adafruit-4682) ·
 [memory: project-sd-card-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_sd_card_revision.md)
 
@@ -545,7 +546,7 @@ Verbatim spec (Adafruit product + pinouts pages, 2026-05-24 fetch):
   helps the 5 V rail upstream but no longer decouples SD inrush from
   the 3V3 node where it now lives.
 
-**Onboard pull-ups + Pico-side CS pull-up:**
+**Onboard pull-ups + Pico-side MISO pull-up:**
 
 - 4682 has onboard pull-ups on every SPI logic line (value
   unpublished). Both ends of each pin are the same electrical node
@@ -553,16 +554,22 @@ Verbatim spec (Adafruit product + pinouts pages, 2026-05-24 fetch):
   described a 74LVC125 + "card-side" pull-ups, which is the
   **Adafruit 254**, not the 4682. Corrected
   [in the 2026-05-24 chat-log](../notes/chat-log.md#2026-05-24--sd-card-module-switch--azdelivery--adafruit-4682).
-- **Keep the external 10 kΩ 0603 from GP13 (CS) to 3V3** anyway. The
-  onboard pull-up's value and exact node location aren't published;
-  the external resistor guarantees a defined Pico-side CS during MCU
-  power-on-reset regardless of breakout topology. Parallel with the
-  unspecified onboard pull-up, the combined value stays well within
-  the SD spec for CS pull-up (≤ 50 kΩ). One resistor, ~$0.01 BOM,
-  eliminates the "first boot fails, second boot works" SDIO-lock
-  failure mode.
-- **No external pull-ups on MOSI / MISO / SCK.** R8 = 33 Ω MISO
-  damper and R10 = 33 Ω MOSI damper stay per the
+- **Add an external 10 kΩ 0603 from GP12 (MISO) to 3V3.** Not on the
+  current PCB. Reason: MISO is tri-stated by the card outside response
+  windows — CS high, no card inserted, or during the 80+ dummy clocks
+  the host sends before CMD0. With MISO floating, the Pico's SPI
+  peripheral latches garbage (0x00 / 0xFF / noise depending on board
+  capacitance) and the init state machine in `lib/sdcard.py` either
+  reads a false response or misses the real one. A 10 kΩ pull-up
+  establishes a defined idle-high state — matches the SPI mode
+  convention ("no response yet" reads as 0xFF, which is what the
+  timeout logic expects). Coexists cleanly with R8 (33 Ω MISO damper):
+  R8 sits in series for edge damping, the 10 kΩ is a shunt to 3V3 on
+  the Pico side. Parallel with the unspecified onboard pull-up the
+  combined value stays well inside SD spec (≤ 100 kΩ on DAT lines).
+  One resistor, ~$0.01 BOM, eliminates a real SPI-init failure mode.
+- **No external pull-ups on CS / MOSI / SCK.** R8 = 33 Ω MISO damper
+  and R10 = 33 Ω MOSI damper stay per the
   [R8 entry](#--r8-stays--fix-the-firmware-comment-not-the-schematic).
 
 **Card-detect (DET) wiring — new capability:**

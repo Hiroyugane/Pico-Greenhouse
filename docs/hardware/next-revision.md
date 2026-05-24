@@ -49,7 +49,7 @@
 
 **Comment after implementation**: nc pin seems to ne not-connected? needs review
 
-### [ ] Power input connectors → XT60 across all three rails
+### [x] Power input connectors → XT60 across all three rails
 
 **Filed:** 2026-05-23 ·
 [chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
@@ -62,13 +62,9 @@
   XT60 is rated 30 A continuous, 60 A burst — massive headroom for
   all three rails. Single connector SKU = one cable family in the
   field, one mating-tool requirement, simpler harness build.
-- **Silkscreen voltage label next to each XT60:** `5V`, `12V`, `19.5V`,
-  plus `+` / `-` polarity marks. XT60 is keyed but polarity-label
-  redundancy catches reversed crimps during harness assembly.
-- **Board-edge clearance:** the existing 19.5 V XT60 already has the
-  overhang issue tracked under "External power connectors and
-  silkscreen polish" — re-evaluate clearance for all three after
-  layout.
+- Silkscreen voltage labels and board-edge clearance for all three
+  XT60s are tracked under "External power connectors and silkscreen
+  polish" in the PCB layout section.
 
 ### [ ] 5 V VSYS bulk cap voltage rating upgrade
 
@@ -435,12 +431,13 @@ GND-return diodes) ·
 - Replace the existing **DHT21 connector with an I²C-friendly RJ12
   connector** so the SHT31 plugs in directly (current rev still has
   the DHT21-style port).
-- **Rename silkscreen label "I2C con_1" → "SHT31"** — the port
-  carries exactly one sensor and the label should say so.
 - **Add one more outward-facing RJ12 connector** for an additional
   I²C drop on the enclosure wall. Bus topology (one I²C bus vs two)
   stays flexible — the requirement is a second exposed jack so future
   I²C peripherals don't need bus stubs through the case.
+- Silkscreen rename for the existing port (`I2C con_1` → `SHT31`)
+  tracked under "I²C address map on silkscreen" in the PCB layout
+  section.
 
 ### [ ] ADC / soil-moisture interface
 
@@ -638,8 +635,9 @@ catalogued).
   chip can be swapped for variant boards or after failure.
 - After fans move off relays, **the remaining relays carry only
   230 V mains loads** (grow light, heater). Update relay connector
-  spec / spacing / silkscreen accordingly — tracked under the
-  "Relay connector cleanup" entry above.
+  spec accordingly — tracked under the "Relay connector cleanup"
+  entry above; spacing / clearance / silkscreen polish for the
+  mains-only relay connector picked up at the PCB layout stage.
 - Planned fan roster: exhaust, growroom walls, growroom center,
   heater distribution, case.
 - Steps 1–4 of the suggested build order in the memory entry are
@@ -731,6 +729,11 @@ catalogued).
   - MCP4725 DAC → `(0x60)`
   - SSD1306 OLED → `(0x3C)`
   - PCA9685 (future) → `(0x40)`
+- **Rename silkscreen label `I2C con_1` → `SHT31`** on the existing
+  RJ12 port — it carries exactly one sensor, so the device name is
+  more informative than the generic bus label. (Connector swap and
+  the second outward bus are queued under "I²C / RJ12 connector
+  layout" in the Schematic section.)
 - Also consolidate the full address list in a comment block at the
   top of `config.py` so future agents can see conflicts at a glance.
 
@@ -750,11 +753,16 @@ catalogued).
 **Filed:** 2026-05-22 ·
 [chat-log entry](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes)
 
-- **XT60 board-edge clearance:** the connector body overhangs / doesn't
-  seat because the board edge is too close. Move the XT60 inboard or
-  extend the board edge in that area. (Interacts with the board-size
-  shrink below in this section — re-check after layout.)
-- **Silkscreen polarity marks (+/-) on the 19.5 V terminals.**
+- **XT60 board-edge clearance:** the original 19.5 V XT60 body
+  overhangs / doesn't seat because the board edge is too close. Now
+  that all three rails are XT60 (see Schematic section), move each
+  XT60 inboard or extend the board edge in that area, and re-check
+  clearance for all three after layout. (Interacts with the
+  board-size shrink below in this section.)
+- **Silkscreen voltage labels next to each XT60:** `5V`, `12V`,
+  `19.5V`, plus `+` / `-` polarity marks on all three. XT60 is keyed
+  but polarity-label redundancy catches reversed crimps during
+  harness assembly.
 - **Rename silkscreen label "VCC" → "5V"** — ambiguous given the mix
   of 3V3 / 5V / 12V / 19.5V rails on the board.
 - **Label voltage direction on the ambient fan switch** (and on the

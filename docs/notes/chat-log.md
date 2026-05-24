@@ -218,6 +218,43 @@ the [interim XL4015 setpoint](#2026-05-19--external-5-v-supply-starves-vsys--1n4
 which is unrelated. The 4682 lands when the next PCB lands, which
 already needs the Schottky swap and the rest of the queued changes.
 
+## 2026-05-24 · Input diode topology correction — drop GND-return diodes
+
+### decision · single Schottky per input rail; delete D2 / D3 / D6
+
+Earlier next-rev plan listed all six input diodes (D1–D6) for Schottky
+replacement on the assumption that each rail had two diodes in series
+on the +line — the project-power-input-revision memory literally said
+"two 1N4002 silicon diodes sit between the XL4015 5 V buck output and
+the Pico VSYS." That framing was wrong.
+
+**Actual topology from `Sheet_1_2026-05-22.net`:** each input has one
+diode on the **positive line** (D1 on 5 V, D4 on 12 V, D5 on 19.5 V)
+and one on the **GND return** (D2 on 5 V GND, D3 on 12 V GND, D6 on
+19.5 V GND). Normal current loops through both — combined drop is the
+same ~1.6 V per rail, but the diodes aren't physically stacked on one
+trace. It's a "balanced" reverse-polarity scheme: if the connector is
+plugged in backwards, both diodes block, no current flows.
+
+**Three options considered for the next rev:**
+
+1. **Single Schottky on +line only, tie GND directly, drop D2/D3/D6.**
+   ~0.3 V loop drop, three fewer parts, same protection (reversed
+   connector → +line Schottky reverse-biases → no current).
+2. **P-channel MOSFET on +line.** Zero forward drop, full protection,
+   more parts and layout complexity. Overkill at these currents.
+3. **Keep dual-diode but both Schottky.** ~0.6 V loop drop. Worse than
+   option 1 with no benefit.
+
+**Decision: option 1.** Final input-protection diode set on next rev:
+**D5 → MBR20100CT** (heater path, unchanged), **D1 / D4 → MBRD1045**
+(single SKU for both +rail Schottkys), **D2 / D3 / D6 → deleted**
+(connector negatives tie directly to system GND via copper).
+
+Cuts ~0.8 V of GND-return drop per rail, frees the ~1.3 V VSYS
+headroom currently consumed by two-diode loss, halves the +rail part
+count for input protection.
+
 ## 2026-05-24 · SD-MISO pull-up correction (supersedes the CS draft)
 
 ### decision · add 10 kΩ from SD-MISO (GP12) to 3V3 on the next PCB

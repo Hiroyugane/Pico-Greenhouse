@@ -14,7 +14,7 @@
 
 ## Electrical / PCB
 
-### [ ] MCP1416 gate driver for HE_MOSFET (IRLZ44N)
+### [x] MCP1416 gate driver for HE_MOSFET (IRLZ44N)
 
 **Filed:** 2026-05-23 ·
 [chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
@@ -41,6 +41,7 @@
 - **PWM-readiness:** the MCP1416 also makes future heater PWM viable
   (see "Heater channel count" entry below) — direct-drive at 3.3 V
   through 100 Ω can't switch fast enough for audio-frequency PWM.
+- Comment after implementation:
 
 ### [ ] Power input connectors → XT60 across all three rails
 
@@ -210,33 +211,51 @@ SOIC-8 to DIP-8 socket to use the LM358N already in stock) ·
 - **Placement:** just downstream of input connector and series
   Schottky, before the bulk capacitor. ~$0.15 each.
 
-### [ ] Schottky diode plan — MBR20100CT for D5, MBRD1045 elsewhere
+### [ ] Schottky plan — single +rail diode per input; **delete D2 / D3 / D6** (GND-return diodes)
 
-**Filed:** 2026-05-23 · supersedes per-diode notes in earlier entry ·
+**Filed:** 2026-05-23 · updated 2026-05-24 (topology corrected: drop
+GND-return diodes) ·
 [chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review) ·
+[chat-log: topology correction](../notes/chat-log.md#2026-05-24--input-diode-topology-correction-drop-gnd-return-diodes) ·
 [memory: project-power-input-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_power_input_revision.md)
 
+- **Topology correction (2026-05-24):** the current PCB has **one
+  1N4002 on each line of every input** — D1 on +5 V / D2 on 5 V GND
+  return, D4 on +12 V / D3 on 12 V GND return, D5 on +19.5 V /
+  D6 on 19.5 V GND return. Earlier next-rev plan listed all six for
+  Schottky replacement; netlist review confirms the **GND-return
+  diodes (D2, D3, D6) earn nothing the +rail diode doesn't already
+  provide** — a single Schottky on the positive line blocks
+  reverse-polarity current the same way, with half the forward drop
+  and half the part count.
 - **Critical — D5 is currently a fire risk.** D5 is a 1N4002 (1 A
   rated, DO-41) on the 19.5 V → heater path. Heater is 24 V / 100 W →
   5.76 Ω → at 19.6 V draws ~3.4 A. D5 is being run at **3.4× its
   continuous rating**; package dissipation exceeds DO-41 limits.
-- **Two SKUs across the input-protection diode set:**
+- **Final diode set on the next revision (3 parts, 2 SKUs):**
   - **D5 → MBR20100CT** (TO-220, 20 A / 100 V) — heater path. Massive
     headroom, very low V_f, large package for the ~1 W dissipation
     at 3.4 A.
-  - **D1, D2, D3, D4, D6 → MBRD1045** (D-PAK / TO-252, 10 A / 45 V,
-    ~$0.45) — single SKU for **every other input-protection diode**.
-    10 A headroom matches the rail capacities (5 V/5 A, 12 V/9 A,
-    19.5 V/9.23 A) with safety margin; large D-PAK tab assists thermal
-    dissipation if a rail brushes its rated capacity.
-- **Why MBRD1045 over SS54:** SS54 (5 A SMA) was earlier draft for
-  BOM-cost reasons, but the 5 V buck is rated 5 A and the 12 V buck
-  is rated 9 A — running a 5 A SMA part at its limit eats reliability
-  margin. MBRD1045 doubles current headroom for ~$0.30 extra per
-  diode (~$1.50 total board cost). Single SKU = simpler ordering,
-  larger thermal pad, no penalty on V_f.
-- V_f drops from ~0.8 V (1N4002) to ~0.3 V (Schottky) at every
-  diode, eliminating the VSYS-starvation root cause permanently.
+  - **D1 (+5 V) and D4 (+12 V) → MBRD1045** (D-PAK / TO-252,
+    10 A / 45 V, ~$0.45). Single SKU for both +rail Schottkys. 10 A
+    headroom matches rail capacities (5 V/5 A, 12 V/9 A) with safety
+    margin; large D-PAK tab assists thermal dissipation.
+  - **D2, D3, D6 → deleted.** Connector negative pins tie **directly
+    to system GND** (copper trace, no diode). Saves three parts,
+    ~0.8 V of return-path drop per rail, three through-hole footprints.
+- **Reverse-polarity behaviour after the change:** plug a rail in
+  backwards → +line Schottky reverse-biases → no current flows → fails
+  safe. Identical protection to the old D+ + D− scheme.
+- **Why MBRD1045 over SS54:** SS54 (5 A SMA) was an earlier draft for
+  BOM cost, but the 5 V buck is rated 5 A and 12 V buck 9 A — running
+  a 5 A SMA part at its limit eats reliability margin. MBRD1045
+  doubles current headroom for ~$0.30 extra; single SKU = simpler
+  ordering, larger thermal pad, no penalty on V_f.
+- V_f drops from ~1.6 V (two 1N4002 in the current loop) to ~0.3 V
+  (one Schottky on +line, direct GND return) at every rail —
+  eliminates the VSYS-starvation root cause permanently and frees
+  ~1.3 V of headroom that the bench workaround currently steals from
+  the XL4015 setpoint.
 - **Separate SKU on VBUS / DEBUG_CON: SS14** (SMA, 1 A) — listed
   under the "VBUS + DEBUG_CON 5 V backfeed protection" entry below.
   Different package, ~10 mA peak current, no benefit upgrading.
@@ -679,8 +698,12 @@ catalogued).
 - Footprint-constrained alternatives if TO-220 doesn't fit: **SS14**
   (SMA 1 A), **1N5817** (DO-41 1 A), **MBRS340** (3 A SMA). Forward
   drop falls from ~0.8 V (1N4002) to ~0.3 V per diode in all cases.
-- Evaluate whether the second series diode is needed. If both are
-  reverse-polarity protection, drop to a single Schottky.
+- **Resolved (2026-05-24):** the "second series diode" was actually
+  D2 on the GND return, not stacked in series with D1 on +5 V.
+  Decision: **drop D2** (and the matching D3 / D6 on the 12 V / 19.5 V
+  GND returns) — connector negatives tie directly to system GND, +rail
+  Schottky alone handles reverse-polarity. See the
+  [updated Schottky plan](#--schottky-plan--single-rail-diode-per-input-delete-d2--d3--d6-gnd-return-diodes).
 - Add **1000 µF low-ESR electrolytic + 100 nF ceramic** at Pico VSYS
   pin 39, leads as short as practical, to absorb SD inrush.
 - After fab: re-verify per

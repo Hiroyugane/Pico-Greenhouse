@@ -7,6 +7,80 @@
 
 ## 2026-05-24 · next-revision.md consistency pass
 
+### decision · Schematic section verified to contain only schematic-stage concerns
+
+Follow-up to the EasyEDA-workflow restructure earlier this date. The
+user asked to verify that every bullet under **Schematic — nets,
+components, BOM** is actually a schematic concern, with no layout or
+other stage content embedded. Sweep results, and how each
+misplacement was resolved:
+
+- **MCP6002 → LM358N entry** carried a "PCB footprint change" bullet
+  describing the SOIC-8 → DIP-8 socket land-pattern swap with
+  dimensions. Moved to a new PCB layout entry "MCP6002 → LM358N —
+  DIP-8 socket footprint". The schematic-side bullet kept the
+  procurement rationale (use in-stock LM358N DIP-8) and now
+  cross-references the layout entry. Entry title renamed from
+  "...+ footprint to DIP-8 socket + grow-light gain retune" to
+  "...LM358N (DIP-8) + grow-light gain retune" so the title no
+  longer advertises layout content that isn't here.
+- **Relay connector cleanup entry** carried a "Flip the relay
+  connector orientation" bullet and a trailing mention of "spacing
+  for mains creepage and clearance". Both are layout work. Moved to
+  a new PCB layout entry "Relay connector — orientation flip +
+  mains-rated spacing". The schematic-side kept the component-spec
+  swap (mains-rated header replaces the low-voltage header) and the
+  pull-up / GND-tie / pinout fixes. Title renamed to drop "flip".
+- **SD card module → Adafruit 4682 entry** had an entire
+  "**Footprint / connector change:**" subsection covering the land
+  pattern swap and mounting holes. Moved to a new PCB layout entry
+  "SD card module — Adafruit 4682 header footprint + mounting
+  holes". The schematic-side now has a one-line cross-reference at
+  the same position so readers know where the footprint work lives.
+- **I²C / RJ12 connector entry** title was "...connector layout —
+  rename, add second outward bus". Two problems: "layout" inside a
+  Schematic-section title is confusing, and "rename" referred to a
+  silkscreen change that had already moved to PCB layout. Renamed
+  to "I²C / RJ12 connector — swap DHT21 port to RJ12 + add second
+  outward bus".
+- **TVS clamp diodes entry** used the bullet header "**Placement:**"
+  to describe netlist order (input → Schottky → TVS → bulk cap →
+  load). "Placement" reads as physical PCB placement; the content
+  is actually electrical sequence. Reworded to "**Position in input
+  chain:**" so the schematic intent is unambiguous.
+- **Schottky plan entry** described the deleted GND-return diodes
+  as "Connector negative pins tie directly to system GND (copper
+  trace, no diode)". "Copper trace" is layout terminology used for
+  what is really a schematic intent (no series component in the
+  return path). Reworded to "(no series diode in the return path)";
+  the saved through-hole positions are still counted as a
+  consequence.
+
+What stayed in Schematic — borderline-but-defensible:
+
+- Procurement-side footprint notes like "identical footprint family"
+  (5 V VSYS bulk cap entry, justifying the voltage-rating bump fits
+  the same body), "same SMA-family footprint" (TVS entry, uniform
+  package across three SKUs), and "Footprint-constrained fallback
+  parts" (Schottky entry, naming fallback SKUs if the primary part
+  cannot be sourced). These are component-selection rationale, not
+  layout work — kept.
+- Decoupling-placement intent in component bullets ("close to the
+  load", "leads as short as practical"). Standard schematic-side
+  annotation that travels with the component; treated as design
+  intent rather than layout DRC work.
+- The F1 fuse rating bullet referenced the 2 oz / 3 mm trace
+  fusing limit as a sanity check on the 10 A choice. The trace
+  parameters themselves are layout-side, but they're cited here to
+  justify a schematic-side component choice. Kept.
+
+Rule going forward: a bullet stays in **Schematic** if its primary
+action is component selection, value, or netlist topology, even when
+it mentions layout consequences in passing. A bullet moves to **PCB
+layout** if its primary action is footprint, placement, routing,
+silkscreen, or DRC. Mixed entries keep one cross-reference line in
+each section so the connection is one click away.
+
 ### decision · input connectors — XT60 on all three rails, drop banana-plug proposal
 
 [`docs/hardware/next-revision.md`](../hardware/next-revision.md) had

@@ -172,6 +172,44 @@ the AZDelivery, which has no card-detect.
   Wired into `HardwareFactory` to short-circuit the mount-retry loop
   when the card is physically absent.
 
+### note · hot-swap recovery code must be refactored once DET is live
+
+The current SD hot-swap path at
+[main.py:942-981](../../main.py#L942-L981) polls `refresh_sd()`
+(block-level `readblocks` over SPI) every health-check interval
+whenever `is_primary_available()` is false *or* `buffered > 0`. That's
+the only mechanism available today — the AZDelivery module can't
+report card presence at all, so the firmware has to probe the bus to
+find out whether the operator pulled the card or the card itself is
+sick. Once the 4682's DET pin reaches GP15 the loop should be
+rewritten:
+
+1. **Skip `refresh_sd()` entirely when DET reads "no card".** Saves
+   the SPI traffic, the CPU cycles, and stops emitting misleading
+   `logger.warning("SD card not accessible, retrying soon")` entries
+   when the operator deliberately pulled the card. Today those
+   warnings fire every 10 s for as long as the card is out, which
+   makes the EventLog noisy and conceals genuine bus faults.
+2. **Trigger an immediate remount on the DET absent → present edge**
+   instead of waiting up to `sd_recovery_interval_s = 10 s` for the
+   next health-check tick. Poll-driven now; edge-driven once DET is
+   wired.
+3. **Surface three distinct states to `StatusManager`** —
+   `no_card_inserted`, `mounted`, `mount_failed` — replacing today's
+   binary `sd_status` flag. The `sd_problem_led` behaviour and the
+   boot-time `require_sd_startup` reset path should both branch on
+   the new states so a missing card lights a different indicator
+   than a real SPI / filesystem fault.
+
+**Sequencing:** firmware-only follow-up that lands **after** the new
+PCB lands and DET polarity is confirmed on the bench — not part of
+the hardware change itself, and not part of the initial `sd_detect`
+config + `HardwareFactory` wiring commits. Each piece ships as its
+own commit per
+[commit-granularity.md](../../.claude/rules/ecc/common/commit-granularity.md):
+`sd_detect` config plumbing → `HardwareFactory` reads DET → recovery
+loop refactor → `StatusManager` tri-state.
+
 ### note · current PCB stays on the AZDelivery module until the next fab run
 
 Don't yank the existing module — the SPI signal contract is the same

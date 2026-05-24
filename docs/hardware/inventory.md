@@ -268,45 +268,44 @@ is on the shelf. Functional substitutes are flagged separately
 
 ### Must order before next fab run
 
-| # | Part | Quantity for one PCB | Source link |
-| - | --- | --- | --- |
-| 1 | **MCP1416T-E/OT** (SOT-23-5, gate driver) | 1 (+ 4 spare) | [next-revision: MCP1416 gate driver](next-revision.md) |
-| 2 | **MBR20100CT** (TO-220, 20 A / 100 V Schottky) for D5 | 1 (+ 2 spare) | [next-revision: Schottky plan](next-revision.md) |
-| 3 | **MBRD1045** (D-PAK, 10 A / 45 V Schottky) for D1, D2, D3, D4, D6 | 5 (+ 5 spare) | [next-revision: Schottky plan](next-revision.md) |
-| 4 | **SS14** (SMA, 1 A / 40 V Schottky) for VBUS + DEBUG_CON backfeed | 2 (+ 8 spare) | [next-revision: VBUS + DEBUG_CON backfeed](next-revision.md) |
-| 5 | **LM358DR** (SOIC-8) — replaces MCP6002 | 1 (+ 4 spare) | [next-revision: MCP6002 → LM358](next-revision.md) |
-| 6 | **10 A T (slow-blow) 5×20 mm fuse** (e.g. Littelfuse 0234010.MXP) | 1 (+ 4 spare) | [next-revision: F1 fuse](next-revision.md) |
-| 7 | **SMAJ5.0CA** (TVS, 5 V bidirectional) | 1 (+ 2 spare) | [next-revision: TVS on all three rails](next-revision.md) |
-| 8 | **SMAJ15CA** (TVS, 12 V bidirectional) | 1 (+ 2 spare) | [next-revision: TVS on all three rails](next-revision.md) |
-| 9 | **SMAJ24CA** (TVS, 19.5 V bidirectional) | 1 (+ 2 spare) | [next-revision: TVS on all three rails](next-revision.md) |
-| 10 | **1000 µF / 16 V low-ESR electrolytic** (5 V VSYS bulk) | 1 (+ 2 spare) | [next-revision: 5 V VSYS bulk cap upgrade](next-revision.md) |
-| 11 | **220 µF / 25 V low-ESR electrolytic** (12 V bulk) | 1 (+ 2 spare) | [next-revision: bulk capacitance](next-revision.md) |
-| 12 | **470 µF / 35 V low-ESR electrolytic** (19.5 V bulk) | 1 (+ 2 spare) | [next-revision: bulk capacitance](next-revision.md) |
-| 13 | **MAX809LEUR+T** or **TPS3839K33** (SOT-23-3, ~3.0 V reset supervisor) | 1 (+ 2 spare) | [next-revision: brownout supervisor on Pico RUN](next-revision.md) |
-| 14 | **Fischer SK 104-25 STS** (TO-220 clip-on heatsink) | 1 (+ 1 spare; +1 per future fan-stage TO-220) | [next-revision: TO-220 thermal management](next-revision.md) |
-| 15 | **PCA9685** (16-ch PWM driver, breakout preferred for socketing) | 1 (+ 1 spare) | [next-revision: fans → PCA9685 + IRLZ44N](next-revision.md) |
-| 16 | **Additional 1N4007** (or UF4007) flyback diodes for fan stage | 5 (one per fan; ELEGOO kit has 5, no spare) | [next-revision: fans → PCA9685 + IRLZ44N](next-revision.md) |
-| 17 | **Banana plug PCB jacks** (12 V and 19.5 V rails) | 2 pairs (red + black per rail) | [next-revision: external power connectors](next-revision.md) |
-| 18 | **Dielectric grease** (small tube, RJ12 plug sealing) | 1 | [next-revision: sensor cable moisture protection](next-revision.md) |
-| 19 | **Silicone-insulated hookup wire** (~20 AWG, for any fan body in greenhouse atmosphere) | ~2 m per fan | [next-revision: sensor cable moisture protection](next-revision.md) |
-| 20 | **Desiccant sachets** (1 g) | 1 per sensor breakout enclosure | [next-revision: sensor cable moisture protection](next-revision.md) |
+Quantities include design needs plus a small spares pool sized for
+the expected pack size on AliExpress (typically 5 or 10 pcs per
+pack). Unit costs are **rough budgeting estimates** based on
+AliExpress small-quantity pricing in EUR; subtotals are
+`qty × unit` rounded to €0.10. Use this list to size the order, not
+as a purchase quotation.
 
-### Verify on unpacking (probably covered)
-
-- **15 kΩ** ±1 % through-hole resistor (soil-ADC divider top leg) —
-  presence in WayinTop kit unconfirmed; if absent, add to order.
-- **1.5 kΩ** and **8.2 kΩ** ±1 % through-hole resistor (5 V and 19.5 V
-  power-good LED current limiters) — presence in WayinTop kit
-  unconfirmed; same treatment.
+| # | Part | Qty to order | Est. unit (€) | Est. subtotal (€) | Source |
+| - | --- | --- | --- | --- | --- |
+| 1 | **MCP1416T-E/OT** (SOT-23-5, gate driver) | 5 (1 + 4 spare) | 0.40 | 2.00 | [MCP1416 gate driver](next-revision.md) |
+| 2 | **MBR20100CT** (TO-220, 20 A / 100 V Schottky) for D5 | 3 (1 + 2 spare) | 0.80 | 2.40 | [Schottky plan](next-revision.md) |
+| 3 | **MBRD1045** (D-PAK, 10 A / 45 V Schottky) for D1–D4, D6 | 10 (5 + 5 spare) | 0.45 | 4.50 | [Schottky plan](next-revision.md) |
+| 4 | **SS14** (SMA, 1 A / 40 V Schottky) for VBUS + DEBUG_CON | 10 (2 + 8 spare) | 0.06 | 0.60 | [VBUS + DEBUG_CON backfeed](next-revision.md) |
+| 5 | **10 A T (slow-blow) 5×20 mm fuse** (e.g. Littelfuse 0234010.MXP) | 5 (1 + 4 spare) | 0.50 | 2.50 | [F1 fuse](next-revision.md) |
+| 6 | **SMAJ5.0CA** (TVS, 5 V bidirectional) | 3 (1 + 2 spare) | 0.15 | 0.50 | [TVS on all three rails](next-revision.md) |
+| 7 | **SMAJ15CA** (TVS, 12 V bidirectional) | 3 (1 + 2 spare) | 0.15 | 0.50 | [TVS on all three rails](next-revision.md) |
+| 8 | **SMAJ24CA** (TVS, 19.5 V bidirectional) | 3 (1 + 2 spare) | 0.15 | 0.50 | [TVS on all three rails](next-revision.md) |
+| 9 | **1000 µF / 16 V** low-ESR electrolytic (5 V VSYS bulk) | 3 (1 + 2 spare) | 0.30 | 0.90 | [5 V VSYS bulk cap upgrade](next-revision.md) |
+| 10 | **220 µF / 25 V** low-ESR electrolytic (12 V bulk) | 3 (1 + 2 spare) | 0.20 | 0.60 | [bulk capacitance](next-revision.md) |
+| 11 | **470 µF / 35 V** low-ESR electrolytic (19.5 V bulk) | 3 (1 + 2 spare) | 0.40 | 1.20 | [bulk capacitance](next-revision.md) |
+| 12 | **MAX809LEUR+T** or **TPS3839K33** (SOT-23-3, ~3.0 V reset supervisor) | 3 (1 + 2 spare) | 0.30 | 0.90 | [brownout supervisor](next-revision.md) |
+| 13 | **Fischer SK 104-25 STS** (TO-220 clip-on heatsink) | 2 (1 heater MOSFET + 1 spare; add 1 per fan-stage TO-220) | 0.50 | 1.00 | [TO-220 thermal management](next-revision.md) |
+| 14 | **PCA9685** 16-ch PWM driver (breakout preferred for socketing) | 2 (1 + 1 spare) | 3.50 | 7.00 | [fans → PCA9685 + IRLZ44N](next-revision.md) |
+| 15 | **1N4007** (or UF4007) flyback diodes for fan stage | 10 (5 fans + 5 spare; ELEGOO kit has 5 only) | 0.05 | 0.50 | [fans → PCA9685 + IRLZ44N](next-revision.md) |
+| 16 | **Banana plug PCB jacks** (12 V and 19.5 V rails) | 4 (2 pairs red + black) | 1.00 | 4.00 | [external power connectors](next-revision.md) |
+| 17 | **15 kΩ** ±1 % 1/4 W resistor (soil-ADC divider top leg) | 20 (pack) | 0.02 | 0.40 | [ADC / soil-moisture interface](next-revision.md) |
+| 18 | **1.5 kΩ** ±1 % 1/4 W resistor (5 V power-good LED) | 20 (pack) | 0.02 | 0.40 | [power-good LEDs](next-revision.md) |
+| 19 | **8.2 kΩ** ±1 % 1/4 W resistor (19.5 V power-good LED) | 20 (pack) | 0.02 | 0.40 | [power-good LEDs](next-revision.md) |
+| 20 | **Dielectric grease** (small tube, RJ12 plug sealing) | 1 | 5.00 | 5.00 | [sensor cable moisture protection](next-revision.md) |
+| 21 | **Silicone-insulated hookup wire** (~20 AWG) | ~5 m total | 1.50/m | 7.50 | [sensor cable moisture protection](next-revision.md) |
+| 22 | **Desiccant sachets** (1 g) | 5 (one per sensor breakout enclosure) | 0.50 | 2.50 | [sensor cable moisture protection](next-revision.md) |
+| | **Grand total (estimate)** | | | **~€ 45.30** | |
 
 ### Substitute on hand, not fab-ready
 
 - **1N5822** (DO-27 axial, 3 A / 40 V Schottky) — **not** a substitute
   for MBRD1045 on the fabricated board (wrong package, half the
   current rating). Useable on protoboards for sub-3 A bench rigs only.
-- **LM358N** (DIP-8) — **not** a substitute for LM358DR on the
-  fabricated board (wrong package). Useable on protoboards via DIP
-  socket.
 
 ### In stock, covered by next-revision
 
@@ -327,8 +326,12 @@ is on the shelf. Functional substitutes are flagged separately
 | Power-good LEDs | 5 mm LEDs ×~100 |
 | Soil-ADC divider bottom leg (10 kΩ) | 10 kΩ × 20 |
 | Senseair S8 RX divider | 2.2 kΩ + 3.3 kΩ × 20 each |
-| LM358 / LM358N prototyping socket | DIP-8 from 66-pc socket kit |
+| Grow-light op-amp (DIP-8 socket footprint) | LM358N DIP-8 × 10 + DIP-8 from 66-pc socket kit |
+| Op-amp gain divider retune (R4 = 10 k, R5 = 4.7 k) | 10 kΩ + 4.7 kΩ × 20 each (WayinTop kit) |
 | Heavy-duty mains distribution post-relay | 4-unit screw-terminal block "462d" |
+| Enclosure-side AC mains entry | IEC320 C14 inlet (switch + LED + 10 A fuse) × 5 |
+| 3D-printed enclosure threading | M3 brass hot-melt insert × 30 |
+| PCB-to-enclosure mounting | M3 hex M/F standoff × 30 |
 
 ---
 
@@ -390,10 +393,10 @@ landed each item. Order numbers preserved for invoice cross-reference.
 - 3068920990227331 — 4-pin PWM CPU fan extension ×10
 - 3068920990077331 — 5×20 mm / 6×30 mm spiral fuse holder ×10
 - 3068920990247331 — RJ11 6P6C PCB jack ×30
-- 3068920990267331 — *(MINGYUE TRADING — item description missing, 9.83 €)*
+- 3068920990267331 — IEC320 C14 panel inlet (switch + LED + 10 A fuse holder, "AC-08A") ×5 + 5×20 mm 10 A glass fuse 10-pack ×2
 - 3068920990317331 — heavy-duty screw terminal block "462d" ×4
-- 3068920990337331 — *(HUI JI — item description missing, 4.92 €)*
-- 3068920990097331 — VEML7700 light sensor module ×5
+- 3068920990097331 — M3 brass hot-melt insert (6 mm length) ×30 + M3 hex M/F standoff (6 mm + 6 mm) ×30
+- 3068920990337331 — VEML7700 light sensor module ×5
 
 ### Amazon
 

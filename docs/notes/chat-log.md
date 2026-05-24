@@ -5,6 +5,50 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-24 · next-revision.md consistency pass
+
+### decision · input connectors — XT60 on all three rails, drop banana-plug proposal
+
+[`docs/hardware/next-revision.md`](../hardware/next-revision.md) had
+two entries proposing different input-connector strategies: the
+2026-05-23 "Power input connectors → XT60 across all three rails"
+entry standardised XT60 on 5 V, 12 V, and 19.5 V; an older bullet
+inside "External power connectors and silkscreen polish" still
+called for banana plugs on the 12 V and 19.5 V rails with the 5 V
+on the current Phoenix block. Both could not be right. Resolved in
+favour of XT60 across the board — single connector SKU, 30 A
+continuous headroom on every rail, one mating-tool requirement.
+Banana-plug bullet removed.
+
+### decision · merge older Schottky entry into the 2026-05-24 plan
+
+The earlier "Replace 1N4002 input diodes with Schottky (+ bulk cap
+at VSYS)" entry (filed 2026-05-19, updated 2026-05-22) had been
+superseded by the 2026-05-24 "Schottky plan — single +rail diode
+per input; delete D2 / D3 / D6" entry but still lived alongside it,
+re-stating part choices and the D2-on-GND-return correction in
+parallel. Folded the unique bits (post-fab XL4015 setpoint revert,
+footprint-constrained fallback parts list) into the newer entry's
+trailing bullets and deleted the older one. The Schottky story now
+has one canonical home in the Schematic section.
+
+### note · ride-along cleanups in the same pass
+
+Two duplicates removed alongside the decisions above:
+
+- The "Bulk capacitance on 12 V and 19.5 V rails" entry still
+  listed 5 V VSYS at the stale **1000 µF / 6.3 V** value. The
+  dedicated "5 V VSYS bulk cap voltage rating upgrade" entry
+  already owns the corrected **16 V** spec; the duplicate bullet
+  was replaced with a pointer to that entry.
+- The "Board size reduction" entry carried a cross-reference
+  bullet to the XT60 board-edge clearance discussion that lives
+  in "External power connectors and silkscreen polish" — the two
+  entries are adjacent in the same PCB layout section, so the
+  pointer was redundant and was removed.
+- Internal link in the SD card entry repointed from the deleted
+  Schottky anchor to the surviving "5 V VSYS bulk cap" anchor.
+
 ## 2026-05-24 · next-revision.md restructured along EasyEDA workflow
 
 ### decision · group queued hardware changes by workflow stage instead of one flat Electrical / PCB section

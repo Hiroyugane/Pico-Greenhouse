@@ -5,6 +5,181 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-24 · SD card module switch — AZDelivery → Adafruit 4682
+
+### decision · next revision replaces the AZDelivery generic SD breakout with **Adafruit 4682** (3 V Micro SD SPI/SDIO Bypass Card)
+
+Current PCB carries an **AZDelivery "SPI Reader Micro Speicher SD TF
+Karte" module** (Arduino-compatible generic). That family has an
+onboard AMS1117-3.3 LDO regulator and (typically) a 74HC125 / equivalent
+buffer to accept 5 V Vcc and 5 V logic. None of that helps a 3.3 V Pico
+— the Pico already speaks 3.3 V directly, and the LDO + buffer add
+heat, dropout, and an extra failure surface for no functional gain. The
+generic module also has no card-detect signal and no published spec
+sheet, which has cost bring-up time on this project.
+
+**Replacement:** [Adafruit 4682 "Micro SD SPI or SDIO Card Breakout
+Board"](https://www.adafruit.com/product/4682) — the **3 V bypass**
+variant of the older Adafruit 254. Verbatim from the Adafruit product
+page and pinouts page (2026-05-24 fetch):
+
+- "For use with 3V power and logic microcontollers only!"
+- "does not have level shifters"
+- "Unlike our other adapter, it is not fixed for SPI usage, and can be
+  used with SDIO hardware support."
+- Power: **"3V — This is the power pin. MicroSD cards must use 3.3V"**
+  and **"GND — common ground for power and logic"**.
+- SPI pins: **"CLK, SO, SI, CS"** with **"Pull ups are provided on all
+  SPI logic pins"** (value not published).
+- SDIO pins: **"CLK, CMD, D0, D1, DAT2, D3"** with **"Pull ups are
+  provided on all SDIO logic pins"**.
+- Card detect: **"DET — Detect whether a microSD card is inserted"**,
+  with **"a 4.7 kΩ resistor"** as the pull-up. Open when no card,
+  pulled low (or vice-versa per the breakout's design — to be confirmed
+  on a bench unit before firmware wires it).
+- Dimensions: **25.4 mm × 22.8 mm × 3.5 mm**, 2.5 g.
+
+**Why it's a fit:**
+
+- No level shifter, no LDO → fewer parts in the SD signal chain, no
+  thermal margin to budget, no extra dropout on the 3V3 rail.
+- Onboard pull-ups on every SPI logic line → robust default state on
+  CLK/SO/SI/CS even before firmware drives them.
+- DET pin → firmware can finally distinguish "no card inserted" from
+  "card present but mount failed", which the AZDelivery module can't
+  report at all.
+- SDIO-capable footprint → future-proof if the project ever moves off
+  RP2040 (no native SDIO) to RP2350 (PIO-SDIO viable) or another MCU.
+
+### correction · the prior 2026-05-24 entry described the Adafruit module as having a 74LVC125 level shifter — that's the Adafruit 254, not the 4682
+
+[The earlier entry today on the SD-CS pull-up](#2026-05-24--sd-cs-pull-up-correction)
+described the Adafruit Micro SD breakout as having "10 kΩ pull-ups on
+the **card** side of its 74LVC125 level shifter." That description
+applies to the **Adafruit 254** (the older SPI-only board with a
+74LVC125 buffer), not to the **Adafruit 4682** chosen for this revision.
+Per the 4682 product page: "does not have level shifters." The
+"card side" / "Pico side" distinction therefore doesn't apply — both
+ends of every signal pin on the 4682 are the same electrical node.
+The Adafruit pinouts page also doesn't publish a value for the SPI
+pull-ups; the **10 kΩ** value in the prior entry was assumed, not
+confirmed.
+
+Historical chat-log entries stay as written per
+[documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md);
+this entry supersedes the prior description. The CS pull-up *decision*
+still stands — see next sub-section.
+
+### decision · keep the external 10 kΩ Pico-side CS pull-up — reasoning updated
+
+The prior reasoning ("onboard pull-up is on the wrong side of a level
+shifter") was wrong for the 4682. The corrected reasoning still
+justifies the external resistor:
+
+- The 4682's onboard SPI pull-ups exist but the value and exact node
+  location relative to any series components are not published. Treat
+  them as "present, unspecified."
+- A defined CS state during MCU power-on-reset is needed because the
+  SD card samples CS during its own internal reset to choose SPI vs
+  SDIO mode. A floating CS can lock the card into SDIO mode, after
+  which the SPI init in [lib/sdcard.py](../../lib/sdcard.py) refuses
+  to mount — the classic "first boot fails, second boot works" SD
+  failure mode.
+- One **10 kΩ 0603 from GP13 to 3V3** guarantees a defined Pico-side
+  CS during MCU reset regardless of the breakout's topology. In
+  parallel with whatever onboard pull-up exists, the combined value
+  stays well within the SD spec for CS pull-up (≤ 50 kΩ). One
+  resistor, ~$0.01 BOM, eliminates an entire class of intermittent
+  boot failures.
+
+No external pull-ups on MOSI / MISO / SCK. R8 = 33 Ω MISO damper and
+R10 = 33 Ω MOSI damper stay per the
+[2026-05-23 EasyEDA review](#2026-05-23--easyeda-files-design-review)
+and the [R8 next-rev entry](../hardware/next-revision.md).
+
+### decision · SD module supply moves from 5 V (via onboard LDO) to 3V3 directly
+
+AZDelivery generic module accepts 5 V Vcc and drops it through an
+onboard AMS1117-3.3 LDO. 4682 has no regulator and requires 3.3 V
+directly. PCB change: the SD module power net switches from `5V` to
+`3V3`. Net consequences:
+
+- **Pico 3V3 reg current budget tightens.** RP2040 internal 3V3
+  regulator (RT6150 buck-boost) is rated 800 mA continuous, shared
+  across the Pico itself, SHT31, DS3231, SSD1306 ×2, MCP4725, future
+  PCA9685, and now SD. SD active write draws ~50–100 mA average with
+  inrush peaks to ~200 mA. Margin is still comfortable but the
+  budget should be re-checked once PCA9685 + SDIO future-work are
+  on the bus.
+- **Bulk decoupling moves locality.** The
+  [VSYS 1000 µF entry](../hardware/next-revision.md) was sized to
+  absorb SD inrush on the **5 V** side of the AMS1117. With SD on
+  3V3, that cap still helps the upstream 5 V rail but doesn't
+  decouple SD inrush from the 3V3 node where it now lives. Add a
+  **100 µF + 100 nF** decoupling pair right at the 4682's 3V pad.
+  Cheap, near-the-load placement, doesn't bloat the BOM.
+- **Free silicon on the BOM.** No more AMS1117 dissipating
+  ~(5 V − 3.3 V) × 100 mA = 170 mW in the SD module's plastic body.
+  No more 74HC125 level shifter (the AZDelivery has one). Both are
+  failure modes that just leave the design.
+
+### decision · wire DET (card detect) to a free Pico GPIO
+
+The 4682 exposes a DET pin that's electrically isolated from the
+SPI signals and pulled up via 4.7 kΩ. This is new capability vs.
+the AZDelivery, which has no card-detect.
+
+- **Wire DET to a free GPIO** (candidates: GP14, GP15, GP16 — all
+  currently unassigned per [config.py:55-98](../../config.py#L55-L98)).
+  Leaning toward **GP15** because it's adjacent to the existing SPI
+  block (GP10–GP13), keeping the SD signal cluster compact in
+  layout.
+- **Firmware-readable card presence** lets
+  [HardwareFactory](../../lib/hardware_factory.py) and the
+  [SD recovery loop](../../main.py) distinguish "no card inserted"
+  (operator pulled the SD card → fall back gracefully, don't waste
+  retry budget) from "card present but mount failed" (genuine bus
+  / filesystem fault → escalate to the SD-problem LED).
+- Treat as a **revision-scoped enhancement, not a blocker.** The
+  module swap works without wiring DET; the GPIO line and firmware
+  change are an optional follow-up.
+
+### note · firmware and config implications
+
+- **SPI pin assignments unchanged.** GP10/11/12/13 stay as
+  SCK/MOSI/MISO/CS per [config.py:108-115](../../config.py#L108-L115).
+  The 4682's CS pin maps 1:1 to the AZDelivery module's CS pin from
+  the firmware perspective.
+- **Timing constants likely unchanged.** Without the AMS1117 LDO
+  ramp and 74HC125 buffer init, the 4682's cold-start envelope
+  should be *at least as fast* as the current module. Current
+  values:
+  - `sd_power_up_ms = 1500` (cold stabilization delay)
+  - `sd_mount_retries = 3`
+  - `sd_retry_delay_ms = 1000`
+  - `spi.baudrate = 10_000_000` (capped from 40 MHz post-2026-05-16
+    R8 incident; the swap doesn't unblock raising this — that
+    would need a separate bench validation pass)
+
+  Leave all four as-is until a 4682 is on the bench and cold-mount
+  timing is measured. Don't pre-tune speculatively.
+- **`sdcard.py` driver is unchanged.** Standard SPI-mode SD protocol
+  is identical between the two breakouts.
+- **If DET is wired:** new `DEVICE_CONFIG["pins"]["sd_detect"]` entry,
+  matching `validate_config()` row, and a `tests/test_config.py`
+  row per
+  [configurability.md](../../.claude/rules/ecc/common/configurability.md).
+  Wired into `HardwareFactory` to short-circuit the mount-retry loop
+  when the card is physically absent.
+
+### note · current PCB stays on the AZDelivery module until the next fab run
+
+Don't yank the existing module — the SPI signal contract is the same
+(GP10/11/12/13), and the only field change available right now is
+the [interim XL4015 setpoint](#2026-05-19--external-5-v-supply-starves-vsys--1n4002-drop-traced)
+which is unrelated. The 4682 lands when the next PCB lands, which
+already needs the Schottky swap and the rest of the queued changes.
+
 ## 2026-05-24 · SD-CS pull-up correction
 
 ### decision · add 10 kΩ from SD-CS (GP13) to 3V3 on the next PCB

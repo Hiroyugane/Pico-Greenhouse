@@ -62,7 +62,21 @@
   of any current next-rev entry; potentially useful for signal-line
   protection on the RJ12 ports.
 
-## Power — fuses, holders, connectors, heating
+## Power — supplies, fuses, holders, connectors, heating
+
+### External power supplies
+
+- **Dell 180 W AC adapter** (model "DWSG3" — label string approximate,
+  re-verify on next physical inspection) — **1 pc**. Feeds the 19.5 V
+  input rail (the heater path via D5 / F1 / HE_MOSFET).
+  - **Input:** 100–240 V~, 50–60 Hz, 2.5 A
+  - **Output:** 19.5 V DC, 9.23 A (180 W)
+  - Drives the **19.5 V rail** referenced throughout
+    [next-revision.md](next-revision.md); the 9.23 A nameplate is the
+    upper-bound figure used to size MBRD1045 (10 A / 45 V) headroom
+    on D6 and to sanity-check the 6.8 A parallel-heater steady-state.
+  - 5 V and 12 V input rails come from separate bricks (not yet
+    catalogued here — add when re-verified on the bench).
 
 ### Fuses (one-shot)
 

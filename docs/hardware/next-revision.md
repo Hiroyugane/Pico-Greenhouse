@@ -172,8 +172,7 @@ SOIC-8 to DIP-8 socket to use the LM358N already in stock) ·
     in parallel with 100 nF ceramic
   - **12 V near D4:** 220 µF / 25 V low-ESR electrolytic in parallel
     with 100 nF ceramic
-  - **5 V VSYS (already queued):** 1000 µF / 6.3 V in parallel with
-    100 nF ceramic
+  - 5 V VSYS owned by the dedicated entry above (1000 µF / 16 V).
 - **Why both electrolytic AND ceramic at each spot:** electrolytics
   have low impedance at low frequencies (handles amps of sag during
   inrush) but ESR/ESL rise sharply above ~100 kHz. The 100 nF ceramic

@@ -5,6 +5,66 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-24 · parts-on-hand inventory + shopping list against next-revision
+
+### note · inventory.md catalogues current storage and surfaces what to order
+
+Operator dumped the storage list (AliExpress + Amazon orders) and asked
+for a sorted inventory cross-referenced against
+[next-revision.md](../hardware/next-revision.md). Result:
+[docs/hardware/inventory.md](../hardware/inventory.md) — by-function
+parts list with a shopping-list comparison section at the bottom.
+
+### issue · LM358N on hand is DIP-8, not the SOIC-8 needed for the fab
+
+Order from 2026-04-10 was **LM358N DIP-8**, but the
+[next-revision: MCP6002 → LM358 retune](../hardware/next-revision.md)
+calls for **LM358DR** in SOIC-8 (the MCP6002 footprint the board
+already has). DIP part is useable on protoboards via the DIP socket
+kit, but the fab still needs SOIC-8. Added to the order list.
+
+### issue · 100 pcs fuse kit is F-rated (fast-blow), F1 needs T (slow-blow)
+
+The 5×20 mm fuse assortment on hand is **F (fast-blow)** including the
+10 A value, but
+[next-revision: F1 fuse — 10 A 5×20 mm slow-blow](../hardware/next-revision.md)
+requires **T-rated** to ride out the bulk-cap inrush without nuisance
+trips. Order Littelfuse 0234010.MXP (or equivalent 10 A T) separately.
+
+### note · XT60PW-F is the correct board-edge variant of XT60
+
+Order from 2026-04-15 explicitly bought **XT60PW-F** (the panel /
+PCB-mount female with the right-angle prongs), not just bullet XT60.
+That's the variant needed for the
+[next-revision: XT60 across all three rails](../hardware/next-revision.md)
+entry — five units, one per rail with two spares. Worth recording so
+future sessions don't re-order regular XT60 thinking the board-mount
+variant is missing.
+
+### issue · 1N5822 (DO-27, 3 A) is not a substitute for MBRD1045 on the fab
+
+Order from 2026-04-15 bought 20× **1N5822** axial Schottky (3 A / 40 V),
+which is **under-rated and wrong package** for the MBRD1045 (D-PAK,
+10 A / 45 V) spec on D1–D4 and D6. Useable on protoboards for
+sub-3 A bench rigs only; the fabricated board still needs MBRD1045.
+
+### issue · soil-moisture sensor refund leaves 10 pcs "as-is" stock
+
+Order from 2026-02-15 for 10× capacitive soil-moisture sensors was
+refunded by the seller without return ("as our high-loyalty
+customer"). Sensors are physically on hand and useable for the
+[next-revision: ADC / soil-moisture interface](../hardware/next-revision.md)
+stage; no need to re-order. Recorded so the cost basis is clear if
+the original invoice is audited later.
+
+### issue · two AliExpress orders have item descriptions missing
+
+Order **3068920990267331** (MINGYUE TRADING, 9.83 €) and order
+**3068920990337331** (HUI JI, 4.92 €), both from 2026-02-15, show
+totals but no item description on the order page. Re-read the
+product pages from order history to catalogue what's actually in
+those boxes before the next inventory pass.
+
 ## 2026-05-23 · EasyEDA files design review
 
 ### note · critical review of current schematic against next-revision queue

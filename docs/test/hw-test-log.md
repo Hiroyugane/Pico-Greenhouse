@@ -70,6 +70,74 @@ for the full rationale per item.
 - [ ] Sweep continuously and confirm output is **monotonic** with no
   steps, plateaus, or oscillation.
 
+### SD module swap — AZDelivery → Adafruit 4682
+
+> Filed 2026-05-24. See
+> [chat-log: module switch](../notes/chat-log.md#2026-05-24--sd-card-module-switch--azdelivery--adafruit-4682)
+> and
+> [next-revision: SD card module → Adafruit 4682](../hardware/next-revision.md).
+> Pre-flight: 4682 populated on the new PCB, freshly-formatted FAT32
+> microSD card on hand (8 GB or 32 GB), spare card for hot-swap test.
+
+- [ ] Confirm the SD module silkscreen footprint is the **Adafruit
+  4682** pinout: `3V, GND, CLK, SO, SI, CS, DET` on the SPI-side
+  header row. DAT2 and D1/D3 pads exposed on the SDIO side (unused
+  in firmware).
+- [ ] Confirm the SD module power pin connects to the **3V3** net,
+  **not** 5 V. Probe pin labelled `3V` on the breakout with no card
+  inserted: expect 3.30 ± 0.10 V referenced to GND.
+- [ ] Confirm the **100 µF electrolytic + 100 nF ceramic** decoupling
+  pair is populated immediately adjacent to the 4682's `3V` pad,
+  with leads < 5 mm if through-hole electrolytic, ideally surface-mount.
+- [ ] Confirm the external **10 kΩ 0603 from GP13 to 3V3** is
+  populated. With no SD card inserted and the Pico in reset (RUN
+  held low), measure GP13 with the breakout still powered: expect
+  ~3.3 V (pull-up active).
+- [ ] **Cold-boot mount test, single attempt.** Power the board from
+  cold (no USB held), with a known-good FAT32 card pre-inserted.
+  Expected: SD mounts on the first attempt of the boot loop
+  (`sd_mount_retries = 3`; ideally completes on retry 1). Repeat
+  10× to catch the "first boot fails, second boot works" SDIO-lock
+  failure mode the CS pull-up is meant to eliminate. Tolerance: 10
+  / 10 first-attempt mounts.
+- [ ] **Cold-boot with no card.** Power the board from cold with the
+  SD slot empty. With `system.require_sd_startup = True`, expected
+  behaviour is the boot path lights `sd_led + error_led` and resets
+  after `sd_fail_reset_s = 10` s. Watch the boot log via USB MSC
+  after the auto-reset.
+- [ ] **Hot-swap recovery, card pulled.** With the system running
+  and logging steady-state, pull the SD card. Expected: writes
+  fall through to `/local/fallback.csv` (per
+  [BufferManager](../../lib/buffer_manager.py)), no crash, no
+  watchdog reset. Wait 60 s.
+- [ ] **Hot-swap recovery, card re-inserted.** Re-insert the same
+  card. Expected: within `sd_recovery_interval_s = 10` s the SD
+  recovery loop re-mounts the card, then migrates the fallback
+  rows back to `/sd/sensors/...` (per
+  [WriteQueueManager](../../lib/write_queue_manager.py)).
+- [ ] **Write throughput sanity check.** Run a 10-minute logging
+  session at the default `temp_humidity_logger.interval_s = 30`.
+  After 10 minutes, expect ~20 rows in the day's CSV file, no
+  rows missing or corrupted, no `EventLogger` ERROR entries about
+  SD writes.
+- [ ] **3V3 rail headroom under SD inrush.** Scope the 3V3 rail at
+  the 4682's `3V` pad during a write burst (trigger by inducing a
+  rapid logging cadence or pulling a card mid-write). Expect rail
+  sag < 0.1 V during the inrush event. If sag > 0.2 V is observed,
+  the 100 µF decoupling cap is undersized for this layout — flag
+  for the next rev.
+- [ ] **DET pin readout (only if DET wired to GP15).** With no card
+  inserted, probe GP15: confirm a defined logic level (the 4682's
+  4.7 kΩ pull-up plus the DET switch state determines polarity —
+  record which state means "absent"). Insert card: confirm logic
+  level flips. Cross-check against the firmware's `sd_detect`
+  reading via the debug menu or the boot log.
+- [ ] **Compare against pre-swap baseline.** Confirm SD cold-mount
+  rate, hot-swap recovery, and write throughput are all **at least
+  as good** as the AZDelivery-equipped board (last benchmarked
+  during the 2026-05-16/18 incident triage). Any regression flags
+  a layout or topology issue, not a module issue.
+
 ### Senseair S8 — UART RX divider
 
 - [ ] Confirm R11 = 2.2 kΩ and new R_RX_DIV = 3.3 kΩ are installed.

@@ -5,6 +5,63 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-24 · next-revision.md restructured along EasyEDA workflow
+
+### decision · group queued hardware changes by workflow stage instead of one flat Electrical / PCB section
+
+[`docs/hardware/next-revision.md`](../hardware/next-revision.md) had
+grown to ~30 entries under one **Electrical / PCB** heading, mixed with
+**Mechanical / enclosure** and **Wiring / harness** at the bottom. The
+section split no longer matched how the file is actually consumed
+during a next-rev pass — schematic edits happen in EasyEDA's schematic
+editor, then layout / silkscreen / DRC happen in the PCB editor, then
+fab options are set at order time. Scrolling through one giant list to
+find "what changes do I make in the schematic editor right now?" took
+longer than it should.
+
+**New section order — follows the EasyEDA workflow:**
+
+1. **Schematic — nets, components, BOM** (component swaps, new parts,
+   deleted parts, value changes, netlist topology, design decisions).
+2. **PCB layout — footprints, routing, silkscreen, test points**
+   (footprint changes, copper pours, trace widths, DRC clearances,
+   silkscreen labels, test-point rows, board size).
+3. **PCB ordering — fabrication settings** (copper weight, stackup
+   options, anything set in the fab order form).
+4. **Mechanical / enclosure** (kept as its own section; currently
+   empty after the reshuffle but reserved for enclosure-only items).
+5. **Wiring / harness** (off-PCB cables and connectors).
+
+**Three sub-decisions during the restructure** (resolved via clarifying
+questions before the edit):
+
+- **Mixed-stage entries go under the primary stage** with the secondary
+  noted in the body — e.g. MCP6002 → LM358N stays under Schematic
+  because the component swap is the load-bearing change, with the
+  DIP-8 socket footprint mentioned in the body. Avoided splitting
+  every multi-stage entry into N pieces.
+- **The old "PCB stackup → 2 oz copper, trace width, clearance"
+  entry was split into two**: trace widths and DRC clearances went to
+  PCB layout; the 2 oz copper fab option went to PCB ordering. The
+  two new entries cross-link each other so the trace-width math
+  (which assumes 2 oz copper) stays traceable.
+- **Star-ground topology and TO-220 thermal management moved from
+  Mechanical / enclosure to PCB layout**, where they belong — both
+  are board-level routing / copper-pour changes, not enclosure work.
+  The Mechanical section is now empty with a placeholder note
+  explaining where its prior entries went.
+
+**Cross-reference cleanup:** updated two "above/below" textual
+references in the Heater channel count entry (which previously
+pointed at the stackup and thermal entries in their old positions) to
+point at their new section homes. Anchor-based markdown links are
+unchanged because every heading text was preserved verbatim.
+
+**Content preservation:** every existing bullet, body paragraph, link,
+and date stamp was kept. Only the section headings around the entries
+moved, plus the two-way split of the stackup entry. No queued change
+was dropped, added, or reworded substantively.
+
 ## 2026-05-24 · SD card module switch — AZDelivery → Adafruit 4682
 
 ### decision · next revision replaces the AZDelivery generic SD breakout with **Adafruit 4682** (3 V Micro SD SPI/SDIO Bypass Card)

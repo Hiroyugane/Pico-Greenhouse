@@ -244,6 +244,12 @@ GND-return diodes) ·
   Different package, ~10 mA peak current, no benefit upgrading.
   Three Schottky SKUs total on the board (MBR20100CT, MBRD1045,
   SS14).
+- **Post-fab cleanup:** revert the interim XL4015 buck setpoint from
+  6.0 V back to 5.0 V once the swap is verified per
+  [hw-test-log "VSYS rail validation"](../test/hw-test-log.md).
+  Footprint-constrained fallback parts if MBR20100CT / MBRD1045
+  cannot be sourced: SS14 (SMA, 1 A), 1N5817 (DO-41, 1 A), MBRS340
+  (SMA, 3 A) — V_f benefit holds in all cases.
 
 ### [ ] F1 fuse position — upstream of D5
 
@@ -506,7 +512,7 @@ Verbatim spec (Adafruit product + pinouts pages, 2026-05-24 fetch):
   lands.
 - **Add 100 µF electrolytic + 100 nF ceramic decoupling pair at the
   4682's `3V` pad**, leads as short as practical. The
-  [VSYS 1000 µF bulk cap](#--replace-1n4002-input-diodes-with-schottky--bulk-cap-at-vsys)
+  [VSYS 1000 µF bulk cap](#--5-v-vsys-bulk-cap-voltage-rating-upgrade)
   helps the 5 V rail upstream but no longer decouples SD inrush from
   the 3V3 node where it now lives.
 
@@ -612,30 +618,6 @@ Verbatim spec (Adafruit product + pinouts pages, 2026-05-24 fetch):
 [inventory.md → SD card storage](inventory.md) for the new line
 item (Adafruit 4682 to order; AZDelivery module not currently
 catalogued).
-
-### [ ] Replace 1N4002 input diodes with Schottky (+ bulk cap at VSYS)
-
-**Filed:** 2026-05-19 · updated 2026-05-22 ·
-[chat-log: root cause](../notes/chat-log.md#2026-05-19--external-5-v-supply-starves-vsys--1n4002-drop-traced) ·
-[chat-log: chosen part](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes) ·
-[memory: project-power-input-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_power_input_revision.md)
-
-- Chosen part: **MBR20100CT** (TO-220, 20 A / 100 V). Massive
-  headroom — uses an on-hand part, costs nothing in BOM at this rail.
-- Footprint-constrained alternatives if TO-220 doesn't fit: **SS14**
-  (SMA 1 A), **1N5817** (DO-41 1 A), **MBRS340** (3 A SMA). Forward
-  drop falls from ~0.8 V (1N4002) to ~0.3 V per diode in all cases.
-- **Resolved (2026-05-24):** the "second series diode" was actually
-  D2 on the GND return, not stacked in series with D1 on +5 V.
-  Decision: **drop D2** (and the matching D3 / D6 on the 12 V / 19.5 V
-  GND returns) — connector negatives tie directly to system GND, +rail
-  Schottky alone handles reverse-polarity. See the
-  [updated Schottky plan](#--schottky-plan--single-rail-diode-per-input-delete-d2--d3--d6-gnd-return-diodes).
-- Add **1000 µF low-ESR electrolytic + 100 nF ceramic** at Pico VSYS
-  pin 39, leads as short as practical, to absorb SD inrush.
-- After fab: re-verify per
-  [hw-test-log "VSYS rail validation"](../test/hw-test-log.md)
-  and revert the interim XL4015 setpoint from 6.0 V back to 5.0 V.
 
 ### [ ] Move fans from 2× relays to PCA9685 + IRLZ44N MOSFETs
 

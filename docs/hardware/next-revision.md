@@ -101,10 +101,10 @@
 - **Position:** upstream of D5 per "F1 fuse position" entry above.
   Sequence: `19V_IN → F1 → D5 → bulk cap → HE_MOSFET drain`.
 
-### [ ] MCP6002 op-amp → LM358N + footprint to DIP-8 socket + grow-light gain retune
+### [ ] MCP6002 op-amp → LM358N (DIP-8) + grow-light gain retune
 
-**Filed:** 2026-05-23 · updated 2026-05-24 (footprint changed from
-SOIC-8 to DIP-8 socket to use the LM358N already in stock) ·
+**Filed:** 2026-05-23 · updated 2026-05-24 (chose DIP-8 LM358N to use
+the part already in stock) ·
 [chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review) ·
 [chat-log: DIP-8 footprint decision](../notes/chat-log.md#2026-05-24--lm358-footprint-switch-to-dip-8-socket) ·
 [memory: project-grow-light-opamp-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_grow_light_opamp_revision.md)
@@ -113,23 +113,22 @@ SOIC-8 to DIP-8 socket to use the LM358N already in stock) ·
   MCP6002T-I/SN abs-max V_DD-V_SS = **7.0 V**; the schematic powers it
   from the **12 V rail** (pin 8 to 12 V net). Chip degrades silently
   and will fail; explains any flaky grow-light dim behaviour.
-- **PCB footprint change:** swap the SOIC-8 land pattern for a
-  **DIP-8 socket** footprint (2.54 mm pitch, 7.62 mm row spacing).
-  The DIP socket lets the chip be inserted (and swapped if it fails)
-  without rework. Costs ~3× the SOIC-8 board area but eliminates a
-  procurement step — see "use on-hand stock" below.
 - **Use the LM358N (DIP-8) already in stock** (10 pcs on hand per
   [inventory.md](inventory.md), order 3071191067167331). V_CC max
   32 V, pin-compatible with the dual op-amp layout the MCP6002 used.
   Not rail-to-rail at the top, which is a feature here: at 12 V
   supply the output swings to ~10.5 V max, a natural ceiling below
   the 10 V dim-spec damage threshold. **DIP-8 sockets are also
-  already in stock** (66-pc socket kit, order 3071191067207331).
+  already in stock** (66-pc socket kit, order 3071191067207331) so
+  the chip can be inserted and swapped without rework.
 - **Retune feedback divider** for clean 0–10 V output from the 0–3.3 V
   DAC: **R4 = 10 kΩ, R5 = 4.7 kΩ** → gain = 1 + 10/4.7 = 3.13 →
   V_out_max = 3.3 × 3.13 = **10.3 V**. Firmware clips to 10 V via
   `growlight.max_level_pct` (already 91 %, which equates to ~9.4 V at
   the new gain — well within spec).
+- PCB footprint change (SOIC-8 land pattern → DIP-8 socket) tracked
+  under "MCP6002 → LM358N — DIP-8 socket footprint" in the PCB
+  layout section.
 - Verify with [hw-test-log](../test/hw-test-log.md) post-fab: sweep
   DAC 0 → 0xFFF, measure GL_DIM+ output, confirm monotonic + clean
   ramp.
@@ -187,8 +186,8 @@ SOIC-8 to DIP-8 socket to use the LM358N already in stock) ·
   - **19.5 V input:** SMAJ24CA (working voltage 24 V, clamp ~39 V)
 - Bidirectional `CA` parts — protects against either polarity, useful
   on the Phoenix terminal block where reversed wiring is plausible.
-- **Placement:** just downstream of input connector and series
-  Schottky, before the bulk capacitor. ~$0.15 each.
+- **Position in input chain:** netlist order is `input connector →
+  series Schottky → TVS → bulk cap → load`. ~$0.15 each.
 
 ### [ ] Schottky plan — single +rail diode per input; **delete D2 / D3 / D6** (GND-return diodes)
 
@@ -220,8 +219,9 @@ GND-return diodes) ·
     headroom matches rail capacities (5 V/5 A, 12 V/9 A) with safety
     margin; large D-PAK tab assists thermal dissipation.
   - **D2, D3, D6 → deleted.** Connector negative pins tie **directly
-    to system GND** (copper trace, no diode). Saves three parts,
-    ~0.8 V of return-path drop per rail, three through-hole footprints.
+    to system GND** (no series diode in the return path). Saves
+    three parts, ~0.8 V of return-path drop per rail, and three
+    through-hole positions on the board.
 - **Reverse-polarity behaviour after the change:** plug a rail in
   backwards → +line Schottky reverse-biases → no current flows → fails
   safe. Identical protection to the old D+ + D− scheme.
@@ -406,13 +406,11 @@ GND-return diodes) ·
   electrically with the SD section — GP12 is SD-MISO. Moved to the
   [SD module entry](#--sd-card-module--adafruit-4682-3-v-micro-sd-spisdio-bypass).)
 
-### [ ] Relay connector cleanup — flip, pull-ups, GND fix, mains-only
+### [ ] Relay connector cleanup — pull-ups, GND fix, mains-rated header
 
 **Filed:** 2026-05-22 ·
 [chat-log entry](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes)
 
-- **Flip the relay connector orientation** — current orientation is
-  wrong for the harness.
 - Add a **10 kΩ pull-up on each relay IN line** to the relay module's
   VCC, so inputs sit at the inactive (HIGH) level during Pico boot
   and reset (active-low relays).
@@ -420,10 +418,13 @@ GND-return diodes) ·
   **Tie it to GND** so the connector pinout is meaningful.
 - After fans move to PCA9685 + IRLZ44N (see fan entry below), the
   remaining relays carry **only 230 V mains loads** (grow light,
-  heater). Update connector spec / spacing for mains creepage and
-  clearance.
+  heater). **Replace the current low-voltage header with a
+  mains-rated connector** (BOM swap).
+- Connector orientation flip and mains-rated trace spacing /
+  creepage clearance are tracked under "Relay connector — orientation
+  flip + mains-rated spacing" in the PCB layout section.
 
-### [ ] I²C / RJ12 connector layout — rename, add second outward bus
+### [ ] I²C / RJ12 connector — swap DHT21 port to RJ12 + add second outward bus
 
 **Filed:** 2026-05-22 ·
 [chat-log entry](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes)
@@ -488,14 +489,9 @@ Verbatim spec (Adafruit product + pinouts pages, 2026-05-24 fetch):
   pull-up resistor on board.
 - Dimensions: 25.4 × 22.8 × 3.5 mm, 2.5 g.
 
-**Footprint / connector change:**
-
-- Replace the current AZDelivery-shaped land pattern with a header
-  matching the 4682's pinout. Single-row, 7-pin in SPI mode (8 pins
-  if DAT2 is exposed for the SDIO upgrade path). Spacing per the
-  4682 mechanical drawing.
-- Mounting hole(s) per the 4682 mechanical drawing — confirm on the
-  bench part before committing layout.
+**Footprint / connector change:** tracked under "SD card module —
+Adafruit 4682 header footprint + mounting holes" in the PCB layout
+section.
 
 **Power rail change (current PCB → next rev):**
 
@@ -645,6 +641,20 @@ catalogued).
 
 ## PCB layout — footprints, routing, silkscreen, test points
 
+### [ ] MCP6002 → LM358N — DIP-8 socket footprint
+
+**Filed:** 2026-05-24 ·
+[chat-log: DIP-8 footprint decision](../notes/chat-log.md#2026-05-24--lm358-footprint-switch-to-dip-8-socket)
+
+- Swap the existing **SOIC-8 land pattern** (was for MCP6002T-I/SN)
+  for a **DIP-8 socket** footprint (2.54 mm pitch, 7.62 mm row
+  spacing) to accept the LM358N already in stock.
+- Footprint costs ~3× the SOIC-8 board area; check clearance against
+  surrounding components after replacement.
+- Component swap, rail correction, and gain retune are tracked under
+  "MCP6002 op-amp → LM358N (DIP-8) + grow-light gain retune" in the
+  Schematic section.
+
 ### [ ] Power trace widths and default clearance
 
 **Filed:** 2026-05-23 · split from earlier combined "PCB stackup" entry ·
@@ -747,6 +757,36 @@ catalogued).
   best-fitting footprint at design time.
 - Rename the footprint label to **`RPI-PICO-V1`** to align
   documentation with reality. No layout change; pinout identical.
+
+### [ ] SD card module — Adafruit 4682 header footprint + mounting holes
+
+**Filed:** 2026-05-22 · updated 2026-05-24 ·
+[chat-log: module switch](../notes/chat-log.md#2026-05-24--sd-card-module-switch--azdelivery--adafruit-4682)
+
+- Replace the current AZDelivery-shaped land pattern with a header
+  matching the **Adafruit 4682** pinout. Single-row, **7-pin in SPI
+  mode** (8 pins if DAT2 is exposed for the SDIO upgrade path).
+  Spacing per the 4682 mechanical drawing.
+- **Mounting hole(s)** per the 4682 mechanical drawing — confirm on
+  the bench part before committing layout.
+- Module choice, power-rail change, decoupling caps, MISO pull-up,
+  and DET pin wiring are tracked under "SD card module → Adafruit
+  4682" in the Schematic section.
+
+### [ ] Relay connector — orientation flip + mains-rated spacing
+
+**Filed:** 2026-05-22 ·
+[chat-log entry](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes)
+
+- **Flip the relay connector orientation** — current orientation is
+  wrong for the harness.
+- Once the connector is mains-only (per the Schematic-side spec
+  change), apply **mains-rated trace spacing and creepage clearance**
+  for the relay traces and pad-to-pad distances on the relay-side
+  copper.
+- Connector pin assignments (pull-ups, GND tie, mains-rated header
+  spec) are tracked under "Relay connector cleanup" in the Schematic
+  section.
 
 ### [ ] External power connectors and silkscreen polish
 

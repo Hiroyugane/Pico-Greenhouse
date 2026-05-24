@@ -5,14 +5,19 @@
 > the schematic editor. Per
 > [.claude/rules/ecc/common/hardware-revision-notes.md](../../.claude/rules/ecc/common/hardware-revision-notes.md).
 >
-> Newest item on top. Each item links to the `docs/notes/chat-log.md`
-> entry where the root cause / decision was captured, so the full
-> rationale is one click away.
+> Sections follow the EasyEDA workflow: **Schematic** (nets,
+> components, BOM) → **PCB layout** (footprints, routing,
+> silkscreen, test points) → **PCB ordering** (fabrication
+> settings) → **Mechanical / enclosure** → **Wiring / harness**.
+>
+> Newest item on top within each section. Each item links to the
+> `docs/notes/chat-log.md` entry where the root cause / decision
+> was captured, so the full rationale is one click away.
 >
 > Use `[ ]` queued, `[x]` shipped on the new revision, `[~]` deferred
 > with a reason in the entry body.
 
-## Electrical / PCB
+## Schematic — nets, components, BOM
 
 ### [x] MCP1416 gate driver for HE_MOSFET (IRLZ44N)
 
@@ -41,7 +46,8 @@
 - **PWM-readiness:** the MCP1416 also makes future heater PWM viable
   (see "Heater channel count" entry below) — direct-drive at 3.3 V
   through 100 Ω can't switch fast enough for audio-frequency PWM.
-- Comment after implementation:
+
+**Comment after implementation**: nc pin seems to ne not-connected? needs review
 
 ### [ ] Power input connectors → XT60 across all three rails
 
@@ -63,28 +69,6 @@
   overhang issue tracked under "External power connectors and
   silkscreen polish" — re-evaluate clearance for all three after
   layout.
-
-### [ ] PCB stackup → 2 oz copper, heater trace width + 0.15 mm spacing
-
-**Filed:** 2026-05-23 ·
-[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
-
-- **Fab order: 2 oz copper on both outer layers** (up from default
-  1 oz). Roughly doubles current-carrying capacity per mm of trace
-  width and improves the TO-220 thermal pour effectiveness. Cost
-  delta on JLCPCB / EasyEDA is small at production quantities.
-- **Heater current path (19.5 V rail, F1 → D5 → bulk cap → HE_MOSFET
-  drain → HE_CON):** **3 mm minimum trace width** on 2 oz copper
-  (handles 6.8 A parallel-heater case at <30 °C rise per IPC-2221).
-  Pour copper rather than narrow traces where possible.
-- **12 V buck output trace (D4 → 12 V rail):** **2.5 mm minimum** on
-  2 oz copper (handles 9 A buck capacity at <30 °C rise).
-- **Default clearance: 0.15 mm** (was 0.2 mm). Frees layout real
-  estate for the bulk caps + TVS + new gate driver footprints near
-  the input area. Safe for all sub-50 V nets on this board.
-- **Power traces keep 0.3 mm clearance** to the adjacent net for
-  fault-current robustness (one wider trace among the dense signal
-  net).
 
 ### [ ] 5 V VSYS bulk cap voltage rating upgrade
 
@@ -290,8 +274,10 @@ GND-return diodes) ·
   - D5 = MBR20100CT 20 A (Schottky entry above)
   - IRLZ44N with MCP1416 gate driver at 5 V V_GS → R_DS(on) ~0.022 Ω
     → ~1 W package dissipation, manageable with the TO-220 thermal
-    pour + clip-on heatsink (thermal entry below)
-  - 3 mm heater-path trace on 2 oz copper (stackup entry above)
+    pour + clip-on heatsink (TO-220 thermal entry in the PCB layout
+    section)
+  - 3 mm heater-path trace on 2 oz copper (see "Power trace widths"
+    in PCB layout and "PCB fab order — 2 oz copper" in PCB ordering)
   - 16 AWG harness from F1 to HE_CON
 - **Heater PWM is planned for a later firmware revision.** The
   MCP1416 gate driver (entry above) makes audio-frequency PWM
@@ -383,46 +369,6 @@ GND-return diodes) ·
   - 19.5 V rail: 8.2 kΩ (2.2 mA)
 - Different resistor values per rail are intentional — uniform
   current is more useful than a uniform BOM line at this scale.
-
-### [ ] Test-point row near input area
-
-**Filed:** 2026-05-23 ·
-[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
-
-- **Eight labelled THT pads** in a 2.54 mm-pitch row near the input
-  regulators: `3V3 / 5V / 12V / 19.5V / GND / GND / SDA / SCL`.
-- 1.5 mm round pads with via hole → accepts hook clips and a 6/8-pin
-  pogo-pin debug fixture later.
-- Silkscreen label next to each pad. Two GND pads (one near positive
-  rail group, one near signal group) saves probe reach.
-- Free during fab. Consider adding SWD pads (`SWCLK / SWDIO`) too if
-  layout allows, even though they're already on DEBUG_CON.
-
-### [ ] I²C address map on silkscreen
-
-**Filed:** 2026-05-23 ·
-[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review) ·
-[memory: project-i2c-bus-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_i2c_bus_revision.md)
-
-- Print the 7-bit hex address next to each I²C device's footprint:
-  - SHT31 → `(0x44)`
-  - DS3231 RTC → `(0x68)`
-  - MCP4725 DAC → `(0x60)`
-  - SSD1306 OLED → `(0x3C)`
-  - PCA9685 (future) → `(0x40)`
-- Also consolidate the full address list in a comment block at the
-  top of `config.py` so future agents can see conflicts at a glance.
-
-### [ ] Pico V1 footprint label correction
-
-**Filed:** 2026-05-23 ·
-[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
-
-- BOM row 37 lists footprint as `RPI-PICO-V2 COPY`. The board uses
-  the **original Pico (V1, RP2040)** — V2 was simply the
-  best-fitting footprint at design time.
-- Rename the footprint label to **`RPI-PICO-V1`** to align
-  documentation with reality. No layout change; pinout identical.
 
 ### [ ] R8 stays — fix the firmware comment, not the schematic
 
@@ -668,24 +614,6 @@ Verbatim spec (Adafruit product + pinouts pages, 2026-05-24 fetch):
 item (Adafruit 4682 to order; AZDelivery module not currently
 catalogued).
 
-### [ ] External power connectors and silkscreen polish
-
-**Filed:** 2026-05-22 ·
-[chat-log entry](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes)
-
-- **XT60 board-edge clearance:** the connector body overhangs / doesn't
-  seat because the board edge is too close. Move the XT60 inboard or
-  extend the board edge in that area. (Interacts with the board-size
-  shrink in the mechanical section — re-check after layout.)
-- **Banana plug connectors for 12 V and 19.5 V rails.** 5 V stays on the
-  current connector style (no banana plug — avoids extra probe surface
-  on a rail with little abs-max margin).
-- **Silkscreen polarity marks (+/-) on the 19.5 V terminals.**
-- **Rename silkscreen label "VCC" → "5V"** — ambiguous given the mix
-  of 3V3 / 5V / 12V / 19.5V rails on the board.
-- **Label voltage direction on the ambient fan switch** (and on the
-  new case fan switch) — which switch position selects which rail.
-
 ### [ ] Replace 1N4002 input diodes with Schottky (+ bulk cap at VSYS)
 
 **Filed:** 2026-05-19 · updated 2026-05-22 ·
@@ -736,7 +664,28 @@ catalogued).
 - Steps 1–4 of the suggested build order in the memory entry are
   firmware-side and can land before the PCB arrives.
 
-## Mechanical / enclosure
+## PCB layout — footprints, routing, silkscreen, test points
+
+### [ ] Power trace widths and default clearance
+
+**Filed:** 2026-05-23 · split from earlier combined "PCB stackup" entry ·
+[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
+
+- **Heater current path (19.5 V rail, F1 → D5 → bulk cap → HE_MOSFET
+  drain → HE_CON):** **3 mm minimum trace width** on 2 oz copper
+  (handles 6.8 A parallel-heater case at <30 °C rise per IPC-2221).
+  Pour copper rather than narrow traces where possible.
+- **12 V buck output trace (D4 → 12 V rail):** **2.5 mm minimum** on
+  2 oz copper (handles 9 A buck capacity at <30 °C rise).
+- **Default clearance: 0.15 mm** (was 0.2 mm). Frees layout real
+  estate for the bulk caps + TVS + new gate driver footprints near
+  the input area. Safe for all sub-50 V nets on this board.
+- **Power traces keep 0.3 mm clearance** to the adjacent net for
+  fault-current robustness (one wider trace among the dense signal
+  net).
+- All trace-width math above assumes the 2 oz copper outer layers
+  set in the [PCB fab order entry](#--pcb-fab-order--2-oz-copper-outer-layers)
+  under PCB ordering.
 
 ### [ ] Star-ground topology for heater current return
 
@@ -775,6 +724,64 @@ catalogued).
   (bare TO-220) to ~20–30 °C/W (pour + heatsink). At 2 W IRLZ44N
   dissipation that's 40–60 °C above ambient — safely in spec.
 
+### [ ] Test-point row near input area
+
+**Filed:** 2026-05-23 ·
+[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
+
+- **Eight labelled THT pads** in a 2.54 mm-pitch row near the input
+  regulators: `3V3 / 5V / 12V / 19.5V / GND / GND / SDA / SCL`.
+- 1.5 mm round pads with via hole → accepts hook clips and a 6/8-pin
+  pogo-pin debug fixture later.
+- Silkscreen label next to each pad. Two GND pads (one near positive
+  rail group, one near signal group) saves probe reach.
+- Free during fab. Consider adding SWD pads (`SWCLK / SWDIO`) too if
+  layout allows, even though they're already on DEBUG_CON.
+
+### [ ] I²C address map on silkscreen
+
+**Filed:** 2026-05-23 ·
+[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review) ·
+[memory: project-i2c-bus-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_i2c_bus_revision.md)
+
+- Print the 7-bit hex address next to each I²C device's footprint:
+  - SHT31 → `(0x44)`
+  - DS3231 RTC → `(0x68)`
+  - MCP4725 DAC → `(0x60)`
+  - SSD1306 OLED → `(0x3C)`
+  - PCA9685 (future) → `(0x40)`
+- Also consolidate the full address list in a comment block at the
+  top of `config.py` so future agents can see conflicts at a glance.
+
+### [ ] Pico V1 footprint label correction
+
+**Filed:** 2026-05-23 ·
+[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
+
+- BOM row 37 lists footprint as `RPI-PICO-V2 COPY`. The board uses
+  the **original Pico (V1, RP2040)** — V2 was simply the
+  best-fitting footprint at design time.
+- Rename the footprint label to **`RPI-PICO-V1`** to align
+  documentation with reality. No layout change; pinout identical.
+
+### [ ] External power connectors and silkscreen polish
+
+**Filed:** 2026-05-22 ·
+[chat-log entry](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes)
+
+- **XT60 board-edge clearance:** the connector body overhangs / doesn't
+  seat because the board edge is too close. Move the XT60 inboard or
+  extend the board edge in that area. (Interacts with the board-size
+  shrink below in this section — re-check after layout.)
+- **Banana plug connectors for 12 V and 19.5 V rails.** 5 V stays on the
+  current connector style (no banana plug — avoids extra probe surface
+  on a rail with little abs-max margin).
+- **Silkscreen polarity marks (+/-) on the 19.5 V terminals.**
+- **Rename silkscreen label "VCC" → "5V"** — ambiguous given the mix
+  of 3V3 / 5V / 12V / 19.5V rails on the board.
+- **Label voltage direction on the ambient fan switch** (and on the
+  new case fan switch) — which switch position selects which rail.
+
 ### [ ] Board size reduction, footprint clearances, enclosure simplification
 
 **Filed:** 2026-05-22 ·
@@ -784,13 +791,43 @@ catalogued).
   components warrant.
 - Reduce enclosure shell from a 4-wall structure to **only 2
   connecting walls** so the smaller PCB sits in a lighter housing.
+  (Enclosure-side change tracked here alongside the board shrink
+  that motivates it; see Mechanical / enclosure section if a
+  standalone enclosure entry is later split out.)
 - **Ambient fan switch mounting holes:** current hole spacing is
   wrong for the actual switch — re-measure and fix.
 - **External fan connector** is physically larger than the footprint
   it sits on — widen the footprint or move it.
 - The **XT60 board-edge clearance** issue is also tracked under
-  "External power connectors and silkscreen polish" in the
-  Electrical / PCB section.
+  "External power connectors and silkscreen polish" above in this
+  section.
+
+## PCB ordering — fabrication settings
+
+### [ ] PCB fab order — 2 oz copper outer layers
+
+**Filed:** 2026-05-23 · split from earlier combined "PCB stackup" entry ·
+[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
+
+- **Fab order: 2 oz copper on both outer layers** (up from default
+  1 oz). Roughly doubles current-carrying capacity per mm of trace
+  width and improves the TO-220 thermal pour effectiveness. Cost
+  delta on JLCPCB / EasyEDA is small at production quantities.
+- The trace-width and clearance design rules in the
+  [Power trace widths](#--power-trace-widths-and-default-clearance)
+  entry under PCB layout assume this 2 oz stackup — order them
+  together.
+
+## Mechanical / enclosure
+
+> No standalone entries currently queued. Star-ground topology and
+> TO-220 thermal management are board-level routing changes and
+> moved to **PCB layout**; the enclosure-shell simplification and
+> ambient-fan-switch mounting-hole fix ride along with the
+> [Board size reduction](#--board-size-reduction-footprint-clearances-enclosure-simplification)
+> entry under PCB layout since the board shrink motivates them.
+> Future enclosure-only items (lid, gland fittings, vent cutouts)
+> belong here.
 
 ## Wiring / harness
 

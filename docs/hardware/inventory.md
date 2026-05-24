@@ -11,10 +11,11 @@
 > worth re-ordering, or when new stock arrives.
 >
 > **Last reconciled:** 2026-05-24 against
-> [next-revision.md](next-revision.md) as of `da72af8`, with the two
-> previously-unidentified AliExpress orders catalogued and the LM358
-> next-rev path switched from SOIC-8 LM358DR to a DIP-8 socket + the
-> LM358N already in stock.
+> [next-revision.md](next-revision.md), now also covering the SD card
+> module swap (AZDelivery generic → Adafruit 4682 3 V bypass); earlier
+> the same day picked up the two previously-unidentified AliExpress
+> orders and the LM358 next-rev path switched from SOIC-8 LM358DR to a
+> DIP-8 socket + the LM358N already in stock.
 
 ## Active components — semiconductors
 
@@ -150,6 +151,22 @@
   [next-revision: ADC / soil-moisture interface](next-revision.md).
 - **SHT31** — **not in this inventory** (assumed already mounted on
   the bench unit).
+
+## SD card / storage
+
+- **AZDelivery generic "SPI Reader Micro Speicher SD TF Karte" module** —
+  **on the current PCB, not separately catalogued.** Accepts 5 V Vcc
+  via onboard AMS1117-3.3 LDO + (typically) a 74HC125 buffer. Stays on
+  the **current** revision; superseded on the next revision per
+  [next-revision: SD card module → Adafruit 4682](next-revision.md).
+  No separate spare stock recorded — the only known unit is the one
+  populated on the existing board.
+- **Adafruit 4682 "Micro SD SPI or SDIO Card Breakout — 3V ONLY!"** —
+  **0 pcs on hand, on the order list below.** 3 V bypass variant of
+  the older Adafruit 254 — no LDO regulator, no level shifter, onboard
+  pull-ups on every SPI logic line, dedicated DET (card-detect) pin
+  with 4.7 kΩ pull-up, 25.4 × 22.8 × 3.5 mm. Chosen part for
+  [next-revision: SD card module → Adafruit 4682](next-revision.md).
 
 ## I²C / serial / RJ12 connectors
 
@@ -299,7 +316,9 @@ as a purchase quotation.
 | 20 | **Dielectric grease** (small tube, RJ12 plug sealing) | 1 | 5.00 | 5.00 | [sensor cable moisture protection](next-revision.md) |
 | 21 | **Silicone-insulated hookup wire** (~20 AWG) | ~5 m total | 1.50/m | 7.50 | [sensor cable moisture protection](next-revision.md) |
 | 22 | **Desiccant sachets** (1 g) | 5 (one per sensor breakout enclosure) | 0.50 | 2.50 | [sensor cable moisture protection](next-revision.md) |
-| | **Grand total (estimate)** | | | **~€ 45.30** | |
+| 23 | **Adafruit 4682** (Micro SD SPI/SDIO 3V breakout) | 2 (1 + 1 spare) | 4.50 | 9.00 | [SD card module → Adafruit 4682](next-revision.md) |
+| 24 | **100 µF / 10 V** low-ESR electrolytic (SD 3V3 decoupling at 4682 pad) | 5 (1 + 4 spare) | 0.10 | 0.50 | [SD card module → Adafruit 4682](next-revision.md) |
+| | **Grand total (estimate)** | | | **~€ 54.80** | |
 
 ### Substitute on hand, not fab-ready
 
@@ -332,6 +351,8 @@ as a purchase quotation.
 | Enclosure-side AC mains entry | IEC320 C14 inlet (switch + LED + 10 A fuse) × 5 |
 | 3D-printed enclosure threading | M3 brass hot-melt insert × 30 |
 | PCB-to-enclosure mounting | M3 hex M/F standoff × 30 |
+| SD-CS pull-up (10 kΩ to 3V3 on GP13) | 10 kΩ × 30+ (WayinTop + ELEGOO) |
+| SD 3V3 decoupling — ceramic (100 nF) | ceramic 100 nF (104) × 10 |
 
 ---
 

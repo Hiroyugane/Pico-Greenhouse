@@ -120,20 +120,30 @@
 - **Position:** upstream of D5 per "F1 fuse position" entry above.
   Sequence: `19V_IN → F1 → D5 → bulk cap → HE_MOSFET drain`.
 
-### [ ] MCP6002 op-amp → LM358 + grow-light gain retune
+### [ ] MCP6002 op-amp → LM358N + footprint to DIP-8 socket + grow-light gain retune
 
-**Filed:** 2026-05-23 ·
+**Filed:** 2026-05-23 · updated 2026-05-24 (footprint changed from
+SOIC-8 to DIP-8 socket to use the LM358N already in stock) ·
 [chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review) ·
+[chat-log: DIP-8 footprint decision](../notes/chat-log.md#2026-05-24--lm358-footprint-switch-to-dip-8-socket) ·
 [memory: project-grow-light-opamp-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_grow_light_opamp_revision.md)
 
 - **Critical — current part is operating above absolute maximum.**
   MCP6002T-I/SN abs-max V_DD-V_SS = **7.0 V**; the schematic powers it
   from the **12 V rail** (pin 8 to 12 V net). Chip degrades silently
   and will fail; explains any flaky grow-light dim behaviour.
-- Replace with **LM358DR** (SOIC-8, pin-compatible, V_CC max 32 V).
-  Not rail-to-rail at the top, but that turns out to be useful — at
-  12 V supply the output swings to ~10.5 V max, a natural ceiling
-  below the 10 V dim-spec damage threshold.
+- **PCB footprint change:** swap the SOIC-8 land pattern for a
+  **DIP-8 socket** footprint (2.54 mm pitch, 7.62 mm row spacing).
+  The DIP socket lets the chip be inserted (and swapped if it fails)
+  without rework. Costs ~3× the SOIC-8 board area but eliminates a
+  procurement step — see "use on-hand stock" below.
+- **Use the LM358N (DIP-8) already in stock** (10 pcs on hand per
+  [inventory.md](inventory.md), order 3071191067167331). V_CC max
+  32 V, pin-compatible with the dual op-amp layout the MCP6002 used.
+  Not rail-to-rail at the top, which is a feature here: at 12 V
+  supply the output swings to ~10.5 V max, a natural ceiling below
+  the 10 V dim-spec damage threshold. **DIP-8 sockets are also
+  already in stock** (66-pc socket kit, order 3071191067207331).
 - **Retune feedback divider** for clean 0–10 V output from the 0–3.3 V
   DAC: **R4 = 10 kΩ, R5 = 4.7 kΩ** → gain = 1 + 10/4.7 = 3.13 →
   V_out_max = 3.3 × 3.13 = **10.3 V**. Firmware clips to 10 V via
@@ -488,14 +498,23 @@
 
 ### [ ] SD card module → Adafruit Micro SD breakout footprint
 
-**Filed:** 2026-05-22 ·
+**Filed:** 2026-05-22 (CS pull-up added 2026-05-24) ·
 [chat-log entry](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes)
 
 - Change the SD connector footprint to match the **Adafruit Micro SD
   breakout** — more reliable on hot-swap than the current module.
-- **[~] Deferred — pending bench verification:** remove the 10 kΩ
-  resistor currently on the SD card line. Keep in place by default;
-  only drop after the Adafruit module proves it isn't needed.
+- **Add 10 kΩ pull-up from SD-CS (GP13) to 3V3.** Not on the current
+  PCB. Reason: GP13 is Hi-Z at power-up until firmware drives it; the
+  SD card samples CS during its own reset to choose between SDIO mode
+  (CS low → SDIO) and SPI mode (CS high → SPI). A floating CS can lock
+  the card into SDIO mode, after which the SPI init in `lib/sdcard.py`
+  refuses to mount. The Adafruit module's onboard 10 kΩ pull-ups are
+  on the **card** side of its 74LVC125 level shifter — they don't clamp
+  the Pico-side CS during MCU reset. One 0603 resistor; cheap insurance
+  against the "first boot fails, second boot works" failure mode.
+- **No external pull-ups on MOSI / MISO / SCK.** R8 (33 Ω MISO damper)
+  and R10 (33 Ω MOSI damper) stay per the
+  [R8 entry](#--r8-stays--fix-the-firmware-comment-not-the-schematic).
 
 ### [ ] External power connectors and silkscreen polish
 

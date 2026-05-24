@@ -5,6 +5,58 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-24 · SD-CS pull-up correction
+
+### decision · add 10 kΩ from SD-CS (GP13) to 3V3 on the next PCB
+
+The 2026-05-22 next-revision entry was filed as "remove the 10 kΩ
+resistor currently on the SD card line." Operator correction today:
+the resistor isn't on the current PCB — the 2026-05-22 note was a
+candidate **addition**, not a removal. Reframed the entry to add the
+pull-up if electrically justified.
+
+**Electrically justified.** SD cards sample CS during their own
+internal reset to pick SDIO mode (CS low) vs SPI mode (CS high). Pico
+GP13 is Hi-Z at power-up until `HardwareFactory` drives it; a floating
+CS can lock the card into SDIO mode, after which the SPI init in
+`lib/sdcard.py` never gets a coherent response and the mount fails.
+This is a classic "first boot fails, second boot works" SD-on-Pico
+failure mode. The Adafruit Micro SD breakout has 10 kΩ pull-ups on the
+**card** side of its 74LVC125 level shifter, but those don't clamp the
+**Pico** side of CS during MCU reset.
+
+Decision: add one 10 kΩ 0603 from GP13 to 3V3. No external pull-ups on
+MOSI/MISO/SCK — R8 and R10 (33 Ω dampers) handle those per the
+2026-05-23 EasyEDA review.
+
+## 2026-05-24 · LM358 footprint switch to DIP-8 socket
+
+### decision · use LM358N in stock via a DIP-8 socket footprint, drop the LM358DR SOIC-8 plan
+
+The 2026-05-23 next-revision entry called for **LM358DR (SOIC-8)** as
+a pin-compatible drop-in for the MCP6002 — i.e. keep the SOIC-8
+footprint and order new SOIC parts. Today's operator preference:
+**keep the LM358N (DIP-8) already in stock** (10 pcs from order
+3071191067167331) and instead **change the next-rev footprint** from
+SOIC-8 to a DIP-8 socket land pattern. DIP-8 sockets are already on
+hand from the 66-pc socket kit (order 3071191067207331).
+
+Trade-offs:
+
+- **Pro:** zero procurement step for the op-amp; the chip can be
+  swapped without rework if it ever fails; through-hole DIP is
+  hand-solderable for bring-up boards too.
+- **Con:** DIP-8 occupies ~3× the SOIC-8 board area (~10 × 10 mm vs.
+  ~5 × 4 mm). Layout pass on the next rev re-checks the op-amp
+  footprint clearance against the adjacent GL_DIM connector and the
+  12 V rail trace.
+
+Gain divider (R4 = 10 kΩ, R5 = 4.7 kΩ) and the 10.3 V max output
+calculation are unchanged — both resistor values are in the WayinTop
+600-pc kit, so no new resistor order either. The next-rev entry,
+inventory shopping list, and `project-grow-light-opamp-revision`
+memory were all updated in the same session to reflect the new path.
+
 ## 2026-05-24 · 19V power supply spec correction (Dell 180W brick)
 
 ### spec · actual brick is Dell 180W, 19.5V / 9.23A, not generic 19V
@@ -68,13 +120,15 @@ for a sorted inventory cross-referenced against
 [docs/hardware/inventory.md](../hardware/inventory.md) — by-function
 parts list with a shopping-list comparison section at the bottom.
 
-### issue · LM358N on hand is DIP-8, not the SOIC-8 needed for the fab
+### issue · LM358N on hand is DIP-8, not the SOIC-8 originally specced for the fab — *resolved by footprint switch*
 
-Order from 2026-04-10 was **LM358N DIP-8**, but the
-[next-revision: MCP6002 → LM358 retune](../hardware/next-revision.md)
-calls for **LM358DR** in SOIC-8 (the MCP6002 footprint the board
-already has). DIP part is useable on protoboards via the DIP socket
-kit, but the fab still needs SOIC-8. Added to the order list.
+Order from 2026-04-10 was **LM358N DIP-8**, but the original
+2026-05-23 next-revision entry called for **LM358DR (SOIC-8)** as a
+pin-compatible drop-in for the MCP6002. Initial conclusion: the
+DIP part is only useable on protoboards and the fab still needs
+SOIC-8. **Superseded** later the same day by the "LM358 footprint
+switch to DIP-8 socket" decision above — the fab now uses a DIP-8
+socket footprint and the on-hand LM358N is the chosen part.
 
 ### issue · 100 pcs fuse kit is F-rated (fast-blow), F1 needs T (slow-blow)
 
@@ -110,13 +164,25 @@ customer"). Sensors are physically on hand and useable for the
 stage; no need to re-order. Recorded so the cost basis is clear if
 the original invoice is audited later.
 
-### issue · two AliExpress orders have item descriptions missing
+### note · two previously-undocumented AliExpress orders identified
 
-Order **3068920990267331** (MINGYUE TRADING, 9.83 €) and order
-**3068920990337331** (HUI JI, 4.92 €), both from 2026-02-15, show
-totals but no item description on the order page. Re-read the
-product pages from order history to catalogue what's actually in
-those boxes before the next inventory pass.
+Two 2026-02-15 orders showed totals only on the order list page.
+Operator re-read the product pages to identify them, and the
+contents are now catalogued in [inventory.md](../hardware/inventory.md):
+
+- **3068920990267331** (MINGYUE TRADING, 9.83 €) — 5× **IEC320 C14
+  panel inlet** with rocker switch + LED + 10 A fuse holder
+  ("AC-08A"), plus 2× packs of 10× 5×20 mm 10 A glass fuses (for
+  the inlet, not for F1 on the PCB). System-level AC mains entry
+  for the enclosure; not currently a queue item on next-revision.
+- **3068920990097331** (HUI JI, 4.92 €) — 30× M3 brass hot-melt
+  inserts (6 mm length, OD 4.5 mm, for threading the 3D-printed
+  enclosure) + 30× M3 hex brass M / F standoffs (6 mm thread + 6 mm
+  body, for PCB-to-enclosure mounting).
+
+Earlier draft of this note had the HUI JI order number as
+**3068920990337331** — that's actually the **VEML7700** light
+sensor order. Corrected in the inventory source-trail.
 
 ## 2026-05-23 · EasyEDA files design review
 

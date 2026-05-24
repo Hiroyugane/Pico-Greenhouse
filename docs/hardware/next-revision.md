@@ -589,6 +589,38 @@ Verbatim spec (Adafruit product + pinouts pages, 2026-05-24 fetch):
 - DET polarity (open = no card vs. inserted = pulled low, or
   vice-versa) confirmed on a bench unit before firmware wiring.
   Mechanical detect schemes differ between socket vendors.
+- **Hot-swap recovery code must be refactored once DET is live.**
+  The current loop at
+  [main.py:942-981](../../main.py#L942-L981) polls
+  `refresh_sd()` (block-level `readblocks` over SPI) every
+  health-check interval whenever `is_primary_available()` is false
+  *or* `buffered > 0`. That's the only mechanism available today —
+  the AZDelivery module can't report card presence at all, so the
+  firmware has to probe the bus to find out. Once GP15 reads DET,
+  the loop should:
+  1. Skip `refresh_sd()` entirely when DET reads "no card" — save
+     the SPI traffic, the CPU cycles, and the misleading
+     `logger.warning("SD card not accessible, retrying soon")`
+     entries that today fire even when the operator has
+     deliberately pulled the card.
+  2. Trigger an immediate remount attempt on the DET edge from
+     "absent → present" instead of waiting up to
+     `sd_recovery_interval_s = 10 s` for the next health-check tick.
+  3. Surface three distinct states to `StatusManager` —
+     `no_card_inserted` (DET says absent), `mounted` (DET says
+     present + `is_primary_available() == True`), and
+     `mount_failed` (DET says present + mount failed) — instead of
+     today's binary `sd_status` flag. The `sd_problem_led`
+     behaviour and the boot-time `require_sd_startup` reset path
+     should both branch on the new states so a missing card lights
+     a different indicator than a bus fault.
+
+  Treat this as a firmware-only follow-up that lands **after** the
+  new PCB lands and DET polarity is confirmed on the bench — not
+  part of the hardware change itself. The refactor ships as its
+  own commit per
+  [commit-granularity.md](../../../.claude/rules/ecc/common/commit-granularity.md),
+  separate from the `sd_detect` config + factory wiring commits.
 
 **Firmware / config implications (next-rev firmware sweep):**
 

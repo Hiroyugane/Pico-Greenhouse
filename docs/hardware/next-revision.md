@@ -772,9 +772,6 @@ catalogued).
   seat because the board edge is too close. Move the XT60 inboard or
   extend the board edge in that area. (Interacts with the board-size
   shrink below in this section — re-check after layout.)
-- **Banana plug connectors for 12 V and 19.5 V rails.** 5 V stays on the
-  current connector style (no banana plug — avoids extra probe surface
-  on a rail with little abs-max margin).
 - **Silkscreen polarity marks (+/-) on the 19.5 V terminals.**
 - **Rename silkscreen label "VCC" → "5V"** — ambiguous given the mix
   of 3V3 / 5V / 12V / 19.5V rails on the board.

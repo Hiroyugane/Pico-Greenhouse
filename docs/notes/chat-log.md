@@ -5,6 +5,59 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-24 · 19V power supply spec correction (Dell 180W brick)
+
+### spec · actual brick is Dell 180W, 19.5V / 9.23A, not generic 19V
+
+The supply feeding the heater-side input rail is a **Dell 180W AC
+adapter, model "DWSG3" (label string approximate, to be re-verified
+on the part)**. Nameplate:
+
+- Input: 100–240 V~, 50–60 Hz, 2.5 A
+- Output: **19.5 V DC, 9.23 A** (180 W)
+
+Prior docs referred to this rail as "19 V" with a 9.2 A figure (see
+[project-power-input-revision memory](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_power_input_revision.md)
+and the 2026-05-22/23 chat-log entries below). Both numbers were
+shorthand approximations of the real brick spec; this entry pins
+them down. The brick is now catalogued in
+[inventory.md → External power supplies](../hardware/inventory.md).
+
+### decision · rename rail label "19V" → "19.5V" across active docs
+
+Active artifacts (next-revision.md, hw-test-log.md, inventory.md,
+the power-input memory) get the rename. Historical chat-log entries
+stay as written — they reflect the understanding at the time and
+this entry supersedes them. Net-level identifier `19V_IN` is
+**retained** as a schematic net name (it's an identifier, not a
+voltage spec; renaming would force netlist regeneration in EasyEDA
+without changing anything electrical).
+
+Downstream parts already specced for this rail keep their values —
+all were sized with headroom over 19.5 V:
+
+- **D5 = MBR20100CT** (100 V) — fine.
+- **MBRD1045** D-PAK Schottkys on the 19.5 V series/shunt (45 V) — fine.
+- **SMAJ24CA TVS** (24 V working, ~39 V clamp) — fine; 24 V working
+  voltage was already chosen for headroom over the 19 V approximation,
+  so the 0.5 V correction lands well within margin.
+- **470 µF / 35 V bulk cap** — 35 V on a 19.5 V rail is 56 % derating,
+  unchanged from prior calculation.
+- **8.2 kΩ power-good LED resistor** — designed for ~2.1 mA at the
+  rail voltage; at 19.5 V draws ~2.2 mA (still in the visible-uniform
+  bracket).
+
+No re-spec needed; just the label correction.
+
+### note · silkscreen text width on next-rev PCB
+
+`19.5V` is 5 glyphs vs. `19V` at 3 glyphs. Layout pass on the next
+rev should confirm the existing silkscreen area next to the 19.5 V
+XT60 still fits the label cleanly at the chosen font size; shrink to
+`19V5` (no decimal, common convention) only if the longer string
+collides with another silkscreen feature. Logged here so the layout
+session doesn't burn time re-discovering the constraint.
+
 ## 2026-05-24 · parts-on-hand inventory + shopping list against next-revision
 
 ### note · inventory.md catalogues current storage and surfaces what to order

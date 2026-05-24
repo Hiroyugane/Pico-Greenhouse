@@ -776,9 +776,6 @@ catalogued).
   wrong for the actual switch — re-measure and fix.
 - **External fan connector** is physically larger than the footprint
   it sits on — widen the footprint or move it.
-- The **XT60 board-edge clearance** issue is also tracked under
-  "External power connectors and silkscreen polish" above in this
-  section.
 
 ## PCB ordering — fabrication settings
 

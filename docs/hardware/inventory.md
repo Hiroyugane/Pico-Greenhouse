@@ -11,7 +11,10 @@
 > worth re-ordering, or when new stock arrives.
 >
 > **Last reconciled:** 2026-05-24 against
-> [next-revision.md](next-revision.md) as of `bab5f70`.
+> [next-revision.md](next-revision.md) as of `da72af8`, with the two
+> previously-unidentified AliExpress orders catalogued and the LM358
+> next-rev path switched from SOIC-8 LM358DR to a DIP-8 socket + the
+> LM358N already in stock.
 
 ## Active components — semiconductors
 
@@ -41,9 +44,12 @@
   12 V rail is the reason for the
   [next-revision: MCP6002 → LM358 retune](next-revision.md). Keep
   current stock for breadboarding 3.3 V / 5 V circuits only.
-- **LM358N** (DIP-8 dual op-amp, V_CC max 32 V) — **10 pcs**. Wrong
-  package for the PCB (board uses SOIC-8 LM358DR). Useable on
-  protoboards via the DIP socket kit; **order LM358DR for the fab**.
+- **LM358N** (DIP-8 dual op-amp, V_CC max 32 V) — **10 pcs**. **Now
+  the chosen part for the next-rev grow-light op-amp** — the
+  schematic was updated to use a DIP-8 socket footprint (instead of
+  the original SOIC-8 LM358DR plan) so this on-hand stock can be
+  used without a procurement step. See
+  [next-revision: MCP6002 → LM358 + grow-light gain retune](next-revision.md).
 - **MCP4725A0T-E/CH** (SOT23-6, 12-bit I²C DAC) — **10 pcs**. Matches
   current grow-light DAC role.
 - **MCP4725 breakout board** (12-bit DAC, I²C) — **1 pc**. Useful for
@@ -102,7 +108,7 @@
 - **XT60PW-F** (panel / PCB-mount female, board-edge prongs) —
   **5 pcs**. Matches the
   [next-revision: power input → XT60 across all three rails](next-revision.md)
-  requirement; one per input rail (5 V, 12 V, 19 V) + spares.
+  requirement; one per input rail (5 V, 12 V, 19.5 V) + spares.
 
 ### Mains distribution (post-relay)
 
@@ -116,6 +122,20 @@
 - **Polyimide film heater** (100 × 100 mm, 24 V, 100 W, self-adhesive) —
   **3 pcs**. Two go in parallel on the HE_MOSFET output per
   [next-revision: heater channel count](next-revision.md); one spare.
+
+### AC mains entry (enclosure-side)
+
+- **IEC320 C14 panel inlet** with rocker switch + LED + 5×20 mm
+  10 A fuse holder (250 V, brass contacts, "AC-08A" 3-pin combo
+  module) — **5 pcs**. System-level AC mains entry for the
+  enclosure: brings line + neutral + earth into the box behind one
+  switched and fused inlet, before the DC bricks and the grow-light
+  / heater relay loads. **Not currently a next-revision queue item;
+  reserved for the enclosure / harness redesign.**
+- **5×20 mm 10 A glass fuse** (F-rated, packaged separately with the
+  IEC inlets above) — **20 pcs** (2 packs × 10). Spare fuses for
+  the IEC inlet only; **does not satisfy the T-rated F1
+  requirement** on the PCB (see fuse assortment note above).
 
 ## Sensors and display modules
 
@@ -150,21 +170,26 @@
 
 ### Resistor kits (Through-hole, ±1 %, 1/4 W)
 
-- **WayinTop 600 pc kit** — 30 values × 20 pcs each. Confirmed
-  values include: 10, 22, 47, 100, 150, 200, 220, 270, 330, 470, 680,
-  1 k, 2 k, 2.2 k, 3.3 k, 4.7 k, 5.1 k, 6.8 k, 10 k, 47 k, 51 k,
-  68 k, 100 k, 220 k, 300 k, 470 k, 680 k, 1 MΩ. **15 kΩ and
-  8.2 kΩ presence unconfirmed — verify on unpacking** (both required
-  per next-rev; 15 k for soil-ADC divider, 8.2 k for 19 V power-good
-  LED).
+- **WayinTop 600 pc kit** — ±1 %, 1/4 W, 20 pcs each. Authoritative
+  value list per the seller's product page: **10 Ω, 22 Ω, 47 Ω,
+  100 Ω, 150 Ω, 200 Ω, 220 Ω, 270 Ω, 470 Ω, 680 Ω, 1 kΩ, 2 kΩ,
+  2.2 kΩ, 3.3 kΩ, 4.7 kΩ, 5.1 kΩ, 6.8 kΩ, 10 kΩ, 47 kΩ, 51 kΩ,
+  68 kΩ, 100 kΩ, 220 kΩ, 300 kΩ, 470 kΩ, 680 kΩ, 1 MΩ.**
+  (The seller copy is OCR-garbled — "4 Ω Ω, 6 Ω Ω, 6 kΩ" reads as
+  470 Ω, 680 Ω, and an unidentified 28th value; assume the kit covers
+  nothing not listed above.)
+  **Confirmed not in the kit: 1.5 kΩ, 8.2 kΩ, 15 kΩ** — all three
+  required by next-revision entries (LED current limiters and
+  soil-ADC divider) and now on the order list below.
 - **ELEGOO Fun Kit 10 pc rows** — 10, 100, 220, 330, 1 k, 2 k, 5.1 k,
-  10 k, 100 k, 1 MΩ (10 pcs each).
+  10 k, 100 k, 1 MΩ (10 pcs each). 330 Ω is **only** available from
+  this kit (WayinTop list above does not include 330 Ω).
 
 ### Capacitors (kit-included only)
 
 - **Electrolytic** (ELEGOO kit): **100 µF 5 pcs, 10 µF 5 pcs.** No
   larger values — the bulk caps required by
-  [next-revision: bulk capacitance on 12 V and 19 V](next-revision.md)
+  [next-revision: bulk capacitance on 12 V and 19.5 V](next-revision.md)
   (220 µF / 25 V, 470 µF / 35 V, 1000 µF / 16 V) are **not on hand**.
 - **Ceramic** (ELEGOO kit): **22 pF 10 pcs, 104 (100 nF) 10 pcs.**
   100 nF covers menu-button debounce, decoupling, and per-rail
@@ -214,6 +239,11 @@
   protoboards.
 - **Nylon spacers** (M3.2, OD 7 mm, 6 mm length, unthreaded) —
   **50 pcs**.
+- **M3 brass hot-melt inserts** (OD 4.5 mm, 6 mm length, double-twill
+  knurl for injection / heat-press into plastic) — **30 pcs**. For
+  threading the 3D-printed enclosure to take M3 screws.
+- **M3 hex brass standoff** (M / F, 6 mm thread + 6 mm body) —
+  **30 pcs**. PCB-to-enclosure mounting.
 - **Laptop screw set** (M2 / M2.5 / M3, 12 sizes) — **360 pcs**.
 - **Tiny magnets** (6 × 2 mm) — **100 pcs**.
 
@@ -226,16 +256,6 @@
 - 3D-printer grease — **3 tubes**.
 - Hot glue sticks (black, 7 × 100 mm) — **20 pcs**.
 - Cyanoacrylate glue 401 (20 ml) — **3 bottles**.
-
-## Unidentified orders
-
-Two completed AliExpress orders show totals but no item descriptions
-on the order page. Worth re-reading the original product pages to
-catalogue the contents.
-
-- Order **3068920990267331** (MINGYUE TRADING, 2026-02-15, 9.83 €)
-- Order **3068920990337331** (HUI JI Official Store, 2026-02-15,
-  4.92 €)
 
 ---
 
@@ -258,15 +278,15 @@ is on the shelf. Functional substitutes are flagged separately
 | 6 | **10 A T (slow-blow) 5×20 mm fuse** (e.g. Littelfuse 0234010.MXP) | 1 (+ 4 spare) | [next-revision: F1 fuse](next-revision.md) |
 | 7 | **SMAJ5.0CA** (TVS, 5 V bidirectional) | 1 (+ 2 spare) | [next-revision: TVS on all three rails](next-revision.md) |
 | 8 | **SMAJ15CA** (TVS, 12 V bidirectional) | 1 (+ 2 spare) | [next-revision: TVS on all three rails](next-revision.md) |
-| 9 | **SMAJ24CA** (TVS, 19 V bidirectional) | 1 (+ 2 spare) | [next-revision: TVS on all three rails](next-revision.md) |
+| 9 | **SMAJ24CA** (TVS, 19.5 V bidirectional) | 1 (+ 2 spare) | [next-revision: TVS on all three rails](next-revision.md) |
 | 10 | **1000 µF / 16 V low-ESR electrolytic** (5 V VSYS bulk) | 1 (+ 2 spare) | [next-revision: 5 V VSYS bulk cap upgrade](next-revision.md) |
 | 11 | **220 µF / 25 V low-ESR electrolytic** (12 V bulk) | 1 (+ 2 spare) | [next-revision: bulk capacitance](next-revision.md) |
-| 12 | **470 µF / 35 V low-ESR electrolytic** (19 V bulk) | 1 (+ 2 spare) | [next-revision: bulk capacitance](next-revision.md) |
+| 12 | **470 µF / 35 V low-ESR electrolytic** (19.5 V bulk) | 1 (+ 2 spare) | [next-revision: bulk capacitance](next-revision.md) |
 | 13 | **MAX809LEUR+T** or **TPS3839K33** (SOT-23-3, ~3.0 V reset supervisor) | 1 (+ 2 spare) | [next-revision: brownout supervisor on Pico RUN](next-revision.md) |
 | 14 | **Fischer SK 104-25 STS** (TO-220 clip-on heatsink) | 1 (+ 1 spare; +1 per future fan-stage TO-220) | [next-revision: TO-220 thermal management](next-revision.md) |
 | 15 | **PCA9685** (16-ch PWM driver, breakout preferred for socketing) | 1 (+ 1 spare) | [next-revision: fans → PCA9685 + IRLZ44N](next-revision.md) |
 | 16 | **Additional 1N4007** (or UF4007) flyback diodes for fan stage | 5 (one per fan; ELEGOO kit has 5, no spare) | [next-revision: fans → PCA9685 + IRLZ44N](next-revision.md) |
-| 17 | **Banana plug PCB jacks** (12 V and 19 V rails) | 2 pairs (red + black per rail) | [next-revision: external power connectors](next-revision.md) |
+| 17 | **Banana plug PCB jacks** (12 V and 19.5 V rails) | 2 pairs (red + black per rail) | [next-revision: external power connectors](next-revision.md) |
 | 18 | **Dielectric grease** (small tube, RJ12 plug sealing) | 1 | [next-revision: sensor cable moisture protection](next-revision.md) |
 | 19 | **Silicone-insulated hookup wire** (~20 AWG, for any fan body in greenhouse atmosphere) | ~2 m per fan | [next-revision: sensor cable moisture protection](next-revision.md) |
 | 20 | **Desiccant sachets** (1 g) | 1 per sensor breakout enclosure | [next-revision: sensor cable moisture protection](next-revision.md) |
@@ -275,7 +295,7 @@ is on the shelf. Functional substitutes are flagged separately
 
 - **15 kΩ** ±1 % through-hole resistor (soil-ADC divider top leg) —
   presence in WayinTop kit unconfirmed; if absent, add to order.
-- **1.5 kΩ** and **8.2 kΩ** ±1 % through-hole resistor (5 V and 19 V
+- **1.5 kΩ** and **8.2 kΩ** ±1 % through-hole resistor (5 V and 19.5 V
   power-good LED current limiters) — presence in WayinTop kit
   unconfirmed; same treatment.
 

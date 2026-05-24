@@ -48,17 +48,17 @@
 [chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
 
 - Current PCB mixes connectors on the three input rails (5 V Phoenix
-  block, 12 V JST B2B-XH, 19 V XT60). The 12 V JST B2B-XH is rated
+  block, 12 V JST B2B-XH, 19.5 V XT60). The 12 V JST B2B-XH is rated
   ~3 A — well under the 12 V buck's 9 A capacity and a fire risk if
   multi-fan load lands on that rail.
-- **Standardise on XT60 for all three input rails** (5 V, 12 V, 19 V).
+- **Standardise on XT60 for all three input rails** (5 V, 12 V, 19.5 V).
   XT60 is rated 30 A continuous, 60 A burst — massive headroom for
   all three rails. Single connector SKU = one cable family in the
   field, one mating-tool requirement, simpler harness build.
-- **Silkscreen voltage label next to each XT60:** `5V`, `12V`, `19V`,
+- **Silkscreen voltage label next to each XT60:** `5V`, `12V`, `19.5V`,
   plus `+` / `-` polarity marks. XT60 is keyed but polarity-label
   redundancy catches reversed crimps during harness assembly.
-- **Board-edge clearance:** the existing 19 V XT60 already has the
+- **Board-edge clearance:** the existing 19.5 V XT60 already has the
   overhang issue tracked under "External power connectors and
   silkscreen polish" — re-evaluate clearance for all three after
   layout.
@@ -72,7 +72,7 @@
   1 oz). Roughly doubles current-carrying capacity per mm of trace
   width and improves the TO-220 thermal pour effectiveness. Cost
   delta on JLCPCB / EasyEDA is small at production quantities.
-- **Heater current path (19 V rail, F1 → D5 → bulk cap → HE_MOSFET
+- **Heater current path (19.5 V rail, F1 → D5 → bulk cap → HE_MOSFET
   drain → HE_CON):** **3 mm minimum trace width** on 2 oz copper
   (handles 6.8 A parallel-heater case at <30 °C rise per IPC-2221).
   Pour copper rather than narrow traces where possible.
@@ -98,9 +98,9 @@
   value, identical footprint family, ~$0.10 cost delta. Voltage
   derating drops to 31 % (16 V part) — comfortable margin for
   10 000+ h life at 65 °C.
-- Same principle applied to the 12 V and 19 V bulk caps already
+- Same principle applied to the 12 V and 19.5 V bulk caps already
   queued (220 µF / 25 V on 12 V = 48 % derating, 470 µF / 35 V on
-  19 V = 56 % derating). Both fine as specified.
+  19.5 V = 56 % derating). Both fine as specified.
 
 ### [ ] F1 fuse — 10 A 5×20 mm slow-blow (parallel-heater ready)
 
@@ -162,18 +162,18 @@
 - R9 (Pico TX → S8 RX, 100 Ω) **unchanged.** 3.3 V drive easily
   crosses the S8 input threshold (~V+ × 0.3 = 1.5 V).
 
-### [ ] Bulk capacitance on 12 V and 19 V rails
+### [ ] Bulk capacitance on 12 V and 19.5 V rails
 
 **Filed:** 2026-05-23 ·
 [chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review) ·
 [memory: project-power-input-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_power_input_revision.md)
 
 - Current PCB has **only 100 nF ceramics** on each rail — no
-  electrolytics. Heater switching (3.4 A on the 19 V rail) and fan
+  electrolytics. Heater switching (3.4 A on the 19.5 V rail) and fan
   inrush (12 V rail, once PCA9685 + MOSFETs land) hammer the rails
   with no bulk capacitance to absorb transients.
 - **Add per rail, close to the load:**
-  - **19 V near D5 / HE_MOSFET:** 470 µF / 35 V low-ESR electrolytic
+  - **19.5 V near D5 / HE_MOSFET:** 470 µF / 35 V low-ESR electrolytic
     in parallel with 100 nF ceramic
   - **12 V near D4:** 220 µF / 25 V low-ESR electrolytic in parallel
     with 100 nF ceramic
@@ -194,7 +194,7 @@
 - Three TVS diodes, same SMA-family footprint, three values:
   - **5 V input:** SMAJ5.0CA (working voltage 5 V, clamp ~9 V)
   - **12 V input:** SMAJ15CA (working voltage 15 V, clamp ~24 V)
-  - **19 V input:** SMAJ24CA (working voltage 24 V, clamp ~39 V)
+  - **19.5 V input:** SMAJ24CA (working voltage 24 V, clamp ~39 V)
 - Bidirectional `CA` parts — protects against either polarity, useful
   on the Phoenix terminal block where reversed wiring is plausible.
 - **Placement:** just downstream of input connector and series
@@ -207,7 +207,7 @@
 [memory: project-power-input-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_power_input_revision.md)
 
 - **Critical — D5 is currently a fire risk.** D5 is a 1N4002 (1 A
-  rated, DO-41) on the 19 V → heater path. Heater is 24 V / 100 W →
+  rated, DO-41) on the 19.5 V → heater path. Heater is 24 V / 100 W →
   5.76 Ω → at 19.6 V draws ~3.4 A. D5 is being run at **3.4× its
   continuous rating**; package dissipation exceeds DO-41 limits.
 - **Two SKUs across the input-protection diode set:**
@@ -217,7 +217,7 @@
   - **D1, D2, D3, D4, D6 → MBRD1045** (D-PAK / TO-252, 10 A / 45 V,
     ~$0.45) — single SKU for **every other input-protection diode**.
     10 A headroom matches the rail capacities (5 V/5 A, 12 V/9 A,
-    19 V/9.2 A) with safety margin; large D-PAK tab assists thermal
+    19.5 V/9.23 A) with safety margin; large D-PAK tab assists thermal
     dissipation if a rail brushes its rated capacity.
 - **Why MBRD1045 over SS54:** SS54 (5 A SMA) was earlier draft for
   BOM-cost reasons, but the 5 V buck is rated 5 A and the 12 V buck
@@ -239,7 +239,7 @@
 [chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
 
 - Current netlist order is **19V_IN → D5 → F1 → HE_CON**. A shorted
-  D5 dumps all 19 V before F1 can react.
+  D5 dumps all 19.5 V before F1 can react.
 - **Correct order:** `19V_IN → F1 → D5 → bulk cap → HE_MOSFET drain
   → HE_CON`. Fuse goes first, then series diode, then load chain.
 - **Fuse spec:** see "F1 fuse — 10 A 5×20 mm slow-blow" entry above
@@ -256,7 +256,7 @@
   by Pico GP3 through the MCP1416 gate driver. Heaters always run
   together — the goal is to spread heat over more surface area, not
   selective control.
-- Total current = 6.8 A on the 19 V rail. Handled by:
+- Total current = 6.8 A on the 19.5 V rail. Handled by:
   - F1 = 10 A 5×20 mm T-rated (entry above)
   - D5 = MBR20100CT 20 A (Schottky entry above)
   - IRLZ44N with MCP1416 gate driver at 5 V V_GS → R_DS(on) ~0.022 Ω
@@ -351,7 +351,7 @@
   - 3V3 rail: 680 Ω (1.9 mA)
   - 5 V rail: 1.5 kΩ (2.0 mA)
   - 12 V rail: 4.7 kΩ (2.1 mA)
-  - 19 V rail: 8.2 kΩ (2.1 mA)
+  - 19.5 V rail: 8.2 kΩ (2.2 mA)
 - Different resistor values per rail are intentional — uniform
   current is more useful than a uniform BOM line at this scale.
 
@@ -361,7 +361,7 @@
 [chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
 
 - **Eight labelled THT pads** in a 2.54 mm-pitch row near the input
-  regulators: `3V3 / 5V / 12V / 19V / GND / GND / SDA / SCL`.
+  regulators: `3V3 / 5V / 12V / 19.5V / GND / GND / SDA / SCL`.
 - 1.5 mm round pads with via hole → accepts hook clips and a 6/8-pin
   pogo-pin debug fixture later.
 - Silkscreen label next to each pad. Two GND pads (one near positive
@@ -506,12 +506,12 @@
   seat because the board edge is too close. Move the XT60 inboard or
   extend the board edge in that area. (Interacts with the board-size
   shrink in the mechanical section — re-check after layout.)
-- **Banana plug connectors for 12 V and 19 V rails.** 5 V stays on the
+- **Banana plug connectors for 12 V and 19.5 V rails.** 5 V stays on the
   current connector style (no banana plug — avoids extra probe surface
   on a rail with little abs-max margin).
-- **Silkscreen polarity marks (+/-) on the 19 V terminals.**
+- **Silkscreen polarity marks (+/-) on the 19.5 V terminals.**
 - **Rename silkscreen label "VCC" → "5V"** — ambiguous given the mix
-  of 3V3 / 5V / 12V / 19V rails on the board.
+  of 3V3 / 5V / 12V / 19.5V rails on the board.
 - **Label voltage direction on the ambient fan switch** (and on the
   new case fan switch) — which switch position selects which rail.
 

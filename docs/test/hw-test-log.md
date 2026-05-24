@@ -37,7 +37,7 @@ for the full rationale per item.
   (19V_IN → F1 → D5 → bulk cap → HE_MOSFET). Trace continuity from
   19V_IN-2 to F1 input first, then F1 output to D5.
 - [ ] With a 5 A or larger heater connected and switched ON, measure
-  19 V rail at the bulk cap during switch-on transient. Expect rail
+  19.5 V rail at the bulk cap during switch-on transient. Expect rail
   sag < 0.5 V (was effectively undefined before the cap).
 - [ ] Measure 12 V rail during fan startup (post-PCA9685): expect
   sag < 0.3 V.
@@ -46,11 +46,11 @@ for the full rationale per item.
 
 ### Power input — TVS clamps
 
-- [ ] Confirm SMAJ5.0CA on 5 V, SMAJ15CA on 12 V, SMAJ24CA on 19 V
+- [ ] Confirm SMAJ5.0CA on 5 V, SMAJ15CA on 12 V, SMAJ24CA on 19.5 V
   are installed (all SMA footprint).
 - [ ] Verify standoff voltage by measuring rail voltage with TVS in
   place during normal operation: no clamping should engage at
-  nominal rail (5 / 12 / 19.6 V).
+  nominal rail (5 / 12 / 19.5 V).
 
 ### Grow light — LM358 swap and gain retune
 
@@ -129,7 +129,7 @@ for the full rationale per item.
 
 ### Power-good LEDs
 
-- [ ] Confirm LEDs light on all four rails (3V3, 5V, 12V, 19V) at
+- [ ] Confirm LEDs light on all four rails (3V3, 5V, 12V, 19.5V) at
   power-up.
 - [ ] Visual brightness should be roughly uniform across all four
   (uniform 2 mA target). A LED that is much brighter or dimmer
@@ -137,7 +137,7 @@ for the full rationale per item.
 
 ### Test points
 
-- [ ] Confirm 8 labelled test pads (3V3 / 5V / 12V / 19V / GND / GND
+- [ ] Confirm 8 labelled test pads (3V3 / 5V / 12V / 19.5V / GND / GND
   / SDA / SCL) are populated and at 2.54 mm pitch.
 - [ ] Land a 6-pin pogo-pin debug fixture on the row and verify
   contact to all pads.
@@ -166,9 +166,9 @@ for the full rationale per item.
 ### Power input connectors (XT60 × 3) + F1 fuse
 
 - [ ] Confirm **XT60** connectors installed on **all three** power
-  input rails (5 V, 12 V, 19 V).
+  input rails (5 V, 12 V, 19.5 V).
 - [ ] Confirm silkscreen labels next to each XT60 read `5V`, `12V`,
-  `19V` with `+` / `-` polarity marks.
+  `19.5V` with `+` / `-` polarity marks.
 - [ ] Verify board-edge clearance allows full XT60 seating on all
   three connectors (no overhang).
 - [ ] Confirm F1 is a **10 A 5×20 mm T-rated (slow-blow)** glass
@@ -178,7 +178,7 @@ for the full rationale per item.
   firmware. Heater steady-state current = ~6.8 A. F1 must not nuisance
   trip during the bulk-cap inrush spike at power-on.
 - [ ] Short the heater output briefly (controlled test only — use a
-  dummy load and current-limited bench supply at 19 V): F1 must clear
+  dummy load and current-limited bench supply at 19.5 V): F1 must clear
   in under 2 s at 2× rated current.
 
 ### PCB stackup and trace widths

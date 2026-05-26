@@ -323,7 +323,7 @@ GND-return diodes) ·
 - Also a candidate suspect for any "MCP4725 doesn't respond" or
   "OLED tears" symptoms seen on the current PCB.
 
-### [ ] Brownout supervisor on Pico RUN line
+### [x] Brownout supervisor on Pico RUN line
 
 **Filed:** 2026-05-23 · updated 2026-05-26 (part-number suffix + button-conflict resistor) ·
 [chat-log: original entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review) ·
@@ -357,7 +357,7 @@ GND-return diodes) ·
   watchdog catches the rest. Improves stability across the
   weeks-of-uptime envelope.
 
-### [ ] VBUS + DEBUG_CON 5 V backfeed protection
+### [x] VBUS + DEBUG_CON 5 V backfeed protection
 
 **Filed:** 2026-05-23 ·
 [chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
@@ -374,7 +374,9 @@ GND-return diodes) ·
 - Alternative: drop those power pins from the headers entirely if
   no current design needs them.
 
-### [ ] Power-good LEDs — 2 mA current target across all rails
+-> Removed vbus and 5v pins from corresponding headers. SS14 in BOM seems unnecessary
+
+### [x] Power-good LEDs — 2 mA current target across all rails
 
 **Filed:** 2026-05-23 ·
 [chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
@@ -391,7 +393,7 @@ GND-return diodes) ·
 - Different resistor values per rail are intentional — uniform
   current is more useful than a uniform BOM line at this scale.
 
-### [ ] R8 stays — fix the firmware comment, not the schematic
+### [x] R8 stays — fix the firmware comment, not the schematic
 
 **Filed:** 2026-05-23 ·
 [chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
@@ -406,7 +408,9 @@ GND-return diodes) ·
   to say R8 stays. Filed as a non-PCB cleanup to ship with the
   next-rev planning sweep.
 
-### [ ] Button connector rework — menu_btn debounced, reset_btn direct
+**Comment:** The 33 ohm Resistor on MISO was never questioned, but the 10k Pull-Up resistor from SPI_RX to 3V3 that has been soldered in afterwards.
+
+### [x] Button connector rework — menu_btn debounced, reset_btn direct
 
 **Filed:** 2026-05-22 ·
 [chat-log entry](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes)
@@ -426,7 +430,9 @@ GND-return diodes) ·
   electrically with the SD section — GP12 is SD-MISO. Moved to the
   [SD module entry](#--sd-card-module--adafruit-4682-3-v-micro-sd-spisdio-bypass).)
 
-### [ ] Relay connector cleanup — pull-ups, GND fix, mains-rated header
+**Comment**: 100nf Capacitor implemented on Button breakout board. check if the pull-up resistor here is appropriate.
+
+### [x] Relay connector cleanup — pull-ups, GND fix, mains-rated header
 
 **Filed:** 2026-05-22 ·
 [chat-log entry](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes)
@@ -444,7 +450,7 @@ GND-return diodes) ·
   creepage clearance are tracked under "Relay connector — orientation
   flip + mains-rated spacing" in the PCB layout section.
 
-### [ ] I²C / RJ12 connector — swap DHT21 port to RJ12 + add second outward bus
+### [x] I²C / RJ12 connector — swap DHT21 port to RJ12 + add second outward bus
 
 **Filed:** 2026-05-22 ·
 [chat-log entry](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes)
@@ -553,7 +559,7 @@ section.
   One resistor, ~$0.01 BOM, eliminates a real SPI-init failure mode.
 - **No external pull-ups on CS / MOSI / SCK.** R8 = 33 Ω MISO damper
   and R10 = 33 Ω MOSI damper stay per the
-  [R8 entry](#--r8-stays--fix-the-firmware-comment-not-the-schematic).
+  [R8 entry](#x-r8-stays--fix-the-firmware-comment-not-the-schematic).
 
 **Card-detect (DET) wiring — new capability:**
 

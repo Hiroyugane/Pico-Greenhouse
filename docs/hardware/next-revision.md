@@ -466,7 +466,7 @@ GND-return diodes) ·
   tracked under "I²C address map on silkscreen" in the PCB layout
   section.
 
-### [ ] Soil moisture sensor → Adafruit STEMMA #4026 (I²C, 0x36)
+### [x] Soil moisture sensor → Adafruit STEMMA #4026 (I²C, 0x36)
 
 **Filed:** 2026-05-22 · superseded 2026-05-26 (analog probe + divider
 plan dropped; switch to I²C STEMMA after the 2026-05-15 NE555 dead-end) ·
@@ -533,7 +533,7 @@ earlier 10 kΩ + 15 kΩ ADC divider entirely.
 - `main.py` drops the ADC construction and passes the existing
   `i2c0` instance to `SoilLogger`.
 
-### [ ] Case fan voltage selector + ambient fan Pico control
+### [x] Case fan voltage selector + ambient fan Pico control
 
 **Filed:** 2026-05-22 ·
 [chat-log entry](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes)
@@ -546,7 +546,9 @@ earlier 10 kΩ + 15 kΩ ADC divider entirely.
   PCA9685 + IRLZ44N stage so it joins the rest of the fan control
   surface (see fan entry further below).
 
-### [ ] SD card module → **Adafruit 4682** (3 V Micro SD SPI/SDIO Bypass)
+**Comment**: removed voltage selector for ambient/chamber fans and instead added a PWM pin to receive pwm from the PCA9685.
+
+### [x] SD card module → **Adafruit 4682** (3 V Micro SD SPI/SDIO Bypass)
 
 **Filed:** 2026-05-22 · updated 2026-05-24 (full module swap delta) ·
 [chat-log: original footprint note](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes) ·
@@ -693,7 +695,7 @@ section.
 item (Adafruit 4682 to order; AZDelivery module not currently
 catalogued).
 
-### [ ] Move fans from 2× relays to PCA9685 + IRLZ44N MOSFETs
+### [x] Move fans from 2× relays to PCA9685 + IRLZ44N MOSFETs
 
 **Filed:** 2026-05-16 · updated 2026-05-22 ·
 [chat-log: 2026-05-22 planning](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes) ·
@@ -719,6 +721,9 @@ catalogued).
   heater distribution, case.
 - Steps 1–4 of the suggested build order in the memory entry are
   firmware-side and can land before the PCB arrives.
+
+**Comment:** please check thoroughly if the wiring from IRLZ44N and Diode is correct
+
 
 ## PCB layout — footprints, routing, silkscreen, test points
 

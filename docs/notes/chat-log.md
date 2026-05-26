@@ -5,6 +5,70 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-26 · Soil sensor swap → Adafruit STEMMA #4026 (I²C)
+
+### decision · drop analog capacitive probe path; go I²C with Seesaw STEMMA
+
+The 2026-05-15 bench session ended with the cheap capacitive
+NE555-based probe confirmed dead even at 5 V with a divider. The
+queued next-revision entry "ADC / soil-moisture interface" still
+described an analog 0–5 V probe with a 10 kΩ + 15 kΩ divider into
+GP28 — a plan that was already on shaky ground (3.3 V is below the
+NE555 start threshold; any TLC555 replacement still needs analog
+front-end work and per-batch calibration drift). Decision: skip the
+whole analog story and use the
+[Adafruit STEMMA Soil Sensor #4026](https://www.adafruit.com/product/4026)
+on I²C0 going forward.
+
+Why this is the right swap:
+
+- **Native 3V3, no level conversion.** Seesaw ATSAMD10 onboard runs
+  at the I²C bus voltage; no divider, no abs-max concerns, no
+  ADC_VREF gotchas.
+- **Joins an existing bus.** I²C0 already carries SHT31, DS3231,
+  MCP4725, SSD1306 (and PCA9685 once that lands). Adding 0x36 stays
+  inside the bus-capacity envelope once the queued R1/R2 drop to
+  2.2 kΩ ships (see
+  [next-revision.md](../hardware/next-revision.md)). No new bus
+  required.
+- **GP28/ADC2 freed.** Removing the analog probe drops `adc_input`
+  and the soil_logger ADC calibration keys from `DEVICE_CONFIG`,
+  opening the pin for any future analog peripheral without board
+  work.
+- **Bonus: probe temperature.** The Seesaw exposes the chip's
+  on-die temperature register. Cheap data point — appended to the
+  soil CSV row.
+- **Capacitive semantics invert.** The resistive-probe convention
+  (lower raw = wetter) flips on the Seesaw: **higher raw = wetter**
+  (typical air ≈ 200–400, fully saturated ≈ 1000–1500). New
+  calibration constants `seesaw_dry_raw` / `seesaw_wet_raw` with
+  the validator inequality reversed.
+- **Driver:** port the constants from
+  [Adafruit_CircuitPython_seesaw](https://github.com/adafruit/Adafruit_CircuitPython_seesaw)
+  (MOISTURE_BASE, TOUCH_CHANNEL_OFFSET, 16-bit BE read) into a small
+  MicroPython-side `lib/seesaw_soil.py`. No runtime dependency on
+  the Adafruit library.
+
+This turn lands docs + config marker only:
+
+- `docs/hardware/next-revision.md` "ADC / soil-moisture interface"
+  entry rewritten as "Soil moisture sensor → Adafruit STEMMA #4026
+  (I²C, 0x36)".
+- Silkscreen I²C address map entry gets a new `(0x36)` row.
+- `config.py` soil_logger section gets a comment block flagging the
+  queued sensor swap; functional keys (`adc_input`,
+  `adc_dry_raw`, `adc_wet_raw`) are unchanged so the running
+  firmware keeps booting until the driver rewrite lands.
+- `hw-test-log.md` gets a STEMMA bring-up checklist; the
+  2026-05-15 analog-replacement checklist is marked superseded.
+- New memory file
+  `project_soil_sensor_revision.md`; MEMORY.md gets the pointer.
+
+Firmware-side rewrite (`lib/soil_logger.py` → Seesaw I²C, new
+config keys, `validate_config()` and `tests/test_config.py`
+updates, `main.py` wiring) is queued for the commit that lands with
+the new PCB — out of scope for this documentation turn.
+
 ## 2026-05-26 · brownout supervisor part + wiring clarification
 
 ### spec · MAX809 suffix corrected to T (3.08 V), plus 1 kΩ series resistor to RUN

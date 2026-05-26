@@ -466,17 +466,72 @@ GND-return diodes) ·
   tracked under "I²C address map on silkscreen" in the PCB layout
   section.
 
-### [ ] ADC / soil-moisture interface
+### [ ] Soil moisture sensor → Adafruit STEMMA #4026 (I²C, 0x36)
 
-**Filed:** 2026-05-22 ·
-[chat-log entry](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes)
+**Filed:** 2026-05-22 · superseded 2026-05-26 (analog probe + divider
+plan dropped; switch to I²C STEMMA after the 2026-05-15 NE555 dead-end) ·
+[chat-log: original analog plan](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes) ·
+[chat-log: 2026-05-15 NE555 sensor dead](../notes/chat-log.md#2026-05-15--capacitive-soil-sensor-unresponsive--ne555-unit-replace) ·
+[chat-log: 2026-05-26 STEMMA swap](../notes/chat-log.md#2026-05-26--soil-sensor-swap--adafruit-stemma-4026-i2c) ·
+[memory: project-soil-sensor-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_soil_sensor_revision.md)
 
-- Soil-moisture sensor outputs 0–5 V analog. Pico ADC is 0–3.3 V max.
-  Add a **10 kΩ (top) + 15 kΩ (bottom)** voltage divider between the
-  sensor output and the ADC pin: 5 V full-scale → ~3.0 V at the Pico
-  (under abs max, with margin).
-- **Route 3V3 to the ADC connector** alongside GND and the ADC signal
-  so 3V3-powered analog peripherals can be powered from the same jack.
+**Chosen part:** [Adafruit STEMMA Soil Sensor #4026](https://www.adafruit.com/product/4026)
+— I²C capacitive moisture + temperature sensor, onboard Seesaw
+ATSAMD10, default address **0x36** (jumper-selectable 0x36–0x39 if a
+bus collision ever appears), 3V3 powered at ~5 mA typical. Replaces
+the dead NE555-based analog probe and removes the need for the
+earlier 10 kΩ + 15 kΩ ADC divider entirely.
+
+- **Bus:** I²C0 (shared with SHT31 0x44, DS3231 0x68, MCP4725 0x60,
+  SSD1306 0x3C, future PCA9685 0x40). Adds one more device — well
+  inside the bus capacity once
+  [R1/R2 drops to 2.2 kΩ for 400 kHz](#x-ic-pull-ups-r1r2--22-k-for-400-khz-fast-mode-rise-time)
+  ships. New address mapped under
+  [the silkscreen address-map entry](#--ic-address-map-on-silkscreen).
+- **Wiring:** SDA, SCL, 3V3, GND through one of the
+  [outward-facing RJ12 / I²C drops](#x-ic--rj12-connector--swap-dht21-port-to-rj12--add-second-outward-bus).
+  The breakout exposes both STEMMA QT (JST-SH) and 0.1″ headers —
+  cable side decided at harness build.
+- **GP28 / ADC2 freed.** No analog soil probe means no divider, no
+  ADC_VREF gotcha, no 5 V → 3.3 V step-down problem. `adc_input: 28`
+  and the `adc_dry_raw` / `adc_wet_raw` keys are queued for removal
+  in the firmware-side rewrite (below). The pin becomes available
+  for any future analog peripheral.
+- **Firmware change queued (separate commit, lands with the new
+  PCB):** [lib/soil_logger.py](../../lib/soil_logger.py) rewritten
+  to read the Seesaw `touch_read` (channel 0) and the on-chip
+  temperature register over I²C instead of polling an ADC.
+  Calibration semantics **invert** versus the resistive-probe model:
+  with the capacitive Seesaw, **higher raw = wetter** (typical air
+  ≈ 200–400, fully saturated soil ≈ 1000–1500). Header becomes
+  `Timestamp,SeesawRaw,Percent,ProbeTempC` so the new probe
+  temperature joins the CSV row.
+- **Driver source:** port the constants from
+  [Adafruit_CircuitPython_seesaw](https://github.com/adafruit/Adafruit_CircuitPython_seesaw)
+  (`MOISTURE_BASE`, `TOUCH_CHANNEL_OFFSET`, 16-bit big-endian read
+  sequence) into a small `lib/seesaw_soil.py`. No runtime dependency
+  on the Adafruit library — Pi Greenhouse is MicroPython, not
+  CircuitPython.
+- **Verification:** post-fab eyes-on checklist in
+  [hw-test-log "Adafruit STEMMA #4026 soil sensor bring-up"](../test/hw-test-log.md).
+  Address on bus, dry/wet sweep, probe temperature within 5 °C of
+  SHT31 at room temp.
+
+**Configuration impact (queued, not shipped this turn):**
+
+- `DEVICE_CONFIG["pins"]["adc_input"]` → **delete**.
+- `DEVICE_CONFIG["soil_logger"]`:
+  - `adc_dry_raw` → rename `seesaw_dry_raw`, default ~300 (air).
+  - `adc_wet_raw` → rename `seesaw_wet_raw`, default ~1400 (saturated).
+    Validator inverts: wet must now be **>** dry.
+  - new `i2c_address: 0x36`.
+  - new `i2c_bus: 0`.
+- `validate_config()` and
+  [tests/test_config.py](../../tests/test_config.py) rows move in
+  lockstep per
+  [configurability.md](../../../.claude/rules/ecc/common/configurability.md).
+- `main.py` drops the ADC construction and passes the existing
+  `i2c0` instance to `SoilLogger`.
 
 ### [ ] Case fan voltage selector + ambient fan Pico control
 
@@ -765,6 +820,7 @@ catalogued).
   - MCP4725 DAC → `(0x60)`
   - SSD1306 OLED → `(0x3C)`
   - PCA9685 (future) → `(0x40)`
+  - Adafruit STEMMA soil sensor #4026 (future) → `(0x36)`
 - **Rename silkscreen label `I2C con_1` → `SHT31`** on the existing
   RJ12 port — it carries exactly one sensor, so the device name is
   more informative than the generic bus label. (Connector swap and

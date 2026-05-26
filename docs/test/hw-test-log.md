@@ -5,6 +5,92 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-26 · Adafruit STEMMA #4026 soil sensor bring-up
+
+**Branch:** `main`
+**Why hardware-only:** I²C device discovery, capacitive moisture
+range, and probe-temperature correlation all require the physical
+sensor plus actual potting mix and tap water. `pytest` cannot
+exercise the Seesaw register interface or the moisture plate.
+Supersedes the 2026-05-15 analog-replacement checklist further
+down this file (NE555 → TLC555 swap was abandoned in favour of
+this I²C part). Background in
+[chat-log.md](../notes/chat-log.md#2026-05-26--soil-sensor-swap--adafruit-stemma-4026-i2c).
+
+**Pre-flight:**
+
+1. Adafruit STEMMA #4026 in hand. Confirm silkscreen reads
+   `STEMMA Soil` (and an ATSAMD10 D-chip is visible) — generic
+   capacitive probes do not work with this checklist.
+2. Address-select jumpers in default (open) position → address
+   0x36.
+3. Firmware rewrite of `lib/soil_logger.py` to the Seesaw I²C
+   driver has shipped (separate commit, lands with the new PCB).
+   If the rewrite has not yet shipped, stop — running the legacy
+   ADC-based logger against a missing GP28 probe will just log
+   noise.
+4. Sensor wired into one of the outward-facing RJ12 / I²C drops:
+   3V3, GND, SDA, SCL. New PCB or jumpered onto an existing drop
+   for bench validation.
+5. Pico powered cold via USB, Thonny REPL connected.
+
+### I²C bus discovery
+
+- [ ] Run an `i2c.scan()` from the REPL. Expect 0x36 to appear
+      alongside the existing 0x3C (OLED), 0x44 (SHT31), 0x60
+      (MCP4725), 0x68 (DS3231) — and 0x40 once PCA9685 lands.
+- [ ] If 0x36 collides with anything else on the bus, jumper one
+      of the address-select pads to move the STEMMA to 0x37 / 0x38
+      / 0x39 and update `DEVICE_CONFIG["soil_logger"]["i2c_address"]`
+      accordingly.
+
+### Capacitive moisture sweep
+
+Use the new REPL helper (the Seesaw-rewrite commit adds it; expect
+something like `from lib.soil_logger import print_raw; print_raw()`
+returning the Seesaw raw count, **higher = wetter**).
+
+- [ ] **Air (dry reference):** probe held in still air, away from
+      hands. Record raw: __________. Expected: 200–400.
+- [ ] **Moist soil:** probe inserted into a freshly-watered potting
+      mix up to the printed line. Record: __________. Expected:
+      700–1100, clearly above the air value.
+- [ ] **Tap water:** probe blade submerged to the line, not past.
+      Record: __________. Expected: 1200–1600, clearly above the
+      moist-soil value.
+- [ ] All three readings differ by ≥ 200 raw counts between
+      neighbouring states.
+- [ ] With the probe stationary, repeated reads vary by ≤ 5 counts.
+
+### Probe temperature sanity
+
+- [ ] Read the Seesaw temperature register at room temp; record:
+      __________ °C. Expected: within ±5 °C of the SHT31 reading on
+      the same I²C bus (the Seesaw temperature is the chip die, not
+      the soil itself — coarse check only).
+
+### STEMMA config + system verification
+
+- [ ] `DEVICE_CONFIG["soil_logger"]["seesaw_dry_raw"]` ← air reading.
+- [ ] `DEVICE_CONFIG["soil_logger"]["seesaw_wet_raw"]` ← water reading.
+      Validator inequality: `seesaw_wet_raw > seesaw_dry_raw`
+      (inverted from the legacy resistive convention).
+- [ ] `pytest tests/test_config.py -v` passes after the edit.
+- [ ] Reboot into `main.py`. Within `interval_s` a new row appears
+      in `/sd/sensors/soil/YYYY/soil_YYYY-MM-DD.csv` with columns
+      `Timestamp,SeesawRaw,Percent,ProbeTempC`.
+- [ ] Pour water into the pot near the probe; the next row shows
+      `Percent` rising toward 100. Withhold water for several
+      cycles; `Percent` falls.
+- [ ] When `Percent < warn_pct_below`, the warning LED lights via
+      `StatusManager`; clearing the condition turns it off.
+
+### Notes (post-test) — STEMMA bring-up
+
+> Fill in here. Record the three calibration raw values, the
+> measured probe-temperature offset vs SHT31, and any bus-collision
+> jumper changes that were necessary.
+
 ## 2026-05-23 · Next-rev post-fab verification (EasyEDA design-review items)
 
 **Branch:** `main`
@@ -1151,6 +1237,11 @@ transient and REPL idle.**
   for the two PCB-revision entries opened from this session.
 
 ## 2026-05-15 · Capacitive soil sensor replacement bring-up
+
+> **Superseded 2026-05-26** — the analog TLC555 replacement path was
+> abandoned in favour of the Adafruit STEMMA #4026 I²C sensor. See
+> the 2026-05-26 entry at the top of this file. Steps below are kept
+> as a historical record of the analog plan; do not execute.
 
 **Branch:** `main`
 **Why hardware-only:** verifying a real moisture probe requires

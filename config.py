@@ -92,6 +92,8 @@ DEVICE_CONFIG = {
         "relay_reserved_3": 26,  # GP26 — Reserved relay (REL_CON pin 7)
         "relay_reserved_4": 27,  # GP27 — Reserved relay (REL_CON pin 8)
         # Analog input (ADC_CON pin 4; ADC_VREF on Pico pin 35)
+        # Queued for removal once the Adafruit STEMMA #4026 I²C soil
+        # sensor swap ships — see docs/hardware/next-revision.md.
         "adc_input": 28,  # GP28 — ADC input (ADC_CON pin 4)
         # On-board LED
         "onboard_led": 25,  # GP25 — Pico on-board LED (heartbeat)
@@ -255,6 +257,19 @@ DEVICE_CONFIG = {
         "poll_interval_s": 30,  # Thermostat check cadence (seconds)
     },
     # Soil Moisture Logger Configuration (GP28 / ADC2, single-probe)
+    #
+    # NOTE (2026-05-26): sensor swap queued — moving to the Adafruit
+    # STEMMA #4026 (I²C, Seesaw ATSAMD10, address 0x36) on the next
+    # PCB. See docs/hardware/next-revision.md "Soil moisture sensor
+    # → Adafruit STEMMA #4026 (I²C, 0x36)" and the 2026-05-26
+    # chat-log entry. When the firmware rewrite ships, the keys
+    # below change shape: `adc_input` drops out of the pins dict;
+    # `adc_dry_raw` / `adc_wet_raw` rename to `seesaw_dry_raw` /
+    # `seesaw_wet_raw` with the wet/dry inequality reversed
+    # (capacitive Seesaw: higher raw = wetter); new `i2c_address`
+    # and `i2c_bus` keys land. validate_config() and
+    # tests/test_config.py move in lockstep that turn. Until then
+    # the analog-style keys stay so SoilLogger keeps booting.
     #
     # Raw ADC range on the RP2040 is 0-65535 (read_u16) but the plan
     # speaks in the conventional 0-1023 10-bit space. SoilLogger scales

@@ -66,7 +66,7 @@
   XT60s are tracked under "External power connectors and silkscreen
   polish" in the PCB layout section.
 
-### [ ] 5 V VSYS bulk cap voltage rating upgrade
+### [x] 5 V VSYS bulk cap voltage rating upgrade
 
 **Filed:** 2026-05-23 ·
 [chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
@@ -83,7 +83,7 @@
   queued (220 µF / 25 V on 12 V = 48 % derating, 470 µF / 35 V on
   19.5 V = 56 % derating). Both fine as specified.
 
-### [ ] F1 fuse — 10 A 5×20 mm slow-blow (parallel-heater ready)
+### [x] F1 fuse — 10 A 5×20 mm slow-blow (parallel-heater ready)
 
 **Filed:** 2026-05-23 · supersedes earlier "5 A fast-blow" placeholder ·
 [chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
@@ -101,7 +101,7 @@
 - **Position:** upstream of D5 per "F1 fuse position" entry above.
   Sequence: `19V_IN → F1 → D5 → bulk cap → HE_MOSFET drain`.
 
-### [ ] MCP6002 op-amp → LM358N (DIP-8) + grow-light gain retune
+### [x] MCP6002 op-amp → LM358N (DIP-8) + grow-light gain retune
 
 **Filed:** 2026-05-23 · updated 2026-05-24 (chose DIP-8 LM358N to use
 the part already in stock) ·
@@ -133,7 +133,7 @@ the part already in stock) ·
   DAC 0 → 0xFFF, measure GL_DIM+ output, confirm monotonic + clean
   ramp.
 
-### [ ] Senseair S8 UART RX level protection
+### [x] Senseair S8 UART RX level protection
 
 **Filed:** 2026-05-23 ·
 [chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review) ·
@@ -152,7 +152,7 @@ the part already in stock) ·
 - R9 (Pico TX → S8 RX, 100 Ω) **unchanged.** 3.3 V drive easily
   crosses the S8 input threshold (~V+ × 0.3 = 1.5 V).
 
-### [ ] Bulk capacitance on 12 V and 19.5 V rails
+### [x] Bulk capacitance on 12 V and 19.5 V rails
 
 **Filed:** 2026-05-23 ·
 [chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review) ·
@@ -174,7 +174,7 @@ the part already in stock) ·
   shunts MHz switching-edge noise to GND. Standard pairing — covers
   the full frequency band.
 
-### [ ] TVS clamp diodes on all three power inputs
+### [x] TVS clamp diodes on all three power inputs
 
 **Filed:** 2026-05-23 ·
 [chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review) ·
@@ -189,7 +189,7 @@ the part already in stock) ·
 - **Position in input chain:** netlist order is `input connector →
   series Schottky → TVS → bulk cap → load`. ~$0.15 each.
 
-### [ ] Schottky plan — single +rail diode per input; **delete D2 / D3 / D6** (GND-return diodes)
+### [x] Schottky plan — single +rail diode per input; **delete D2 / D3 / D6** (GND-return diodes)
 
 **Filed:** 2026-05-23 · updated 2026-05-24 (topology corrected: drop
 GND-return diodes) ·
@@ -247,7 +247,7 @@ GND-return diodes) ·
   cannot be sourced: SS14 (SMA, 1 A), 1N5817 (DO-41, 1 A), MBRS340
   (SMA, 3 A) — V_f benefit holds in all cases.
 
-### [ ] F1 fuse position — upstream of D5
+### [x] F1 fuse position — upstream of D5
 
 **Filed:** 2026-05-23 ·
 [chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
@@ -260,7 +260,7 @@ GND-return diodes) ·
   for the chosen part. Same fuse covers both single-heater and
   parallel-heater operation.
 
-### [ ] Heater channel count — single-MOSFET, parallel heaters, PWM-later
+### [x] Heater channel count — single-MOSFET, parallel heaters, PWM-later
 
 **Filed:** 2026-05-23 ·
 [chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
@@ -291,7 +291,7 @@ GND-return diodes) ·
   the operator runs in tandem anyway. Revisit if a use case for
   selective control ever appears.
 
-### [ ] R3 corrected to 10 kΩ pull-down on GP14 buzzer line
+### [x] R3 corrected to 10 kΩ pull-down on GP14 buzzer line
 
 **Filed:** 2026-05-23 ·
 [chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
@@ -305,7 +305,7 @@ GND-return diodes) ·
 - Likely a schematic transcription error (R1, R2, R7 are 10 kΩ on
   identical footprint) — verify in EasyEDA before re-fabbing.
 
-### [ ] I²C pull-ups R1/R2 → 2.2 kΩ for 400 kHz fast-mode rise time
+### [x] I²C pull-ups R1/R2 → 2.2 kΩ for 400 kHz fast-mode rise time
 
 **Filed:** 2026-05-23 ·
 [chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review) ·

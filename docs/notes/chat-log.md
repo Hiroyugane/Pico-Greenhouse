@@ -5,6 +5,42 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-26 · brownout supervisor part + wiring clarification
+
+### spec · MAX809 suffix corrected to T (3.08 V), plus 1 kΩ series resistor to RUN
+
+User asked how the brownout supervisor in the
+[next-revision.md "Brownout supervisor on Pico RUN line" entry](../hardware/next-revision.md#--brownout-supervisor-on-pico-run-line)
+should be wired to the Pico's RUN pin. Walking the SOT-23-3 pinout
+surfaced two issues in the originally-filed entry:
+
+- **Part suffix wrong.** The entry listed **MAX809LEUR+T**. The `L`
+  suffix in the MAX809 family is the **4.63 V** typical reset
+  threshold — intended for 5 V rails. To trip at ~3.0 V on the 3V3
+  rail (which the entry called out as the target), the correct
+  suffix is **T** (3.08 V typ): **MAX809TEUR+T**. Adjacent suffixes
+  for future reference: S = 2.93 V, R = 2.63 V, M = 4.38 V,
+  L = 4.63 V.
+- **Push-pull output conflicts with the reset button on RUN.**
+  MAX809T (and the alternative TPS3839K33) drive /RESET with a
+  push-pull stage. The
+  [reset button queued under "Button connector rework"](../hardware/next-revision.md#--button-connector-rework--menu_btn-debounced-reset_btn-direct)
+  wires RUN directly to GND. Without mitigation, pressing the reset
+  button while the supervisor holds RUN high shorts the
+  supervisor's high-side transistor through the button to GND.
+  Resolution: insert a **1 kΩ series resistor between the
+  supervisor's pin 2 (/RESET) and the RUN node**. Limits short-
+  circuit current during a press to ~3.3 mA while still letting
+  the supervisor pull RUN below logic-low against the Pico's
+  internal ~50 kΩ pull-up (divider = 1 k / 51 k ≈ 0.06 V).
+  Alternative considered and recorded as the fallback in the
+  entry: swap to an open-drain supervisor (e.g. MAX6328) so
+  supervisor + button wire-OR onto RUN without a series resistor.
+
+Final wiring captured in the next-revision entry: MAX809T pin 1
+(GND) → board GND; pin 3 (VCC) → 3V3 with 100 nF decoupling; pin 2
+(/RESET) → 1 kΩ → RUN (Pico pin 30).
+
 ## 2026-05-24 · next-revision.md consistency pass
 
 ### decision · Schematic section verified to contain only schematic-stage concerns

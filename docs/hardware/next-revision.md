@@ -325,15 +325,35 @@ GND-return diodes) ·
 
 ### [ ] Brownout supervisor on Pico RUN line
 
-**Filed:** 2026-05-23 ·
-[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
+**Filed:** 2026-05-23 · updated 2026-05-26 (part-number suffix + button-conflict resistor) ·
+[chat-log: original entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review) ·
+[chat-log: 2026-05-26 wiring clarification](../notes/chat-log.md#2026-05-26--brownout-supervisor-part--wiring-clarification)
 
 - RP2040 internal POR threshold is ~2.0 V. A slow rail droop that
   doesn't cross 2.0 V can latch the MCU in undefined state — won't
   reset, won't recover.
-- Add a **MAX809LEUR+T** (or **TPS3839K33**) on RUN (Pico pin 30).
-  ~3.0 V reset threshold, ~$0.30, SOT-23-3.
-- Effect: rail droop below 3.0 V forces a clean reset; firmware
+- Add a **MAX809TEUR+T** (or **TPS3839K33**) on RUN (Pico pin 30).
+  ~3.08 V reset threshold (MAX809**T** suffix — 3.08 V typ), ~$0.30,
+  SOT-23-3. Earlier draft listed MAX809**L**EUR+T, which is the
+  4.63 V variant intended for 5 V rails — wrong threshold for the
+  3.3 V rail this monitors.
+- **Wiring (SOT-23-3 pinout):** pin 1 (GND) → board GND; pin 3
+  (VCC) → 3V3 rail; pin 2 (/RESET) → **1 kΩ series resistor** →
+  Pico RUN (pin 30). 100 nF ceramic between pin 3 and pin 1, close
+  to the package.
+- **Why the 1 kΩ series resistor:** MAX809T (and TPS3839K33) have
+  **push-pull** /RESET outputs. The reset button queued under
+  "Button connector rework" also wires RUN to GND. Without a series
+  resistor, pressing the button while the supervisor drives high
+  shorts the supervisor's high-side transistor to GND. The 1 kΩ
+  limits the short-circuit current to ~3.3 mA during a press,
+  while still letting the supervisor pull RUN below the Pico's
+  logic-low threshold against the internal ~50 kΩ pull-up
+  (divider = 1 k / 51 k ≈ 0.06 V at RUN). Alternative if the
+  series R is unwelcome: swap to an open-drain supervisor
+  (e.g. MAX6328) and let supervisor + button wire-OR directly
+  onto RUN.
+- Effect: rail droop below 3.08 V forces a clean reset; firmware
   watchdog catches the rest. Improves stability across the
   weeks-of-uptime envelope.
 

@@ -299,8 +299,8 @@ DEVICE_CONFIG = {
         "interval_s": 30,  # Poll cadence (seconds)
         "warmup_s": 30,  # Sensor warm-up window where read failures don't escalate
         "max_retries": 3,  # UART read retries per poll
-        "override_ppm_on": 1000,  # Trip threshold (ppm)
-        "override_ppm_off": 800,  # Release threshold (ppm), must be < on
+        "override_ppm_on": 2500,  # Trip threshold (ppm)
+        "override_ppm_off": 2200,  # Release threshold (ppm), must be < on
         "override_fan": "exhaust",  # Which fans-dict role to force-on
         "sensor_type": "co2",  # Folder + filename prefix under paths.sensor_root
     },

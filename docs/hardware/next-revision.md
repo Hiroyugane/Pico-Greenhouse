@@ -19,6 +19,95 @@
 
 ## Schematic — nets, components, BOM
 
+### [ ] Hydroponics monitoring — 2nd I²C bus, DS18B20, pH/EC, wet-system relays
+
+**Filed:** 2026-05-31 ·
+[chat-log entry](../notes/chat-log.md#2026-05-31--hydroponics-monitoring-expansion-dwc--hpa-aeroponics) ·
+[memory: project-hydro-automation-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_hydro_automation_revision.md)
+
+Future-proofs the board for an automated **DWC reservoir now** and
+**HPA aeroponics later**. Scope is deliberately small: closed-loop on
+**water temperature only** (manual top-off, no chiller), **pH/EC
+monitor-only** (no dosing), all wet-system pumps/heater on **230 V
+relays**. No new MCU, no GPIO expander — rides repurposed pins and the
+spare PCA9685 channels already on the board.
+
+**1 — Second I²C bus (I²C1) on GP26/GP27.** The as-built 2026-05-31
+board has no unrouted GPIO; RP2040 maps I²C1 only to (GP18,GP19) or
+(GP26,GP27) here. Use **GP26 = I²C1 SDA, GP27 = I²C1 SCL** (REL_CON1
+pins 7 & 8 — the two never-loaded "reserved" relays).
+
+- **Delete R17 (GP26→+5 V) and R16 (GP27→+5 V).** These are the relay
+  inactive-state pull-ups to +5 V; left in place, I²C idle would put
+  5 V on the Pico pins → abs-max violation.
+- **Add two I²C pull-ups to 3V3** on GP26 (SDA) and GP27 (SCL),
+  2.2 kΩ (mirror R11/R13 on I²C0); 4.7 kΩ acceptable for the shorter
+  in-case I²C1 run.
+- **Break GP26/GP27 out to a dedicated I²C1 connector** (RJ12 or
+  4-pin JST: `3V3 / GND / SDA / SCL`), not REL_CON1 pins 7-8. REL_CON1
+  drops to 5 functional channels (GP18,19,20,21,22).
+- Firmware: `machine.I2C(1, sda=Pin(26), scl=Pin(27), freq=400000)`.
+
+**2 — DS18B20 water-temperature 1-Wire bus on GP2.** Repurpose
+GP2_CON (currently `GND / +5V / GP2`).
+
+- **Change GP2_CON power pin from +5 V to +3V3** so the open-drain
+  1-Wire data line never exceeds 3.3 V (DS18B20 runs 3.0–5.5 V).
+- **Add 4.7 kΩ pull-up from GP2 to 3V3.**
+- One bus carries **multiple DS18B20** (reservoir + root-zone probes),
+  each addressed by its 64-bit ROM. Foundational — **both pH and EC
+  need water temp for compensation.**
+
+**3 — pH/EC monitoring on I²C1 (Atlas EZO + isolators).**
+
+- **Atlas EZO-pH** (default 0x63) and **EZO-EC** (default 0x64) in
+  I²C mode, off-board modules. ~50 € each (DE).
+- **One Atlas inline voltage isolator per probe** (galvanic DC/DC +
+  digital isolator) — mandatory to break the reservoir ground loop;
+  un-isolated twin probes in one tank interfere. ~25 € each. Fallback
+  if budget forces it: isolate pH only, accept some EC coupling
+  (documented in chat-log, not recommended).
+- PCB only needs the I²C1 connector + 3V3/GND from item 1; the EZO
+  modules + isolators live in the dry enclosure above the reservoir.
+- New silkscreen address rows `(0x63)` pH, `(0x64)` EC under the
+  [I²C address-map entry](#--ic-address-map-on-silkscreen) — note
+  these are on **I²C1**, a separate bus from the 0x36/0x3C/0x40/0x44/
+  0x60/0x68 group on I²C0.
+
+**4 — Wet-system actuators on spare mains relays (no new GPIO).**
+
+- **Air pump** (DWC dissolved-O₂), **reservoir heater** (230 V
+  aquarium type), and **HPA pump** (230 V, self-regulating via its own
+  pressure switch + accumulator) → spare relay channels GP18 / GP19 /
+  GP21 / GP22 on the mains-rated REL_CON1 (see
+  [Relay connector cleanup](#x-relay-connector-cleanup--pull-ups-gnd-fix-mains-rated-header)).
+- **No new PCA9685 + MOSFET DC stages required.** PWM5–15 stay in
+  reserve; an HPA burst solenoid is added there (12/24 V DC →
+  PCA9685 ch + IRLZ44N + UF4007 flyback) only if true HPA mist-burst
+  timing is later wanted. A 230 V burst solenoid would instead take a
+  relay channel.
+- **No chiller** (impractical at 20 L); water temp is monitor + alarm
+  via the existing buzzer/LED surface plus the relay heater.
+
+**Config / firmware (queued, lands with the new PCB):**
+
+- `DEVICE_CONFIG["pins"]`: add `i2c1_sda: 26`, `i2c1_scl: 27`,
+  `onewire_water: 2`; document GP26/GP27 leaving the relay block.
+- New sections `water_temp_logger` (1-Wire, per-probe ROM map),
+  `ph_logger` (`i2c_bus: 1`, `i2c_address: 0x63`),
+  `ec_logger` (`i2c_bus: 1`, `i2c_address: 0x64`), each with
+  `validate_config()` rows + `tests/test_config.py` rows per
+  [configurability.md](../../../.claude/rules/ecc/common/configurability.md).
+- New loggers `lib/water_temp_logger.py`, `lib/ph_logger.py`,
+  `lib/ec_logger.py`; I²C1 + 1-Wire init in `hardware_factory`;
+  CSV trees under `sensor_root` (`water_temp`, `ph`, `ec`).
+- Accepted risk: HPA mist timing lives in firmware only; WDT reset
+  drops mist during boot. User accepts (>10 d uptime, daily checks) —
+  no hardware dead-man fallback fitted.
+
+**Verification:** post-fab checklist in
+[hw-test-log "Hydroponics monitoring bring-up"](../test/hw-test-log.md).
+
 ### [x] MCP1416 gate driver for HE_MOSFET (IRLZ44N)
 
 **Filed:** 2026-05-23 ·
@@ -727,6 +816,30 @@ catalogued).
 
 ## PCB layout — footprints, routing, silkscreen, test points
 
+### [ ] Hydroponics I²C1 + 1-Wire connectors and pull-up placement
+
+**Filed:** 2026-05-31 ·
+[chat-log entry](../notes/chat-log.md#2026-05-31--hydroponics-monitoring-expansion-dwc--hpa-aeroponics)
+
+Layout side of the
+[Hydroponics monitoring Schematic entry](#--hydroponics-monitoring--2nd-ic-bus-ds18b20-phec-wet-system-relays).
+
+- **New I²C1 connector** (RJ12 or 4-pin JST `3V3/GND/SDA/SCL`) for the
+  pH/EC isolator pair. Place the two new GP26/GP27 → 3V3 pull-ups
+  next to it; keep the SDA/SCL pair short and equal-length.
+- **Remove R16/R17 footprints** (former GP26/GP27 relay pull-ups to
+  +5 V) or repurpose them as the new 3V3 pull-ups if the net can be
+  re-pointed cleanly.
+- **New 1-Wire connector** for DS18B20(s) (or reuse GP2_CON with its
+  power pin re-pointed +5 V → +3V3); 4.7 kΩ GP2→3V3 pull-up beside it.
+- **Silkscreen:** label the new jacks `I2C1 (pH/EC)` and `WATER TEMP
+  (1-Wire)`; mark the I²C1 jack as a **separate bus** from the I²C0
+  RJ12 drops so a probe never gets plugged into the wrong jack. Add
+  `(0x63)` / `(0x64)` near the I²C1 connector.
+- REL_CON1 silkscreen: pins 7-8 are no longer relay outputs — relabel
+  or depopulate so the harness doesn't drive a dead pin into the
+  I²C1 net.
+
 ### [ ] MCP6002 → LM358N — DIP-8 socket footprint
 
 **Filed:** 2026-05-24 ·
@@ -819,13 +932,20 @@ catalogued).
 [chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review) ·
 [memory: project-i2c-bus-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_i2c_bus_revision.md)
 
-- Print the 7-bit hex address next to each I²C device's footprint:
+- Print the 7-bit hex address next to each I²C device's footprint.
+  **I²C0** (GP0/GP1):
   - SHT31 → `(0x44)`
   - DS3231 RTC → `(0x68)`
   - MCP4725 DAC → `(0x60)`
   - SSD1306 OLED → `(0x3C)`
   - PCA9685 (future) → `(0x40)`
   - Adafruit STEMMA soil sensor #4026 (future) → `(0x36)`
+  - **I²C1** (GP26/GP27, future hydro bus — see
+    [Hydroponics monitoring entry](#--hydroponics-monitoring--2nd-ic-bus-ds18b20-phec-wet-system-relays)):
+    - Atlas EZO-pH → `(0x63)`
+    - Atlas EZO-EC → `(0x64)`
+  - Mark the I²C1 group as a **separate bus** so a 0x63/0x64 address
+    isn't mistaken for an I²C0 conflict.
 - **Rename silkscreen label `I2C con_1` → `SHT31`** on the existing
   RJ12 port — it carries exactly one sensor, so the device name is
   more informative than the generic bus label. (Connector swap and
@@ -940,6 +1060,36 @@ catalogued).
 > belong here.
 
 ## Wiring / harness
+
+### [ ] Hydroponics wet-zone wiring — isolation, RCD, drip loops
+
+**Filed:** 2026-05-31 ·
+[chat-log entry](../notes/chat-log.md#2026-05-31--hydroponics-monitoring-expansion-dwc--hpa-aeroponics)
+
+Harness side of the
+[Hydroponics monitoring Schematic entry](#--hydroponics-monitoring--2nd-ic-bus-ds18b20-phec-wet-system-relays).
+The reservoir is the most hazardous addition to the system (mains
+pumps/heater in/near conductive water).
+
+- **30 mA RCD / FI-Schutzschalter on the mains feed** to the air
+  pump, reservoir heater, and HPA pump. Verify the wall socket's
+  circuit already has one (German consumer units usually do); if not
+  confirmable, fit a plug-in PRCD adapter. This outranks any
+  board-level protection — single most important life-safety item.
+- **Galvanic isolation at the probes:** Atlas inline voltage isolator
+  per EZO (pH, EC), housed dry. Single-point ground; no other grounded
+  metal in the water (plastic-bodied submersibles only).
+- **Drip loops** on every cable entering the reservoir lid (probe
+  cables, pump cords): route so the cable dips below the entry and
+  forms a U, so water tracks off the bottom of the loop, not into the
+  connector or enclosure.
+- **Probe connectors:** BNC bulkhead for pH/EC at the dry enclosure
+  wall; DS18B20 leads sealed where they pass into the humid zone.
+- Pico case + isolators mounted **above** the reservoir at all times
+  (confirmed) — gravity keeps condensation/spray off the electronics.
+- HPA-only (reserved): accumulator + HP pump pressure-switch wiring is
+  self-contained 230 V; if a DC burst solenoid is later added, run its
+  flyback (UF4007) at the solenoid and a local bulk cap at its MOSFET.
 
 ### [ ] Sensor cable & external connector moisture protection
 

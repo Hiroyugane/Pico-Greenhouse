@@ -5,6 +5,77 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-31 · Hydroponics monitoring bring-up (I²C1 + DS18B20 + pH/EC)
+
+**Branch:** `main`
+**Why hardware-only:** the second I²C bus on repurposed GP26/GP27,
+the 1-Wire water-temp bus, and the Atlas EZO probe chemistry can't
+be exercised by `pytest` — they need the rebuilt PCB (R16/R17
+removed, 3V3 pull-ups added, I²C1 + 1-Wire jacks), the physical
+probes, and calibration solutions. Background in
+[chat-log.md](../notes/chat-log.md#2026-05-31--hydroponics-monitoring-expansion-dwc--hpa-aeroponics)
+and the
+[next-revision Schematic entry](../hardware/next-revision.md#--hydroponics-monitoring--2nd-ic-bus-ds18b20-phec-wet-system-relays).
+
+**Pre-flight:**
+
+1. New PCB in hand with **R16/R17 deleted** and **GP26/GP27 pull-ups
+   to 3V3** fitted. Confirm with a meter: GP26/GP27 idle at ~3.3 V,
+   **not** 5 V, before connecting any probe.
+2. GP2_CON power pin re-pointed **+5 V → +3V3**; 4.7 kΩ GP2→3V3
+   fitted.
+3. Firmware with I²C1 init + `water_temp_logger` / `ph_logger` /
+   `ec_logger` shipped (lands with the PCB). If not, stop.
+4. Atlas EZO-pH + EZO-EC each behind an inline voltage isolator;
+   pH 4.0/7.0/10.0 and EC 1413 µS/12880 µS calibration solutions on
+   hand.
+5. DS18B20 probe(s) wired to the 1-Wire jack. Pico powered cold,
+   Thonny REPL connected.
+
+### Pin-safety gate (do first)
+
+- [ ] With probes **unplugged**, measure GP26 and GP27 to GND: both
+      ~3.3 V (pull-up to 3V3 confirmed). A 5 V reading means R16/R17
+      were not removed — **do not proceed**, the bus will damage the
+      Pico.
+
+### I²C1 bus discovery
+
+- [ ] `machine.I2C(1, sda=Pin(26), scl=Pin(27), freq=400000).scan()`
+      returns the EZO addresses (0x63 pH, 0x64 EC). Confirm I²C0
+      `scan()` is unchanged (no cross-talk between buses).
+
+### DS18B20 water temperature
+
+- [ ] 1-Wire enumeration returns one ROM per fitted probe.
+- [ ] Reservoir probe reads within ±1 °C of a reference thermometer
+      in the same water. Record: __________ °C.
+- [ ] Probe ROM → role map recorded in `DEVICE_CONFIG`
+      (`water_temp_logger`).
+
+### pH / EC (monitor-only)
+
+- [ ] EZO-pH reads ~7.0 in pH 7.0 buffer after calibration; ~4.0 and
+      ~10.0 in the other buffers. Record: __________.
+- [ ] EZO-EC reads ~1413 µS and ~12880 µS in the standards. Record:
+      __________.
+- [ ] Temperature compensation: feed the DS18B20 reading to both EZO
+      circuits; readings shift correctly with water temp.
+- [ ] **Ground-loop check:** with the air pump + heater running and
+      both probes in the reservoir, pH/EC readings stay stable
+      (≤0.05 pH, ≤2 % EC jitter). Instability ⇒ isolator missing or
+      a second grounded object in the water.
+
+### Mains safety (verify before unattended run)
+
+- [ ] Air pump / heater / HPA-pump circuit trips on the RCD test
+      button (or PRCD adapter fitted and tested).
+- [ ] Drip loops present on all reservoir-entry cables.
+
+### Notes (post-test)
+
+> Fill in here. Add `[!]` items with failure mode and a short repro.
+
 ## 2026-05-26 · Adafruit STEMMA #4026 soil sensor bring-up
 
 **Branch:** `main`

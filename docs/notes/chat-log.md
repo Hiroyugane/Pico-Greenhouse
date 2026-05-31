@@ -5,6 +5,25 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-31 · Fan logging demote + CO₂ override retune
+
+### decision · scheduled fan transitions → DEBUG; CO₂ override 1000→2500 ppm
+
+Acting on two findings from the [12-day analysis](2026-05-31-sd-log-analysis.md).
+(1) `growroom_walls SCHEDULE ON/OFF` was 94 % of `system.log`; demoted
+both calls in [lib/relay.py](../../lib/relay.py) from `.info()` to
+`.debug()` (console-only by default, `debug_to_file=False`), so they no
+longer hit the SD card. THERMOSTAT and EXTERNAL OVERRIDE transitions stay
+at INFO. A redundant structured `debug("schedule state change", …)` line
+already sat directly above, so no signal is lost.
+(2) The CO₂→exhaust override never tripped in steady state — but the user
+clarified the rig was **not in production**: no colonization/fruiting, and
+the SHT31/S8 sensors sat **outside** the chamber, so the 1471 ppm floor was
+ambient drift, not a capacity failure. Bumped `override_ppm_on` 1000→2500
+and `override_ppm_off` 800→2200 in [config.py](../../config.py) as a more
+meaningful placeholder until a real crop phase picks the setpoint. Validator
+unchanged (still asserts on > off ≥ 0); 1037 tests green, coverage 91.6 %.
+
 ## 2026-05-31 · 12-day SD log & sensor analysis
 
 ### note · first field-run analysis of the >10 d SD snapshot

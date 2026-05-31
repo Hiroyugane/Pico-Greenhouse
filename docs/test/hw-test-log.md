@@ -5,6 +5,44 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-31 · Fan schedule-log demote + CO₂ override threshold retune
+
+**Branch:** `main`
+**Why hardware-only:** the SD `system.log` content and the CO₂→exhaust
+override trip point can only be confirmed on the running Pico with the
+SHT31/S8 in place; `pytest` covers the log-level routing and config
+validation but not the on-card result or the real ventilation response.
+Background in
+[chat-log.md](../notes/chat-log.md#2026-05-31--fan-logging-demote--co2-override-retune)
+and the
+[12-day analysis](../notes/2026-05-31-sd-log-analysis.md).
+
+**Pre-flight:** firmware with demoted fan logging + `override_ppm_on=2500`
+flashed; `event_logger.debug_to_file = False` (default); sensors mounted
+in their final in-chamber positions (the 12-day run had them outside).
+
+### Logging volume
+
+- [ ] After a few hours, `sd/logs/system.log` shows **no**
+      `growroom_walls SCHEDULE ON/OFF` lines (they are now DEBUG,
+      console-only). Thermostat/override transitions still appear at INFO.
+- [ ] Temporarily set `debug_enabled = True` and confirm SCHEDULE lines
+      reappear on the Thonny console (proves the message wasn't deleted,
+      just demoted). Revert when done.
+
+### CO₂ override at new threshold
+
+- [ ] With CO₂ held below 2200 ppm, exhaust follows its normal schedule
+      (no override). Raise CO₂ above 2500 ppm → `exhaust EXTERNAL OVERRIDE
+      ON` logged and exhaust forces on.
+- [ ] Drop CO₂ between 2200–2500 → override holds (hysteresis). Below
+      2200 → `EXTERNAL OVERRIDE RELEASE`, exhaust returns to schedule.
+
+### Notes (post-test)
+
+> Fill in here. The 2500/2200 ppm pair is a placeholder for a
+> not-yet-in-production setup; revisit once a real crop phase is chosen.
+
 ## 2026-05-31 · HPA mist-solenoid driver bring-up (PCA9685 ch5 + 12 V valve connector)
 
 **Branch:** `main`

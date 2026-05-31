@@ -5,6 +5,59 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-06-01 · PCB shrink review of the 2026-06-01 EasyEDA export
+
+### issue · LM358 (U24) negative-supply pin floats — net `R30_2` never reaches GND
+
+In the 2026-06-01 netlist the LM358 footprint swap (PDIP-8 → SOIC-8,
+`LM358DR2G` C7950, U24) left pin 4 (V−/GND), pin 3 (IN1+), the bottom of
+gain resistor R30, and bypass cap C12-1 all on an isolated net **`R30_2`**
+that has **no tie to the board GND net**. Pin 4 is the op-amp's negative
+supply and MUST be GND; R30's lower end is the non-inverting gain
+reference and must be GND; C12 is the +12 V supply bypass and its return
+must be GND. As drawn the grow-light dimmer won't work and the floating V−
+risks erratic/latch behaviour. **Fix:** relabel net `R30_2` to `GND` (merge
+U24-3, U24-4, R30-2, C12-1 into GND). Almost certainly an accidental
+net-name split during the symbol swap — every other LM358 connection is
+correct (DAC→IN2+ pin5, R41 10 k feedback + R30 4.7 k → gain 3.13,
+OUT2→GL_DIM+/GL_CON, VCC pin8→+12 V).
+
+### note · everything else in the shrink pass is integrated correctly
+
+Verified against the netlist: PCA9685 module → bare `PCA9685PW` TSSOP-28
+(U1) is wired right — A0–A5→GND (address 0x40, matches `config.py`),
+/OE→GND (outputs enabled), EXTCLK→GND (internal osc), VDD→+5 V, decoupling
+C16 100 nF + C15 100 µF, all 16 PWM + SCL(26)/SDA(27) correct. Fan/solenoid
+MOSFETs → AO3400A SOT-23 (Q1–Q6) low-side, 150 Ω gate series + 10 k
+pulldown + US1J flyback. Heater stays IRLZ44N TO-220 (T1) driven by MCP1416
+SOT-23-5 (U13) from GP3. All resistors 0603/0805, 100 nF 0603, LEDs 0805,
+Schottkys SMD (MBRD1045 TO-252, SS14/SS54 SMA). The big-win swaps all
+landed.
+
+### note · further area + manual-labour reductions still on the table
+
+(1) **8× PPTC resettable fuses (U7/U8/U10/U11/U12/U15/U16/U17)** are THT
+radial `250V.3APPTC` on sensor-connector lines — move to SMD PPTC
+(1206/1812) and downsize from 3 A (sensor lines draw <0.5 A); removes 8
+hand-solder points and reclaims the radial footprints. (2) **100 µF
+electrolytics C3/C15** THT → SMD (1210 MLCC or SMD alu). (3) **1000 µF ×3
+(C4/C7/C10)** 12.5 mm⌀ × 30 mm dominate remaining volume — keep for rail
+bulk but note Z-height; confirm all three rails need 1000 µF.
+
+### note · BOM consolidation / feeder-fee cleanup
+
+(1) Same physical JST part under multiple `Name` rows: `B3B-XH-A-BK`
+(C493416) appears as "B3B-XH-A-BK"/"JST-3P"/"GP2 Reserved" (5 pcs);
+`B4B-XH-A-R` (C595709) as "I2C0 Free Connector"/"I2C0 Free 12V
+Connector"/"JST-4P" (4 pcs). Consolidate names for assembly clarity (no
+feeder saving — JLC dedupes by LCSC #). (2) `FAN_CHA1` BOM Name is
+mislabelled "I2C0 Free Connector". (3) **US1J flyback (U18–U23) is an
+Extended part** — a 40 V Basic Schottky (SS34, or the SS14 already in BOM)
+is electrically better for 12 V flyback and drops one Extended feeder
+(~$3) while merging into an existing Basic diode line. (4) Confirm AO3400A
+SOT-23 thermal headroom for the HPA solenoid on Q1 (prior plan called for
+IRLZ44N there); fans are fine.
+
 ## 2026-05-31 · RJ12 → JST-XH swap rejected (PCB shrink effort)
 
 ### decision · keep RJ12 on all 9 external ports

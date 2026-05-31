@@ -5,6 +5,100 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-31 · Hydroponics monitoring expansion (DWC + HPA aeroponics)
+
+### decision · future-proof the board for DWC now and HPA aeroponics later, monitor-only chemistry, no new MCU
+
+User asked what hardware the next PCB needs to support a more
+automated DWC reservoir and/or HPA aeroponics. After a clarifying
+round the scope settled deliberately small:
+
+- **Both systems future-proofed on one board.** DWC (single ~20 L
+  reservoir, 2–4 plants) is the near-term target; HPA aeroponics is
+  the reserved-for-later path. The board should drive DWC now and
+  accept HPA with a harness/connector change, not a respin.
+- **Closed-loop automation: water temperature only.** Level top-off
+  is **manual** (single small reservoir), which deletes the entire
+  float-switch + solenoid + top-off-pump loop that an earlier draft
+  carried. Water heating is a 230 V aquarium heater on a relay (or a
+  self-thermostatting heater needing no MCU pin at all). **No
+  chiller** — for 20 L it's impractical (compressor/Peltier both dump
+  heat to room air, 150–300 €, oversized); mitigate warm spells with
+  an insulated opaque reservoir + aeration, monitor-and-alarm on high
+  water temp via the existing buzzer/LED surface.
+- **pH + EC are monitor-only (no dosing).** Atlas Scientific EZO-pH
+  (≈0x63) and EZO-EC (≈0x64) in I²C mode, ~50 € each in DE. No
+  dosing pumps → no safety-critical chemical actuators, much simpler
+  and safer build. Drift only mis-reports, never mis-doses.
+- **Second I²C bus approved** to keep the wet-probe traffic off the
+  RTC/OLED/DAC bus.
+
+Why these specific hardware choices:
+
+- **Ground loops (the real DWC/RDWC failure mode).** Multiple
+  grounded probes + pumps in one conductive reservoir form
+  circulating currents that land on the pH/EC mV signal. Mitigation:
+  **galvanic isolation per probe** — an Atlas inline voltage isolator
+  (isolated DC/DC + digital isolator) between each EZO and the bus,
+  plus single-point grounding and plastic-bodied submersibles. User
+  flagged isolators at 25 € + shipping as pricey and asked for a
+  cheaper alternative; the EZO isolator (or an isolated Tentacle/
+  Whitebox-style carrier) remains the correct part — un-isolated
+  twin probes in one tank interfere per Atlas's own docs. Cheaper-but-
+  acceptable fallback if budget forces it: keep **one** isolated
+  probe (pH, the more drift-sensitive) and run EC through the EC
+  circuit's own AC-excitation isolation, accepting some coupling.
+  Documented as a fallback, not the recommendation.
+- **Water temp = DS18B20 on 1-Wire.** One pin (GP2), one 4.7 kΩ
+  pull-up, multiple probes (reservoir + root zone) share the bus via
+  unique 64-bit ROMs. Foundational: **both pH and EC need it for
+  temperature compensation.**
+- **Watchdog vs. aeroponics.** HPA roots dry in minutes and the async
+  WDT resets the Pico (mist defaults off during boot/SD-retry). User
+  **accepts the risk** (>10 d uptime on current firmware, plant
+  checked daily), so the hardware dead-man's wetting fallback
+  (mechanical pressure switch / NC flood solenoid) is **not**
+  required. Recorded as accepted risk.
+- **HPA pump vs. solenoid clarified.** The HP pump *makes* pressure
+  (230 V, self-regulating via its own pressure switch + accumulator);
+  a separate fast solenoid *times* each mist burst. For LPA or simple
+  on/off HPA only the 230 V pump-on-a-relay is needed; a burst
+  solenoid is added only for true HPA timing (230 V → relay, or
+  12/24 V DC → a spare PCA9685 channel + IRLZ44N + flyback). Reserve,
+  don't build.
+
+GPIO reality check against the as-built 2026-05-31 board
+(`docs/hardware/EasyEDA-Files/`): fans already moved to PCA9685
+(PWM0–4 → T2–T6; PWM5–15 free), heater on T1 via MCP1416, GP15 is
+SD-DET, GP28/ADC still present. The Pico has **no unrouted GPIO
+left** — the second I²C bus must repurpose a relay pair. RP2040 maps
+I²C1 only to (GP18,GP19) or (GP26,GP27) on this board. Chose
+**GP26=I²C1 SDA / GP27=I²C1 SCL** (REL_CON1 pins 7 & 8, the two
+never-loaded "reserved" relays), leaving GP18/19/21/22 as four spare
+mains relays for air pump + heater + HPA pump. **Must-fix:** GP26/
+GP27 currently carry 10 kΩ pull-ups to **+5 V** (R17/R16); left in
+place I²C idle would put 5 V on the Pico pins (abs-max violation), so
+the next PCB **deletes R16/R17** and adds 2.2–4.7 kΩ pull-ups to
+**3V3**. DS18B20 1-Wire repurposes **GP2_CON** (power pin +5 V → +3V3,
+add 4.7 kΩ GP2→3V3).
+
+Mains-side safety (above any PCB concern): pump + heater on a
+**30 mA RCD / FI-Schutzschalter** (verify the socket's circuit, or
+use a plug-in PRCD); **drip loops** on every probe/pump cable into
+the reservoir lid; isolators + Pico case mounted dry **above** the
+reservoir (user confirmed the case sits above the water at all
+times).
+
+This turn lands documentation only — no schematic/firmware change.
+Queued into
+[next-revision.md](../hardware/next-revision.md) (Schematic + PCB
+layout + Wiring sections), an hw-test-log post-fab checklist, and a
+memory file `project_hydro_automation_revision.md`. Firmware
+(`lib/water_temp_logger.py`, `lib/ph_logger.py`, `lib/ec_logger.py`,
+I²C1 init in `hardware_factory`, `DEVICE_CONFIG` + validator +
+`tests/test_config.py`) is queued for the commit that lands with the
+new PCB.
+
 ## 2026-05-26 · Soil sensor swap → Adafruit STEMMA #4026 (I²C)
 
 ### decision · drop analog capacitive probe path; go I²C with Seesaw STEMMA

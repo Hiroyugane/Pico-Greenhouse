@@ -19,6 +19,95 @@
 
 ## Schematic — nets, components, BOM
 
+### [x] HPA mist-solenoid driver — PCA9685 ch5 + IRLZ44N, broken out as a plug-in 12 V valve connector
+
+**Filed:** 2026-05-31 ·
+[chat-log entry](../notes/chat-log.md#2026-05-31--hpa-mist-solenoid-pwm-breakout-connector) ·
+[memory: project-hpa-solenoid-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_hpa_solenoid_revision.md)
+
+Companion to the
+[Hydroponics monitoring entry](#--hydroponics-monitoring--2nd-ic-bus-ds18b20-phec-wet-system-relays).
+That entry left the HPA mist-burst solenoid as a vague "PWM5–15 reserve."
+This pins it down for the DWC/HPA prep: **the next PCB populates exactly
+one low-side DC stage for the solenoid and breaks it out as a dedicated
+plug-in valve connector**, so HPA aeroponics becomes a harness change,
+not a respin.
+
+**The whole PWM question reduces to one channel.** Every other
+wet-system load is already placed elsewhere: air pump / reservoir heater
+/ HPA pump are slow on/off 230 V loads → REL_CON; pH/EC → I²C1; water
+temp → 1-Wire GP2; water-level switch → GP22 input. The **mist solenoid
+is the only PWM-driven DC actuator in the DWC/HPA plan** (scope confirmed
+2026-05-31: solenoid only).
+
+**Why the solenoid (and only the solenoid) belongs on PWM, not a relay.**
+It is the one load that (a) cycles every few minutes 24/7 — relay
+contacts would wear out — and (b) benefits from **PWM current-hold**:
+100 % duty to pull the valve in, then a reduced hold duty (~30–50 %) that
+keeps it open at a fraction of the coil power and heat. A PCA9685 channel
++ MOSFET does both silently with no contact wear; a relay does neither.
+
+**Channel: PCA9685 ch5.** ch0–ch4 are the five fans
+([fan entry](#x-move-fans-from-2-relays-to-pca9685--irlz44n-mosfets) /
+[config.py fans](../../config.py#L173-L227)); ch5 is the first free
+channel. **ch6–ch15 stay unrouted and reserved** — the solenoid-only
+scope needs no other DC PWM load, so no other PWM port is broken out.
+
+**Per-stage circuit (mirror of the fan stages):**
+
+- PCA9685 ch5 → **150 Ω series gate resistor** → IRLZ44N gate.
+- **10 kΩ gate→source pull-down** so the valve is OFF during Pico /
+  PCA9685 boot and reset (the gate floats otherwise).
+- Solenoid coil between the **12 V rail** and the IRLZ44N **drain**
+  (low-side switch); source to GND.
+- **UF4007 flyback diode** antiparallel across the coil pads (cathode →
+  12 V / SOL+, anode → drain / SOL−) to clamp the inductive kick on
+  de-energise — mandatory for a solenoid coil.
+- IRLZ44N is the same SKU as the fan stages (massively overrated for a
+  ~1 A / ~10 W coil — deliberate: one MOSFET part across the board).
+
+**Connector — one device, one plug, valve plugs in to its spec:**
+
+- **Dedicated 2-pin keyed/locking connector** (e.g. JST-VH 2-pin or a
+  5.08 mm pluggable screw terminal — vibration- and wet-zone-tolerant).
+- Pins: **`SOL+` (12 V rail)** and **`SOL−` (IRLZ44N drain)**. The
+  flyback diode, gate resistor, and gate pull-down all live **on-board**;
+  the connector exposes only the switched power the valve needs.
+- **No raw PWM pin is broken out** — ch5 is consumed on-board driving the
+  gate. The operator plugs a 12 V solenoid straight into SOL+/SOL−.
+- **Keying matters:** SOL+ is always live at 12 V, so a reversed plug
+  forward-biases the flyback diode into a near-short. Use a polarised /
+  keyed shell.
+
+**Solenoid voltage — spec the valve at 12 V DC.** The board has a 12 V
+buck rail (9 A) with huge headroom for a ~1 A coil, and **no native 24 V
+rail**. If a 24 V solenoid is ever forced by part availability, the
+19.5 V heater rail is **marginal / under-voltage** for a 24 V coil (may
+not pull in reliably) — choose a 12 V valve and avoid the rail problem
+entirely.
+
+**Config / firmware (queued, lands with the new PCB):**
+
+- New `DEVICE_CONFIG["hpa_solenoid"]` section: `enabled` (default
+  `False`), `pca9685_ch: 5`, `pull_in_duty_pct` (100), `hold_duty_pct`
+  (~40), `pull_in_ms` (~150), plus mist-cycle timing (`burst_ms`,
+  `interval_s`) — each with a `validate_config()` row + a
+  `tests/test_config.py` row per
+  [configurability.md](../../../.claude/rules/ecc/common/configurability.md).
+  Validator: `pca9685_ch` int 0–15 and **distinct from every fan
+  `pca9685_ch`** (extend the duplicate-channel check at
+  [config.py:559-592](../../config.py#L559-L592) that today only spans
+  the `fans` dict), duties 0–100, `hold_duty_pct ≤ pull_in_duty_pct`.
+- New `lib/hpa_solenoid.py` drives the channel through the existing
+  `Pca9685FanOutput`-style `set_duty()` seam (pull-in → hold → off).
+  Monitor-only chemistry is unaffected; this is an actuator gated behind
+  `enabled` until HPA hardware is fitted.
+- Accepted risk unchanged: a WDT reset drops mist during boot; no
+  hardware dead-man fallback is fitted (see the hydro entry).
+
+**Verification:** post-fab checklist in
+[hw-test-log "HPA mist-solenoid driver bring-up"](../test/hw-test-log.md).
+
 ### [x] Hydroponics monitoring — 2nd I²C bus, DS18B20, pH/EC, wet-system relays
 
 **Filed:** 2026-05-31 ·
@@ -885,6 +974,28 @@ catalogued).
 
 
 ## PCB layout — footprints, routing, silkscreen, test points
+
+### [ ] HPA mist-solenoid connector + ch5 MOSFET stage placement
+
+**Filed:** 2026-05-31 ·
+[chat-log entry](../notes/chat-log.md#2026-05-31--hpa-mist-solenoid-pwm-breakout-connector)
+
+Layout side of the
+[HPA mist-solenoid driver Schematic entry](#--hpa-mist-solenoid-driver--pca9685-ch5--irlz44n-broken-out-as-a-plug-in-12-v-valve-connector).
+
+- Place the IRLZ44N ch5 stage in the existing PCA9685 + MOSFET fan-stage
+  cluster (same footprint family, same gate-resistor / pull-down
+  pattern); route the **12 V rail** and **GND** to it as for the fan
+  MOSFETs.
+- **New 2-pin keyed / locking valve connector** at the board edge,
+  silkscreen `HPA SOLENOID 12V` with a polarity mark (`+` on SOL+).
+  Keep SOL+/SOL− short to the MOSFET drain + 12 V pour; the UF4007
+  flyback sits across the two connector pads.
+- The coil is inductive and switched at PWM rate — keep the drain trace
+  away from the I²C / 1-Wire / analog nets, and return its GND toward the
+  12 V buck GND, not through the signal ground.
+- **ch6–ch15:** leave the PCA9685 outputs unrouted (no stage, no
+  connector) — reserved for a future respin if more DC loads ever appear.
 
 ### [ ] Hydroponics I²C1 + 1-Wire connectors and pull-up placement
 

@@ -48,6 +48,25 @@ pins 7 & 8 — the two never-loaded "reserved" relays).
   drops to 5 functional channels (GP18,19,20,21,22).
 - Firmware: `machine.I2C(1, sda=Pin(26), scl=Pin(27), freq=400000)`.
 
+**1b — Move the surviving relay pull-ups (R18–R22) from +5 V to 3V3.**
+R16/R17 above are deleted, but R18–R22 (GP18/19/20/21/22 relay lines)
+keep their 10 kΩ pull-ups — **re-reference them from +5 V to 3V3**.
+
+- **Why:** the pull-up only has to hold an active-low relay input at
+  its *inactive* HIGH during Pico boot/reset Hi-Z. The Pico's own
+  driven-high is 3.3 V, so a 3V3 pull-up matches the level the GPIO
+  drives anyway and is already proven to hold these relays off.
+- **5 V is electrically wrong here, even though it "works" today:**
+  during boot Hi-Z the GPIO ESD clamp shoulders ~0.14 mA at ~3.6–
+  3.8 V (the same slow pin-degradation mechanism fixed on the
+  [CO2 UART RX](#x-senseair-s8-uart-rx-level-protection)); when the
+  pin is driven HIGH (relay off) ~0.17 mA per line backfeeds 5 V into
+  the 3.3 V output stage. Lower urgency than the R16/R17 I²C fault,
+  but the correct and consistent choice with no downside.
+- **Keep R18–R22 = 10 kΩ; only the rail changes** (+5 V → 3V3). After
+  this, every Pico-facing pin on the relay header + GP2_CON is a clean
+  3.3 V domain.
+
 **2 — DS18B20 water-temperature 1-Wire bus on GP2.** Repurpose
 GP2_CON (currently `GND / +5V / GP2`).
 

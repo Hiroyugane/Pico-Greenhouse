@@ -53,12 +53,16 @@ and the
 - [ ] Probe ROM → role map recorded in `DEVICE_CONFIG`
       (`water_temp_logger`).
 
-### Water-level switch (monitor-only, GP28)
+### Water-level switch (monitor-only, GP22 / REL_CON pin 6)
 
-- [ ] With the float in the **dry/low** position, `Pin(28, Pin.IN)`
+- [ ] Float wired to **REL_CON pin 6 (GP22) + GND**, not a relay
+      module; **GP28/ADC2 left unconnected** (kept free).
+- [ ] With the float in the **dry/low** position, `Pin(22, Pin.IN)`
       reads the expected level; moving the float to the **wet/high**
       position flips it. Record which physical state closes the contact
       (NO vs NC): __________.
+- [ ] GP22's relay pull-up (moved to 3V3 per item 1b) holds the line
+      HIGH with the float open — confirm no extra 10 kΩ was needed.
 - [ ] `DEVICE_CONFIG["water_level_monitor"]` `active_low` / `alarm_on`
       set so the *intended* alarm condition (reservoir low) is the one
       that fires — verify by emptying/raising the float, not by trusting

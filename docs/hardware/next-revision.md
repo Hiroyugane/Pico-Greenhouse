@@ -98,7 +98,9 @@ GP2_CON (currently `GND / +5V / GP2`).
 - **Air pump** (DWC dissolved-O₂), **reservoir heater** (230 V
   aquarium type), and **HPA pump** (230 V, self-regulating via its own
   pressure switch + accumulator) → spare relay channels GP18 / GP19 /
-  GP21 / GP22 on the mains-rated REL_CON1 (see
+  GP21 on the mains-rated REL_CON1 (GP18/GP19 are the legacy fan relays
+  freed by the PCA9685 move, GP21 is reserved REL_CON pin 5; GP20 stays
+  grow light and GP22 is the level-switch input per item 5) (see
   [Relay connector cleanup](#x-relay-connector-cleanup--pull-ups-gnd-fix-mains-rated-header)).
 - **No new PCA9685 + MOSFET DC stages required.** PWM5–15 stay in
   reserve; an HPA burst solenoid is added there (12/24 V DC →
@@ -108,7 +110,7 @@ GP2_CON (currently `GND / +5V / GP2`).
 - **No chiller** (impractical at 20 L); water temp is monitor + alarm
   via the existing buzzer/LED surface plus the relay heater.
 
-**5 — Water-level switch (monitor + alarm only, no top-off loop) on GP28.**
+**5 — Water-level switch (monitor + alarm only, no top-off loop) on a spare relay channel (GP22).**
 A single simple float/level switch — a dry-contact (reed or tilt) SPST
 that **closes the circuit when the water crosses the sensor level** —
 gives the controller a low-water (and/or high-water) alarm without
@@ -118,34 +120,41 @@ instead of silent between daily checks. Refines, does not reverse, the
 "no float-switch loop" decision (which deleted the solenoid/top-off-pump
 *actuation*, not a passive sense input).
 
-- **Pin: GP28** — freed by the
-  [soil-sensor STEMMA swap](#x-soil-moisture-sensor--adafruit-stemma-4026-i2c)
-  (that entry deletes `adc_input: 28`). Used here as a plain digital
-  input, not ADC. Depends on the STEMMA swap shipping on the same
-  revision; if GP28 is kept analog for any reason, fall back to a spare
-  mains-relay channel reused as an input (lower preference — those are
-  earmarked for wet-system actuators).
-- **Add a 10 kΩ pull-up from GP28 to 3V3** so the line is a defined
-  HIGH when the float contact is open and pulled LOW when the float
-  closes to GND. Don't rely on the Pico's internal pull-up alone over a
-  metres-long wet-zone cable.
+- **Pin: GP22** — `relay_reserved_2` (REL_CON pin 6), one of the
+  unused reserved relay channels. Repurpose it as a plain digital
+  **input**: wire the float switch to that REL_CON pin instead of a
+  relay module. **GP28 / ADC2 is deliberately left free** — the
+  soil-STEMMA swap still frees it, but it stays an unallocated analog
+  pin for now rather than being spent on a digital switch.
+- **No new pull-up needed.** GP22 already carries a relay-line pull-up
+  that **item 1b** above moves to 10 kΩ → 3V3; that holds the line HIGH
+  when the float contact is open, and the float closes it to GND (LOW).
+  (If that channel's pull-up is ever depopulated, add a 10 kΩ GP22→3V3
+  in its place.)
 - **Add a series ~1 kΩ + 100 nF to GND at the pin** (RC ≈ 100 µs) to
   debounce float chatter at the threshold and shunt ESD/transients off
-  the long cable; firmware adds a software debounce on top.
-- **New 2-pin connector** (`GP28 / GND`, e.g. 2-pin JST) for the
-  switch. Dry-contact, low-voltage — no relay, no mains, no MOSFET.
+  the long wet-zone cable; firmware adds a software debounce on top.
+- **No new connector** — wire the float to **REL_CON pin 6 (GP22) +
+  GND**. Dry contact, low-voltage signal only; no relay/mains/MOSFET on
+  this channel.
 - Float must be **plastic-bodied** (no second grounded metal object in
   the reservoir, per the wet-zone single-point-ground note); switch
   polarity (which physical state closes the contact) is handled in
   firmware, so either a normally-open "closes when low" or a
   normally-closed float works.
+- **Relay-channel budget after this:** REL_CON carries grow light
+  (GP20), the three wet actuators on GP18 / GP19 / GP21 (item 4), this
+  level-switch input (GP22, REL_CON pin 6), and GP26 / GP27 reassigned
+  to I²C1 — the header is then fully allocated, no spare channel left.
 
 **Config / firmware (queued, lands with the new PCB):**
 
 - `DEVICE_CONFIG["pins"]`: add `i2c1_sda: 26`, `i2c1_scl: 27`,
-  `onewire_water: 2`, `water_level: 28`; document GP26/GP27 leaving
-  the relay block and GP28 being reclaimed from the dropped ADC soil
-  probe.
+  `onewire_water: 2`, `water_level: 22`; GP26/GP27 leave the relay
+  block (→ I²C1) and GP22 is repurposed from `relay_reserved_2` to the
+  level-switch input. With GP21 (`relay_reserved_1`) taken by an item-4
+  actuator, no `relay_reserved_*` channels remain. **`adc_input: 28`
+  stays** — GP28/ADC2 is kept free for now, not spent on the switch.
 - New section `water_level_monitor` (`enabled`, `active_low`,
   `alarm_on` = `"low"`/`"high"`/`"both"`, `debounce_ms`, internal
   `pull` fallback) with a `validate_config()` row + `tests/test_config.py`
@@ -893,13 +902,15 @@ Layout side of the
   re-pointed cleanly.
 - **New 1-Wire connector** for DS18B20(s) (or reuse GP2_CON with its
   power pin re-pointed +5 V → +3V3); 4.7 kΩ GP2→3V3 pull-up beside it.
-- **New 2-pin water-level switch connector** (`GP28 / GND`). Place the
-  10 kΩ GP28→3V3 pull-up, the ~1 kΩ series resistor, and the 100 nF
-  pin-to-GND debounce cap next to it. GP28 is reclaimed from the
-  deleted ADC soil probe — clear any leftover analog-divider footprint
-  on that net.
-- **Silkscreen:** label the new jacks `I2C1 (pH/EC)`, `WATER TEMP
-  (1-Wire)`, and `WATER LEVEL`; mark the I²C1 jack as a **separate bus** from the I²C0
+- **Water-level switch on REL_CON pin 6 (GP22)** — no new connector;
+  repurpose the reserved relay pin as a switch input. Add the ~1 kΩ
+  series resistor + 100 nF pin-to-GND debounce cap beside it; the
+  channel's existing 10 kΩ relay pull-up (moved to 3V3 per item 1b)
+  doubles as the switch pull-up. **GP28/ADC2 left free** — route
+  nothing new on it; clear any leftover analog-divider footprint.
+- **Silkscreen:** label the new jacks `I2C1 (pH/EC)` and `WATER TEMP
+  (1-Wire)`, and relabel REL_CON pin 6 `WATER LEVEL (in)` (a switch
+  input now, not a relay output); mark the I²C1 jack as a **separate bus** from the I²C0
   RJ12 drops so a probe never gets plugged into the wrong jack. Add
   `(0x63)` / `(0x64)` near the I²C1 connector.
 - REL_CON1 silkscreen: pins 7-8 are no longer relay outputs — relabel
@@ -1152,8 +1163,8 @@ pumps/heater in/near conductive water).
 - **Probe connectors:** BNC bulkhead for pH/EC at the dry enclosure
   wall; DS18B20 leads sealed where they pass into the humid zone.
 - **Water-level float switch:** plastic-bodied float on a sealed
-  2-conductor cable, dry contact only — it carries the GP28 logic
-  signal + GND, **no mains and no isolator** (a passive switch is
+  2-conductor cable, dry contact only — it carries the GP22 logic
+  signal (REL_CON pin 6) + GND, **no mains and no isolator** (a passive switch is
   inherently isolated and adds no second grounded metal in the tank).
   Drip-loop and gland its cable like the probes; mount the float at the
   intended low-water (or high-water) line.

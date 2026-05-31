@@ -5,6 +5,21 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-31 · RJ12 → JST-XH swap rejected (PCB shrink effort)
+
+### decision · keep RJ12 on all 9 external ports
+
+While hunting for footprint reductions to fit routing on the fixed
+98×149 mm board, evaluated swapping the 9 RJ12 (6P6C) external ports
+to right-angle JST-XH 2.5 mm (sized per port: 2P GL, 3P W_TEMP, 4P
+TH/CO2, 5P I2C, 6P ADC; verified LCSC S#B-XH-A parts C157931/C157928/
+C157925/C263757/C495565). User measured the XH right-angle footprint
+as **near-identical** to RJ12, so the swap frees almost no board area
+while losing RJ12's keying and the existing field cabling. Decision:
+**RJ12 stays.** Area savings will come from the other swaps in this
+effort (PCA9685 module→TSSOP-28 bare chip, LM358 PDIP→SOIC, THT
+passives/diodes→SMD) instead. Do not re-propose the XH connector swap.
+
 ## 2026-05-31 · Fan logging demote + CO₂ override retune
 
 ### decision · scheduled fan transitions → DEBUG; CO₂ override 1000→2500 ppm

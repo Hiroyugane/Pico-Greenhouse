@@ -19,7 +19,7 @@
 
 ## Schematic — nets, components, BOM
 
-### [ ] Hydroponics monitoring — 2nd I²C bus, DS18B20, pH/EC, wet-system relays
+### [x] Hydroponics monitoring — 2nd I²C bus, DS18B20, pH/EC, wet-system relays
 
 **Filed:** 2026-05-31 ·
 [chat-log entry](../notes/chat-log.md#2026-05-31--hydroponics-monitoring-expansion-dwc--hpa-aeroponics) ·

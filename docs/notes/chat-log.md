@@ -5,6 +5,44 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-31 · HPA mist-solenoid PWM breakout connector
+
+### decision · one PCA9685 channel (ch5) for the HPA solenoid, broken out as a plug-in 12 V valve connector; no raw PWM exposed
+
+Follow-up to the hydroponics expansion: user asked which PWM ports (and
+other nets) the next PCB must break out to an external connector for DWC
+and HPA aeroponics. After a clarifying round the scope is **the HPA mist
+solenoid only** — every other wet-system load is already placed (air
+pump / reservoir heater / HPA pump → 230 V REL_CON; pH/EC → I²C1; water
+temp → 1-Wire GP2; water-level switch → GP22 input). So the entire PWM
+question reduces to **one channel**.
+
+Decisions:
+
+- **PCA9685 ch5** is reserved for the solenoid (ch0–ch4 = the five
+  fans). ch6–ch15 stay unrouted; the solenoid-only scope needs no other
+  DC PWM load, so no other PWM port is broken out.
+- **No raw PWM line is broken out.** Per the user's "each component = 1
+  connector, plugged in to its own spec" framing, ch5 stays on-board
+  driving an IRLZ44N low-side stage (150 Ω gate R + 10 kΩ pull-down +
+  UF4007 flyback, identical to the fan stages). A **dedicated 2-pin
+  keyed valve connector** exposes only `SOL+` (12 V) and `SOL−` (drain);
+  the 12 V solenoid plugs straight in.
+- **Solenoid specced at 12 V DC**, off the 12 V buck rail (9 A, huge
+  headroom for a ~1 A coil). No native 24 V rail exists and 19.5 V is
+  marginal for a 24 V coil — so the valve choice is constrained to 12 V
+  rather than adding a rail.
+- **Why PWM and not a relay:** the solenoid is the one load that cycles
+  every few minutes 24/7 (relay contact wear) and benefits from PWM
+  current-hold (full-duty pull-in, reduced-duty hold → far less coil
+  heat). Slow on/off 230 V loads stay on relays; this fast, repetitive,
+  hold-capable DC load belongs on the PCA9685 + MOSFET surface.
+- Firmware queued: `DEVICE_CONFIG["hpa_solenoid"]` (`pca9685_ch: 5`,
+  pull-in / hold duties + burst timing) with validator + tests, and
+  `lib/hpa_solenoid.py`; the fan duplicate-channel validator extends to
+  cover ch5 so a fan can't collide with the solenoid. Gated behind
+  `enabled` until HPA hardware is fitted.
+
 ## 2026-05-31 · Hydroponics monitoring expansion (DWC + HPA aeroponics)
 
 ### decision · future-proof the board for DWC now and HPA aeroponics later, monitor-only chemistry, no new MCU

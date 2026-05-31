@@ -148,6 +148,23 @@ Wiring wet-zone bullet), the hw-test-log bring-up checklist, and the
 (`lib/water_level_monitor.py`, `DEVICE_CONFIG["water_level_monitor"]` +
 validator + tests) lands with the PCB.
 
+### decision · water-level switch moved off GP28 onto a spare relay channel (GP22)
+
+Follow-up to the entry above: rather than spend the freed analog pin
+(GP28/ADC2) on the level switch, use a **spare relay-header channel as
+a digital input** and keep GP28 free for a possible future analog
+peripheral. Chosen pin: **GP22** (`relay_reserved_2`, REL_CON pin 6) —
+an unused reserved channel whose relay pull-up is already in the
+R18–R22 → 3V3 move (item 1b), so that pull-up doubles as the switch
+pull-up and no new 10 kΩ is added. The float wires to REL_CON pin 6 +
+GND instead of a relay module; the ~1 kΩ series + 100 nF debounce RC
+stays. Net relay-channel map: grow light GP20, wet actuators
+GP18/GP19/GP21, level-switch input GP22, GP26/GP27 → I²C1 (REL_CON
+fully allocated, no spare). Config delta vs. the entry above:
+`water_level: 22` (not 28), `adc_input: 28` **stays**, and with GP22
+(`relay_reserved_2`) plus GP21/26/27 all assigned, no `relay_reserved_*`
+channels remain.
+
 ## 2026-05-26 · Soil sensor swap → Adafruit STEMMA #4026 (I²C)
 
 ### decision · drop analog capacitive probe path; go I²C with Seesaw STEMMA

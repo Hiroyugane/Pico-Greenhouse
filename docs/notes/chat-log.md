@@ -80,7 +80,16 @@ GP27 currently carry 10 kΩ pull-ups to **+5 V** (R17/R16); left in
 place I²C idle would put 5 V on the Pico pins (abs-max violation), so
 the next PCB **deletes R16/R17** and adds 2.2–4.7 kΩ pull-ups to
 **3V3**. DS18B20 1-Wire repurposes **GP2_CON** (power pin +5 V → +3V3,
-add 4.7 kΩ GP2→3V3).
+add 4.7 kΩ GP2→3V3). While auditing the +5 V net it surfaced that
+**all seven relay-line pull-ups R16–R22 currently pull to +5 V**: R16/
+R17 (GP26/GP27) **must** move because those pins become I²C (5 V on an
+idle-high open-drain line = abs-max), and the surviving relay pull-ups
+**R18–R22 should move to 3V3 too** — keep 10 kΩ, change only the rail.
+5 V there isn't a hard fault (the lines are driven push-pull almost
+always) but it stresses the ESD clamp during boot Hi-Z (same mechanism
+as the CO2 RX fix) and backfeeds ~0.17 mA into 3.3 V when driven high.
+3.3 V is the correct inactive-HIGH level and matches the Pico's own
+driven-high, so it's the consistent fix with no downside.
 
 Mains-side safety (above any PCB concern): pump + heater on a
 **30 mA RCD / FI-Schutzschalter** (verify the socket's circuit, or

@@ -5,6 +5,62 @@
 > Newest entry on top. Use `[ ]` pending, `[x]` passed, `[!]` failed,
 > `[~]` partial/blocked.
 
+## 2026-05-31 · HPA mist-solenoid driver bring-up (PCA9685 ch5 + 12 V valve connector)
+
+**Branch:** `main`
+**Why hardware-only:** the ch5 IRLZ44N low-side stage, the 12 V valve
+connector, the flyback clamp, and PWM current-hold behaviour need the
+rebuilt PCB and a physical 12 V solenoid — `pytest` can't exercise any of
+it. Background in
+[chat-log.md](../notes/chat-log.md#2026-05-31--hpa-mist-solenoid-pwm-breakout-connector)
+and the
+[next-revision Schematic entry](../hardware/next-revision.md#--hpa-mist-solenoid-driver--pca9685-ch5--irlz44n-broken-out-as-a-plug-in-12-v-valve-connector).
+
+**Pre-flight:**
+
+1. New PCB with the ch5 IRLZ44N stage populated (150 Ω gate R, 10 kΩ
+   gate pull-down, UF4007 across the connector pads) and the 2-pin
+   `HPA SOLENOID 12V` connector fitted.
+2. PCA9685 present and `pca9685.enabled = True`; firmware with the
+   `hpa_solenoid` config section + `lib/hpa_solenoid.py` shipped.
+3. A 12 V DC solenoid (or a 12 V coil / lamp dummy load) on hand.
+4. A meter on the 12 V rail current. Pico powered cold, Thonny connected.
+
+### Boot-state safety gate (do first)
+
+- [ ] With firmware running but before the first commanded burst (or with
+      `hpa_solenoid.enabled = False`), the valve stays **OFF** through
+      power-up and reset — the 10 kΩ gate pull-down holds the MOSFET off
+      while the PCA9685 initialises. No mist on boot.
+
+### Drive + flyback
+
+- [ ] Command ch5 to 100 % duty: solenoid pulls in / dummy load
+      energises; drain pulls to ~0 V. Command 0 %: load de-energises.
+- [ ] Scope the drain on de-energise: the inductive kick is clamped near
+      12 V + Vf (UF4007 conducting), no high-voltage spike. Record peak:
+      __________ V.
+
+### PWM current-hold
+
+- [ ] Pull-in at 100 % then drop to `hold_duty_pct`: the valve stays
+      open and the 12 V rail current falls to the hold fraction. Record
+      pull-in vs hold current: __________ A / __________ A.
+- [ ] Coil temperature after 10 min holding is comfortably below its
+      datasheet max (confirms the hold duty is doing its job).
+
+### Connector / polarity
+
+- [ ] `HPA SOLENOID 12V` connector is keyed so a reversed plug is
+      mechanically prevented (a reversed plug would forward-bias the
+      flyback into a near-short on the 12 V rail).
+- [ ] Mist-cycle timing (`burst_ms` / `interval_s`) fires the expected
+      on/off pattern over a 10 min observation.
+
+### Notes (post-test)
+
+> Fill in here.
+
 ## 2026-05-31 · Hydroponics monitoring bring-up (I²C1 + DS18B20 + pH/EC)
 
 **Branch:** `main`

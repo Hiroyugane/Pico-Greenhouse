@@ -108,6 +108,46 @@ I²C1 init in `hardware_factory`, `DEVICE_CONFIG` + validator +
 `tests/test_config.py`) is queued for the commit that lands with the
 new PCB.
 
+### deviation · add a monitor-only water-level switch (GP28), top-off stays manual
+
+User wants a simple water-level meter back on the board — "a very
+simple sensor that just closes a circuit once the water level is below /
+above the sensor." This **refines, not reverses,** the earlier
+decision in this same topic that "deletes the entire float-switch +
+solenoid + top-off-pump loop." What was deleted was the *actuation*
+loop (automatic top-off); top-off stays **manual**. The new part is a
+passive **sense input only**: a dry-contact float/level switch wired to
+a GPIO so the controller can raise a low-water (and/or high-water)
+**alarm** on the existing buzzer/LED surface and log the edge, instead
+of a dry reservoir being silent between daily checks. No pump, no
+solenoid, no closed loop — same monitor-and-alarm philosophy already
+chosen for water temperature.
+
+Pin choice: **GP28**, which the
+[soil-sensor STEMMA swap](#2026-05-26--soil-sensor-swap--adafruit-stemma-4026-i2c)
+frees by deleting `adc_input: 28`. It's the only pin freed on this
+revision; the four spare mains-relay channels are earmarked for the
+wet-system actuators, so GP28 (used as a plain digital input, not ADC)
+is the clean home. This couples the level switch to the STEMMA swap
+shipping on the same board — noted as a dependency in the next-rev
+entry, with "reuse a spare relay channel as an input" as the lower-
+preference fallback if GP28 is ever kept analog.
+
+Electrical: 10 kΩ pull-up GP28→3V3 (defined HIGH when the float contact
+is open, LOW when it closes to GND), plus a ~1 kΩ series resistor and a
+100 nF pin-to-GND cap (RC ≈ 100 µs) to debounce float chatter and shunt
+ESD off the long wet-zone cable; firmware adds a software debounce on
+top. New 2-pin connector (`GP28 / GND`). The float must be
+plastic-bodied so it adds no second grounded metal object to the tank
+(consistent with the single-point-ground note); contact polarity
+(NO "closes when low" vs NC) is handled in firmware via `active_low` +
+`alarm_on`, so either float type works. Documentation-only turn —
+queued into next-revision.md (Schematic item 5, PCB-layout connector,
+Wiring wet-zone bullet), the hw-test-log bring-up checklist, and the
+`project_hydro_automation_revision` memory. Firmware
+(`lib/water_level_monitor.py`, `DEVICE_CONFIG["water_level_monitor"]` +
+validator + tests) lands with the PCB.
+
 ## 2026-05-26 · Soil sensor swap → Adafruit STEMMA #4026 (I²C)
 
 ### decision · drop analog capacitive probe path; go I²C with Seesaw STEMMA

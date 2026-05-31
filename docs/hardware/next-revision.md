@@ -108,10 +108,52 @@ GP2_CON (currently `GND / +5V / GP2`).
 - **No chiller** (impractical at 20 L); water temp is monitor + alarm
   via the existing buzzer/LED surface plus the relay heater.
 
+**5 — Water-level switch (monitor + alarm only, no top-off loop) on GP28.**
+A single simple float/level switch — a dry-contact (reed or tilt) SPST
+that **closes the circuit when the water crosses the sensor level** —
+gives the controller a low-water (and/or high-water) alarm without
+reinstating any automatic top-off. Top-off stays **manual**; this only
+makes the reservoir running dry *visible* (buzzer/LED + logged event)
+instead of silent between daily checks. Refines, does not reverse, the
+"no float-switch loop" decision (which deleted the solenoid/top-off-pump
+*actuation*, not a passive sense input).
+
+- **Pin: GP28** — freed by the
+  [soil-sensor STEMMA swap](#x-soil-moisture-sensor--adafruit-stemma-4026-i2c)
+  (that entry deletes `adc_input: 28`). Used here as a plain digital
+  input, not ADC. Depends on the STEMMA swap shipping on the same
+  revision; if GP28 is kept analog for any reason, fall back to a spare
+  mains-relay channel reused as an input (lower preference — those are
+  earmarked for wet-system actuators).
+- **Add a 10 kΩ pull-up from GP28 to 3V3** so the line is a defined
+  HIGH when the float contact is open and pulled LOW when the float
+  closes to GND. Don't rely on the Pico's internal pull-up alone over a
+  metres-long wet-zone cable.
+- **Add a series ~1 kΩ + 100 nF to GND at the pin** (RC ≈ 100 µs) to
+  debounce float chatter at the threshold and shunt ESD/transients off
+  the long cable; firmware adds a software debounce on top.
+- **New 2-pin connector** (`GP28 / GND`, e.g. 2-pin JST) for the
+  switch. Dry-contact, low-voltage — no relay, no mains, no MOSFET.
+- Float must be **plastic-bodied** (no second grounded metal object in
+  the reservoir, per the wet-zone single-point-ground note); switch
+  polarity (which physical state closes the contact) is handled in
+  firmware, so either a normally-open "closes when low" or a
+  normally-closed float works.
+
 **Config / firmware (queued, lands with the new PCB):**
 
 - `DEVICE_CONFIG["pins"]`: add `i2c1_sda: 26`, `i2c1_scl: 27`,
-  `onewire_water: 2`; document GP26/GP27 leaving the relay block.
+  `onewire_water: 2`, `water_level: 28`; document GP26/GP27 leaving
+  the relay block and GP28 being reclaimed from the dropped ADC soil
+  probe.
+- New section `water_level_monitor` (`enabled`, `active_low`,
+  `alarm_on` = `"low"`/`"high"`/`"both"`, `debounce_ms`, internal
+  `pull` fallback) with a `validate_config()` row + `tests/test_config.py`
+  row per
+  [configurability.md](../../../.claude/rules/ecc/common/configurability.md);
+  new `lib/water_level_monitor.py` reads the debounced pin, raises the
+  existing buzzer/LED alarm, and logs an `EventLogger` row on each edge.
+  **Monitor-only — never drives a pump/solenoid.**
 - New sections `water_temp_logger` (1-Wire, per-probe ROM map),
   `ph_logger` (`i2c_bus: 1`, `i2c_address: 0x63`),
   `ec_logger` (`i2c_bus: 1`, `i2c_address: 0x64`), each with
@@ -851,8 +893,13 @@ Layout side of the
   re-pointed cleanly.
 - **New 1-Wire connector** for DS18B20(s) (or reuse GP2_CON with its
   power pin re-pointed +5 V → +3V3); 4.7 kΩ GP2→3V3 pull-up beside it.
-- **Silkscreen:** label the new jacks `I2C1 (pH/EC)` and `WATER TEMP
-  (1-Wire)`; mark the I²C1 jack as a **separate bus** from the I²C0
+- **New 2-pin water-level switch connector** (`GP28 / GND`). Place the
+  10 kΩ GP28→3V3 pull-up, the ~1 kΩ series resistor, and the 100 nF
+  pin-to-GND debounce cap next to it. GP28 is reclaimed from the
+  deleted ADC soil probe — clear any leftover analog-divider footprint
+  on that net.
+- **Silkscreen:** label the new jacks `I2C1 (pH/EC)`, `WATER TEMP
+  (1-Wire)`, and `WATER LEVEL`; mark the I²C1 jack as a **separate bus** from the I²C0
   RJ12 drops so a probe never gets plugged into the wrong jack. Add
   `(0x63)` / `(0x64)` near the I²C1 connector.
 - REL_CON1 silkscreen: pins 7-8 are no longer relay outputs — relabel
@@ -1104,6 +1151,12 @@ pumps/heater in/near conductive water).
   connector or enclosure.
 - **Probe connectors:** BNC bulkhead for pH/EC at the dry enclosure
   wall; DS18B20 leads sealed where they pass into the humid zone.
+- **Water-level float switch:** plastic-bodied float on a sealed
+  2-conductor cable, dry contact only — it carries the GP28 logic
+  signal + GND, **no mains and no isolator** (a passive switch is
+  inherently isolated and adds no second grounded metal in the tank).
+  Drip-loop and gland its cable like the probes; mount the float at the
+  intended low-water (or high-water) line.
 - Pico case + isolators mounted **above** the reservoir at all times
   (confirmed) — gravity keeps condensation/spray off the electronics.
 - HPA-only (reserved): accumulator + HP pump pressure-switch wiring is

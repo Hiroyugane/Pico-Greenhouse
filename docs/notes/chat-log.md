@@ -5,6 +5,41 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-05-31 · 12-day SD log & sensor analysis
+
+### note · first field-run analysis of the >10 d SD snapshot
+
+Analyzed `sd/` after 11.9 days continuous uptime (mushroom mode). Full
+write-up + daily/overall aggregation tables in
+[2026-05-31-sd-log-analysis.md](2026-05-31-sd-log-analysis.md). Steady
+state is healthy: zero resets, zero data gaps, zero sensor failures since
+05-19 20:58; all 10 boots and all 37 WARN/ERR were on commissioning day.
+Sensor means over the run: temp 23.2 °C (rising 20.4→24.5), RH 57 %
+(noisy), CO₂ 2418 ppm (falling 3340→1730).
+
+### issue · system.log is 94 % routine fan-schedule spam
+
+`growroom_walls` 20 s-ON / 8.3 min circulation cycle logs every transition
+at INFO — 4096 of 4366 lines — burying the 2 ERR + 35 WARN and adding an
+SD append per transition. Proposed fix: demote scheduled (non-override)
+fan transitions to DEBUG, keep THERMOSTAT/OVERRIDE at INFO. Not yet
+implemented; logged for a follow-up firmware change.
+
+### issue · CO₂ override threshold (>1000 ppm) never met in steady state
+
+CO₂ floor over 12 days is 1471 ppm; only 2 `exhaust EXTERNAL OVERRIDE ON`
+events exist, both on commissioning day, none after. Either the override
+path isn't firing in steady state or exhaust lacks the air-exchange
+capacity to reach 1000 ppm. Needs instrumenting to confirm which; if the
+high CO₂ is intentional for colonization the threshold is misleading.
+
+### note · relay-cycle wear quantifies the queued PCA9685 fan revision
+
+`growroom_walls` relay cycles ~62,600×/yr (172/day) — ~1.6 yr contact
+life on a mechanical relay switching an inductive fan. Reinforces
+[[project_fan_hardware_revision]] (PCA9685 PWM fans); no new
+next-revision entry filed since the change is already queued.
+
 ## 2026-05-31 · HPA mist-solenoid PWM breakout connector
 
 ### decision · one PCA9685 channel (ch5) for the HPA solenoid, broken out as a plug-in 12 V valve connector; no raw PWM exposed

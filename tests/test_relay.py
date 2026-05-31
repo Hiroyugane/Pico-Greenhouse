@@ -241,7 +241,12 @@ class TestFanController:
         assert state["current_temp"] == 22.5
 
     def test_schedule_state_change_logging(self, fan_controller, mock_th_logger):
-        """Schedule transitions log SCHEDULE ON or SCHEDULE OFF."""
+        """Schedule transitions log SCHEDULE ON or SCHEDULE OFF at DEBUG.
+
+        Routine scheduled transitions are DEBUG (console-only by default) so
+        they don't flood the SD system.log; only THERMOSTAT/OVERRIDE
+        transitions stay at INFO.
+        """
         mock_th_logger.last_temperature = None  # No thermostat
 
         async def run_once():
@@ -254,10 +259,13 @@ class TestFanController:
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
             asyncio.run(run_once())
 
-        # Should have logged a schedule state (either ON or OFF)
-        calls = [str(c) for c in fan_controller.logger.info.call_args_list]
+        # Should have logged a schedule state (either ON or OFF) at DEBUG
+        calls = [str(c) for c in fan_controller.logger.debug.call_args_list]
         schedule_logged = any("SCHEDULE" in c for c in calls)
         assert schedule_logged
+        # And NOT at INFO (that level is reserved for thermostat/override).
+        info_calls = [str(c) for c in fan_controller.logger.info.call_args_list]
+        assert not any("SCHEDULE" in c for c in info_calls)
 
     def test_thermostat_turn_on_error(self, fan_controller, mock_th_logger):
         """When turn_on() raises during thermostat activation, error is logged."""

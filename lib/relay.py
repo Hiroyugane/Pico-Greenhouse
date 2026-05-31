@@ -327,10 +327,10 @@ class FanController:
                         try:
                             if schedule_should_be_on:
                                 self.turn_on()
-                                self.logger.info("FanController", f"{self.name} SCHEDULE ON")
+                                self.logger.debug("FanController", f"{self.name} SCHEDULE ON")
                             else:
                                 self.turn_off()
-                                self.logger.info("FanController", f"{self.name} SCHEDULE OFF")
+                                self.logger.debug("FanController", f"{self.name} SCHEDULE OFF")
                         except Exception as e:
                             self.logger.error("FanController", f"{self.name} failed to update: {e}")
                         self.last_schedule_state = schedule_should_be_on

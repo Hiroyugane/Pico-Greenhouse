@@ -53,6 +53,25 @@ and the
 - [ ] Probe ROM → role map recorded in `DEVICE_CONFIG`
       (`water_temp_logger`).
 
+### Water-level switch (monitor-only, GP28)
+
+- [ ] With the float in the **dry/low** position, `Pin(28, Pin.IN)`
+      reads the expected level; moving the float to the **wet/high**
+      position flips it. Record which physical state closes the contact
+      (NO vs NC): __________.
+- [ ] `DEVICE_CONFIG["water_level_monitor"]` `active_low` / `alarm_on`
+      set so the *intended* alarm condition (reservoir low) is the one
+      that fires — verify by emptying/raising the float, not by trusting
+      the datasheet polarity.
+- [ ] Chatter test: wiggle the float at the threshold; the software
+      debounce (`debounce_ms`) suppresses a storm of toggles — at most
+      one alarm edge logged.
+- [ ] Alarm surface: low-water condition raises the buzzer/LED and
+      writes an `EventLogger` row; restoring level clears the alarm and
+      logs the recovery edge.
+- [ ] **No actuation:** confirm the level switch firing does **not**
+      drive any relay/pump/solenoid (monitor-only by design).
+
 ### pH / EC (monitor-only)
 
 - [ ] EZO-pH reads ~7.0 in pH 7.0 buffer after calibration; ~4.0 and

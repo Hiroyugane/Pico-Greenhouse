@@ -5,6 +5,42 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-06-02 · PCB design ruleset (net classes)
+
+### decision · net-class design rules authored in a standalone doc
+
+Authored [docs/hardware/pcb-design-rules.md](../hardware/pcb-design-rules.md):
+track width / clearance / via pad Ø / via drill Ø / max track length per
+net class, plus every net in the 2026-06-02 netlist
+([Sheet_1_2026-06-02.net](../hardware/EasyEDA-Files/Sheet_1_2026-06-02.net))
+assigned to a class. Scoped to **2-layer, 2 oz copper, JLCPCB standard
+floor** per the answers given. Standalone doc (cross-linked from
+next-revision.md) chosen over inlining so the EasyEDA DRC profile has one
+source of truth that survives the change-queue churn. Max length is an
+SI budget per class (SPI 10 MHz → 75 mm, I²C 400 kHz → 150 mm, UART 9600
+→ 250 mm, analog → 100 mm), n/a on power/GND.
+
+### spec · default clearance corrected 0.15 mm → 0.20 mm for the 2 oz process
+
+The [Power trace widths](../hardware/next-revision.md) entry sets a
+0.15 mm default clearance. **JLCPCB's 2 oz copper process floors
+trace/space at 0.20 mm (8 mil)** — 0.15 mm would be DRC-rejected or
+silently kicked to the 1 oz process, forfeiting the current margin the
+2 oz order exists for. The ruleset sets default clearance to 0.20 mm and
+keeps power-net clearance at 0.30 mm. A 0.15 mm default is only valid on
+a 1 oz reorder, which contradicts the heater (3.0 mm) and 12 V (2.5 mm)
+trace-width math. Flagged on the next-revision layout entry; the queued
+entry itself is left intact pending the user's call on whether to amend it.
+
+### note · highest on-board voltage is 19.5 V — no mains creepage on the PCB
+
+All 230 V loads (grow light, heater feed, wet-system pumps) switch
+through **off-board relay modules**; REL_CON carries only logic + GND.
+The heater rail (HE_CON, 19.5 V DC) is the highest potential on copper,
+so the ruleset needs no mains creepage/clearance class — every net is a
+sub-50 V low-voltage net. Mains creepage stays a wiring/harness concern,
+not a board-layout one.
+
 ## 2026-06-01 · PCB shrink review of the 2026-06-01 EasyEDA export
 
 ### issue · LM358 (U24) negative-supply pin floats — net `R30_2` never reaches GND

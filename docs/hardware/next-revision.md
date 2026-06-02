@@ -975,6 +975,11 @@ catalogued).
 
 ## PCB layout — footprints, routing, silkscreen, test points
 
+> **Net-class design ruleset:** track width / clearance / via / drill /
+> max-length per net class, with every net assigned, lives in
+> [pcb-design-rules.md](pcb-design-rules.md). Build the EasyEDA DRC
+> profile from that file. Note the clearance correction below.
+
 ### [ ] HPA mist-solenoid connector + ch5 MOSFET stage placement
 
 **Filed:** 2026-05-31 ·

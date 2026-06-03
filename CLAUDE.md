@@ -22,7 +22,7 @@ pre-commit run --all-files                   # ruff + pytest pre-push gate
 python main.py                               # run the full system on host using shims
 ```
 
-On-device (via Thonny on the Pico): run [rtc_set_time.py](rtc_set_time.py) once to seed the DS3231, then [main.py](main.py).
+On-device (via Thonny on the Pico): run [rtc_set_time.py](prototypes/rtc_set_time.py) once to seed the DS3231, then [main.py](main.py).
 
 ## Architecture — what's not obvious from the file tree
 

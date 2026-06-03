@@ -5,6 +5,38 @@
 > [.claude/rules/ecc/common/documentation-routine.md](../../.claude/rules/ecc/common/documentation-routine.md)
 > for the entry format. Newest topic on top.
 
+## 2026-06-03 · graphify code-health cleanups
+
+### decision · orphan CO2 scripts relocated, not deleted
+
+`tests/co2log.py` and `tests/co2test.py` were bare-`main()` hardware
+loops with no `test_` prefix (never collected by pytest, would error on
+collection if they were — they import `machine`/`lib.ds3231` at module
+top). They duplicate the `prototypes/co2-test.py` lineage. Chose to
+`git mv` them into `prototypes/` rather than delete, keeping the bench
+scripts available alongside their siblings while un-polluting `tests/`.
+No code imports them; pytest still collects 1037 tests.
+
+### note · only cheap-win items actioned; #4/#5/#6 deferred
+
+From the six-item graphify review, only the three low-risk cleanups
+were taken this session: untracking `prototypes/logs/` SD-card cruft
+(`git rm --cached` + `.gitignore prototypes/logs/`), fixing the broken
+`rtc_set_time.py` link in CLAUDE.md (the file lives at
+`prototypes/rtc_set_time.py`), and the orphan relocation above.
+Deferred by choice: item #4 (split the 131-method
+`TestValidateConfig`), item #5 (continue `_validate_<section>`
+extraction from the ~525-line `validate_config()`), and item #6 (split
+the 999-line `lib/buffer_manager.py`, flagged investigate-first). These
+are larger behavior-preserving refactors left for a dedicated pass.
+
+### issue · pre-existing corruption in next-revision.md (untouched)
+
+`docs/hardware/next-revision.md` carried an unstaged edit at session
+start that garbled "float/level switch" into "w/level switch" (item 5,
+water-level switch section). Not made this session; left untouched and
+flagged for the user rather than silently committed or reverted.
+
 ## 2026-06-02 · PCB design ruleset (net classes)
 
 ### decision · net-class design rules authored in a standalone doc

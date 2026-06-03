@@ -90,6 +90,8 @@ sd/
 *.csv
 # Stray log files from prototypes/ and ad-hoc host runs.
 *.log
+# Captured SD-card output from prototype runs (incl. Windows volume cruft).
+prototypes/logs/
 # Diagnostic output from hardware probe scripts.
 hw_probe_result.*
 # Vendored MicroPython type stubs; excluded from lint and coverage

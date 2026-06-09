@@ -104,3 +104,5 @@ service_reminder.txt
 lib/build_info.py
 
 EasyEDA-Files/
+
+graphify-out/

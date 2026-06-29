@@ -670,11 +670,11 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["heater"]["day_min_temp"] = original
 
-    def test_pca9685_enabled_default_false(self):
-        """pca9685 ships disabled (no chip on current PCB)."""
+    def test_pca9685_enabled_default_true(self):
+        """pca9685 ships enabled now that the chip is on the next-rev PCB."""
         from config import DEVICE_CONFIG
 
-        assert DEVICE_CONFIG["pca9685"]["enabled"] is False
+        assert DEVICE_CONFIG["pca9685"]["enabled"] is True
 
     def test_pca9685_enabled_non_bool_raises(self):
         """pca9685.enabled must be a bool."""
@@ -751,11 +751,27 @@ class TestValidateConfig:
             assert role in DEVICE_CONFIG["fans"]
 
     def test_fans_default_enabled_set(self):
-        """Only exhaust and growroom_walls (relay-backed) are enabled today."""
+        """All five fan roles run from PCA9685 channels on the next-rev board."""
         from config import DEVICE_CONFIG
 
         enabled = {r for r, c in DEVICE_CONFIG["fans"].items() if c["enabled"]}
-        assert enabled == {"exhaust", "growroom_walls"}
+        assert enabled == {
+            "exhaust",
+            "growroom_walls",
+            "growroom_center",
+            "heater_distribution",
+            "case",
+        }
+
+    def test_fans_all_pca9685_on_distinct_channels(self):
+        """Every fan drives a distinct PCA9685 channel ch0–ch4 (relays freed)."""
+        from config import DEVICE_CONFIG
+
+        chans = []
+        for role, cfg in DEVICE_CONFIG["fans"].items():
+            assert cfg["output"] == "pca9685", f"{role} not on pca9685"
+            chans.append(cfg["pca9685_ch"])
+        assert sorted(chans) == [0, 1, 2, 3, 4]
 
     def test_fans_empty_dict_raises(self):
         import config
@@ -822,27 +838,39 @@ class TestValidateConfig:
             config.DEVICE_CONFIG["fans"]["exhaust"]["enabled"] = original
 
     def test_fans_relay_pin_key_unknown_raises(self):
+        """A relay-output fan referencing an unknown pin raises ValueError."""
         import config
 
-        original = config.DEVICE_CONFIG["fans"]["exhaust"]["relay_pin_key"]
-        config.DEVICE_CONFIG["fans"]["exhaust"]["relay_pin_key"] = "no_such_pin"
+        # The roster is all-PCA9685 now; flip one fan to relay output to
+        # exercise the relay_pin_key validation branch.
+        fans = config.DEVICE_CONFIG["fans"]
+        orig_exhaust = dict(fans["exhaust"])
+        fans["exhaust"].pop("pca9685_ch", None)
+        fans["exhaust"]["output"] = "relay"
+        fans["exhaust"]["relay_pin_key"] = "no_such_pin"
         try:
             with pytest.raises(ValueError, match="relay_pin_key"):
                 config.validate_config()
         finally:
-            config.DEVICE_CONFIG["fans"]["exhaust"]["relay_pin_key"] = original
+            fans["exhaust"] = orig_exhaust
 
     def test_fans_relay_pin_key_collision_raises(self):
         """Two relay-backed fans cannot share the same pin."""
         import config
 
-        orig = config.DEVICE_CONFIG["fans"]["growroom_walls"]["relay_pin_key"]
-        config.DEVICE_CONFIG["fans"]["growroom_walls"]["relay_pin_key"] = "relay_fan_1"
+        fans = config.DEVICE_CONFIG["fans"]
+        orig_exhaust = dict(fans["exhaust"])
+        orig_walls = dict(fans["growroom_walls"])
+        for role in ("exhaust", "growroom_walls"):
+            fans[role].pop("pca9685_ch", None)
+            fans[role]["output"] = "relay"
+            fans[role]["relay_pin_key"] = "relay_fan_1"
         try:
             with pytest.raises(ValueError, match="is used by another fan"):
                 config.validate_config()
         finally:
-            config.DEVICE_CONFIG["fans"]["growroom_walls"]["relay_pin_key"] = orig
+            fans["exhaust"] = orig_exhaust
+            fans["growroom_walls"] = orig_walls
 
     def test_fans_pca9685_channel_out_of_range_raises(self):
         import config

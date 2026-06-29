@@ -187,11 +187,12 @@ DEVICE_CONFIG = {
     # Fan Roster (role-keyed, mode-dispatched).
     #
     # Each entry names a physical fan role. The controller class is picked
-    # by `mode`; the drive backend by `output`. Current PCB has two relay
-    # outputs (REL_CON pins 2 and 3, GP18/GP19) — those map to exhaust and
-    # growroom_walls. The remaining three roles ship disabled and flip on
-    # when the PCA9685 PCB lands; only main.py wiring changes (policy is
-    # untouched).
+    # by `mode`; the drive backend by `output`. The next-rev PCB drives all
+    # five fans from PCA9685 PWM channels ch0–ch4 (IRLZ44N MOSFET gates), so
+    # every role uses output="pca9685". The old relay outputs (relay_fan_1/2
+    # on GP18/GP19) are freed and repurposed by the hydroponics revision;
+    # relay output stays supported for any fan that needs it. Only main.py
+    # wiring changes between backends; policy is untouched.
     #
     # Modes:
     #   thermostat_schedule — time-of-day on-cycle + temperature override
@@ -213,8 +214,8 @@ DEVICE_CONFIG = {
         "exhaust": {
             "enabled": True,
             "mode": "thermostat_schedule",
-            "output": "relay",
-            "relay_pin_key": "relay_fan_1",
+            "output": "pca9685",
+            "pca9685_ch": 0,
             "interval_s": 600,
             "on_time_s": 20,
             "max_temp": 23.8,
@@ -225,8 +226,8 @@ DEVICE_CONFIG = {
         "growroom_walls": {
             "enabled": True,
             "mode": "thermostat_schedule",
-            "output": "relay",
-            "relay_pin_key": "relay_fan_2",
+            "output": "pca9685",
+            "pca9685_ch": 1,
             "interval_s": 500,
             "on_time_s": 20,
             "max_temp": 27.0,
@@ -235,10 +236,10 @@ DEVICE_CONFIG = {
             "default_duty_pct": 100,
         },
         "growroom_center": {
-            "enabled": False,
+            "enabled": True,
             "mode": "thermostat_schedule",
             "output": "pca9685",
-            "pca9685_ch": 0,
+            "pca9685_ch": 2,
             "interval_s": 500,
             "on_time_s": 20,
             "max_temp": 27.0,
@@ -247,36 +248,38 @@ DEVICE_CONFIG = {
             "default_duty_pct": 80,
         },
         "heater_distribution": {
-            "enabled": False,
+            "enabled": True,
             "mode": "heater_follower",
             "output": "pca9685",
-            "pca9685_ch": 1,
+            "pca9685_ch": 3,
             "post_run_s": 60,
             "duty_pct": 80,
             "poll_interval_s": 5,
         },
         "case": {
-            "enabled": False,
+            "enabled": True,
             "mode": "always_on",
             "output": "pca9685",
-            "pca9685_ch": 2,
+            "pca9685_ch": 4,
             "duty_pct": 60,
             "refresh_interval_s": 300,
         },
     },
     # PCA9685 PWM driver (16-channel I2C, shared I2C0 bus).
     #
-    # Used by the next hardware revision to drive IRLZ44N MOSFET gates for
-    # variable-speed fan control (see lib/pca9685.py, lib/fan_output.py).
-    # Disabled by default: until the new PCB lands the chip is absent and
-    # HardwareFactory leaves get_pca9685() == None so fans fall back to
-    # the existing relay path.
+    # Drives IRLZ44N MOSFET gates for variable-speed fan control on the
+    # next-rev PCB (see lib/pca9685.py, lib/fan_output.py). Enabled now
+    # that the chip is on the board and all five fans run from ch0–ch4.
+    # If the chip is absent, _init_pca9685() records the error and leaves
+    # get_pca9685() == None, and every pca9685-backed fan is skipped at
+    # boot — so do NOT enable this without the chip present or cooling
+    # stops (no relay fallback once the roster is all-PCA9685).
     #
     # i2c_address: A5..A0 strap pins on the PCA9685 select 0x40..0x7F;
     # 0x40 is the default with all straps tied LOW.
     # freq_hz: shared across all 16 channels per datasheet, 24..1526 Hz.
     "pca9685": {
-        "enabled": False,
+        "enabled": True,
         "i2c_address": 0x40,
         "freq_hz": 1000,
     },

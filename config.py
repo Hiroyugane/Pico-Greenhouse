@@ -98,21 +98,25 @@ DEVICE_CONFIG = {
         # On-board LED
         "onboard_led": 25,  # GP25 — Pico on-board LED (heartbeat)
     },
-    # SPI Configuration (SD Card via SD_CON; MOSI uses series resistor R10, MISO is direct)
+    # SPI Configuration (SD Card via SD_CON; MOSI via R10, MISO via R8 = 33 Ω)
     #
     # baudrate: a field run on 2026-05-16/18 produced 32× `SD status
-    # changed: FAILED` over 42 h, traced to series resistor R8 on the
-    # MISO line (GP12 ↔ SD_CON pin 3). R8 has since been removed and
-    # MISO is now a direct trace. Baudrate kept at 10 MHz as a
-    # precaution until the next bench run confirms 40 MHz is safe
-    # without R8; bandwidth is not the bottleneck (CSV rows are ~30
-    # bytes), so leaving headroom on the link is the conservative call.
+    # changed: FAILED` over 42 h. R8 (the 33 Ω series damper on the MISO
+    # line, GP12 ↔ SD_CON pin 3) was suspected at the time, but the root
+    # cause was VSYS starvation from the 1N4002 input diodes (chat-log
+    # 2026-05-19). R8 STAYS on the next-rev PCB as a useful SPI signal
+    # damper at 10 MHz (chat-log 2026-05-23 "keep R8 = 33 Ω; fix the
+    # firmware comment instead"). The actual SD-init reliability fix is a
+    # 10 kΩ pull-up from SPI_RX (GP12/MISO) → 3V3, queued under the SD
+    # card module entry in docs/hardware/next-revision.md. Baudrate stays
+    # at 10 MHz until a bench run on the new board confirms higher is
+    # safe; bandwidth is not the bottleneck (CSV rows are ~30 bytes).
     "spi": {
         "id": 1,
         "baudrate": 10000000,
         "sck": 10,  # GP10 → SD_CON.SCK
         "mosi": 11,  # GP11 → R10 → SD_CON.MOSI
-        "miso": 12,  # GP12 → SD_CON.MISO (direct; R8 removed)
+        "miso": 12,  # GP12 → SD_CON.MISO (via R8 = 33 Ω damper; + 10 kΩ pull-up to 3V3 next-rev)
         "cs": 13,  # GP13 → SD_CON.CS
         "mount_point": "/sd",
     },

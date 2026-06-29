@@ -65,6 +65,8 @@ class HardwareFactory:
         self.spi = None
         self.sd = None
         self.sd_mounted = False
+        self._sd_detect_pin = None
+        self._sd_detect_present_low = True
         self.pins = {}
         self.errors = []
         self._debug_callback = debug_callback
@@ -124,6 +126,11 @@ class HardwareFactory:
 
         # Step 4: Initialize GPIO pins
         self._init_pins()
+
+        # Step 4b: Initialize SD card-detect (DET) input. Non-fatal; when
+        # disabled or it fails, is_card_present() reports True so recovery
+        # falls back to the pre-DET poll-only behavior.
+        self._init_sd_detect()
 
         # Step 5: Initialize PCA9685 PWM driver (non-fatal; absent on
         # current PCB, enabled in config once the next revision lands).
@@ -409,6 +416,52 @@ class HardwareFactory:
             self.errors.append(f"Pin initialization failed: {e}")
             return False
 
+    def _init_sd_detect(self) -> bool:
+        """
+        Initialize the SD card-detect (DET) input pin.
+
+        Reads ``pins.sd_detect`` as an input with the configured internal
+        pull (``sd_detect.pull``). When ``sd_detect.enabled`` is False the
+        pin is left None and ``is_card_present()`` always reports True —
+        the pre-DET poll-only recovery behavior. Non-fatal: any failure
+        here falls back to that same always-present assumption.
+
+        Returns True if the DET pin was created, False otherwise.
+        """
+        sd_cfg = self.config.get("sd_detect", {})
+        if not sd_cfg.get("enabled", False):
+            self._debug("SD card-detect disabled in config; recovery is poll-only")
+            return False
+
+        pins = self.config.get("pins", {})
+        if "sd_detect" not in pins:
+            self.errors.append("sd_detect enabled but pins.sd_detect missing")
+            return False
+
+        self._sd_detect_present_low = bool(sd_cfg.get("present_when_low", True))
+        pull_name = sd_cfg.get("pull", "up")
+        pull_map = {
+            "up": getattr(Pin, "PULL_UP", None),
+            "down": getattr(Pin, "PULL_DOWN", None),
+            "none": None,
+        }
+        pull = pull_map.get(pull_name, getattr(Pin, "PULL_UP", None))
+        try:
+            pin_num = pins["sd_detect"]
+            if pull is None:
+                self._sd_detect_pin = Pin(pin_num, Pin.IN)
+            else:
+                self._sd_detect_pin = Pin(pin_num, Pin.IN, pull)
+            self._debug(
+                f"SD card-detect on GP{pin_num} "
+                f"(present_when_low={self._sd_detect_present_low}, pull={pull_name})"
+            )
+            return True
+        except Exception as e:
+            self.errors.append(f"SD card-detect init failed: {e}")
+            self._sd_detect_pin = None
+            return False
+
     def _init_pca9685(self) -> bool:
         """
         Initialize the PCA9685 PWM driver on the shared I2C0 bus.
@@ -475,6 +528,23 @@ class HardwareFactory:
     def is_sd_mounted(self) -> bool:
         """Return whether SD card is currently mounted."""
         return self.sd_mounted
+
+    def is_card_present(self) -> bool:
+        """
+        Return whether the SD slot reports a card via the DET switch.
+
+        When no DET pin is configured/initialized (``sd_detect.enabled``
+        False or init failed), returns True so callers fall back to
+        probing the bus — the pre-DET behavior. With DET present, reads
+        the pin and applies the configured ``present_when_low`` polarity.
+        """
+        if self._sd_detect_pin is None:
+            return True
+        try:
+            val = self._sd_detect_pin.value()
+        except Exception:
+            return True
+        return (val == 0) if self._sd_detect_present_low else (val == 1)
 
     def refresh_sd(self) -> bool:
         """

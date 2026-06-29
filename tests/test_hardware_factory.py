@@ -531,6 +531,96 @@ class TestHardwareFactoryI2C:
         assert "sda_pin" in str(call_kwargs) or "scl_pin" in str(call_kwargs)
 
 
+class TestHardwareFactorySDDetect:
+    """Tests for the SD card-detect (DET) input."""
+
+    def test_is_card_present_true_when_no_det_pin(self):
+        """No DET pin initialized → assume a card is present (poll-only fallback)."""
+        from lib.hardware_factory import HardwareFactory
+
+        factory = HardwareFactory()
+        assert factory.is_card_present() is True
+
+    def test_init_sd_detect_disabled_skips(self, monkeypatch):
+        """sd_detect.enabled=False leaves the pin None and records no error."""
+        from lib.hardware_factory import HardwareFactory
+
+        factory = HardwareFactory()
+        monkeypatch.setitem(
+            factory.config, "sd_detect", {"enabled": False, "present_when_low": True, "pull": "up"}
+        )
+        assert factory._init_sd_detect() is False
+        assert factory._sd_detect_pin is None
+        assert factory.is_card_present() is True
+        assert factory.errors == []
+
+    def test_init_sd_detect_enabled_creates_pin(self, monkeypatch):
+        """sd_detect.enabled=True creates the DET input pin."""
+        from lib.hardware_factory import HardwareFactory
+
+        factory = HardwareFactory()
+        monkeypatch.setitem(
+            factory.config, "sd_detect", {"enabled": True, "present_when_low": True, "pull": "up"}
+        )
+        assert factory._init_sd_detect() is True
+        assert factory._sd_detect_pin is not None
+
+    def test_is_card_present_active_low(self, monkeypatch):
+        """present_when_low=True: LOW means a card is seated, HIGH means empty."""
+        from lib.hardware_factory import HardwareFactory
+
+        factory = HardwareFactory()
+        monkeypatch.setitem(
+            factory.config, "sd_detect", {"enabled": True, "present_when_low": True, "pull": "up"}
+        )
+        factory._init_sd_detect()
+        factory._sd_detect_pin._current_value = 0
+        assert factory.is_card_present() is True
+        factory._sd_detect_pin._current_value = 1
+        assert factory.is_card_present() is False
+
+    def test_is_card_present_active_high(self, monkeypatch):
+        """present_when_low=False inverts the polarity."""
+        from lib.hardware_factory import HardwareFactory
+
+        factory = HardwareFactory()
+        monkeypatch.setitem(
+            factory.config, "sd_detect", {"enabled": True, "present_when_low": False, "pull": "down"}
+        )
+        factory._init_sd_detect()
+        factory._sd_detect_pin._current_value = 1
+        assert factory.is_card_present() is True
+        factory._sd_detect_pin._current_value = 0
+        assert factory.is_card_present() is False
+
+    def test_init_sd_detect_missing_pin_records_error(self, monkeypatch):
+        """Enabled but pins.sd_detect missing records an error and stays None."""
+        from lib.hardware_factory import HardwareFactory
+
+        factory = HardwareFactory()
+        monkeypatch.setitem(
+            factory.config, "sd_detect", {"enabled": True, "present_when_low": True, "pull": "up"}
+        )
+        pins_no_det = dict(factory.config.get("pins", {}))
+        pins_no_det.pop("sd_detect", None)
+        monkeypatch.setitem(factory.config, "pins", pins_no_det)
+        assert factory._init_sd_detect() is False
+        assert factory._sd_detect_pin is None
+        assert any("sd_detect" in e for e in factory.errors)
+
+    def test_is_card_present_tolerates_read_failure(self, monkeypatch):
+        """A raising pin.value() falls back to reporting the card present."""
+        from lib.hardware_factory import HardwareFactory
+
+        factory = HardwareFactory()
+        monkeypatch.setitem(
+            factory.config, "sd_detect", {"enabled": True, "present_when_low": True, "pull": "up"}
+        )
+        factory._init_sd_detect()
+        factory._sd_detect_pin.value = Mock(side_effect=OSError("pin gone"))
+        assert factory.is_card_present() is True
+
+
 class TestHardwareFactoryPCA9685:
     """Tests for PCA9685 PWM driver initialization."""
 

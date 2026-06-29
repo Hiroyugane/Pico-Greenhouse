@@ -19,6 +19,18 @@ import uasyncio as asyncio
 
 from lib.led_button import LED
 
+# SD subsystem states (tri-state, set via set_sd_state()). With the
+# Adafruit 4682 card-detect line wired (next-rev PCB), the recovery loop
+# can tell a deliberately-removed card apart from a genuine mount fault:
+#   no_card_inserted — DET reports the slot empty (operator pulled it).
+#                      Not a fault: the sd_led stays OFF, no retry spam.
+#   mounted          — card present and the filesystem is mounted.
+#   mount_failed     — card present but it would not mount (a real fault).
+SD_NO_CARD = "no_card_inserted"
+SD_MOUNTED = "mounted"
+SD_MOUNT_FAILED = "mount_failed"
+_SD_STATES = (SD_NO_CARD, SD_MOUNTED, SD_MOUNT_FAILED)
+
 
 class StatusManager:
     """
@@ -31,6 +43,10 @@ class StatusManager:
     Optional integrations (via set_buzzer / set_logger):
     - Buzzer: plays error tone on first error condition, alert on first warning.
     - Logger: logs warning/error condition transitions.
+
+    SD status is tracked two ways: the legacy boolean (set_sd_status) and
+    the richer tri-state (set_sd_state, one of SD_NO_CARD / SD_MOUNTED /
+    SD_MOUNT_FAILED). Both keep _sd_healthy and the sd_led in sync.
 
     Attributes:
         _activity_led: LED for I/O activity blink (GP4)
@@ -47,6 +63,11 @@ class StatusManager:
         _logger: optional EventLogger for condition-change logging
         _post_passed: whether POST has been run and passed
     """
+
+    # Re-exported on the class so callers can write StatusManager.SD_MOUNTED.
+    SD_NO_CARD = SD_NO_CARD
+    SD_MOUNTED = SD_MOUNTED
+    SD_MOUNT_FAILED = SD_MOUNT_FAILED
 
     def __init__(
         self,
@@ -77,6 +98,7 @@ class StatusManager:
         self._active_warnings = set()
         self._active_errors = set()
         self._sd_healthy = True
+        self._sd_state = SD_MOUNTED
         self._heartbeat_count = 0
         self._activity_blink_ms = activity_blink_ms
         self._buzzer = None
@@ -198,7 +220,13 @@ class StatusManager:
 
     def set_sd_status(self, healthy: bool) -> None:
         """
-        Update SD card health status.
+        Update SD card health status (legacy boolean API).
+
+        Kept for callers that only know mounted-vs-not (boot reflection,
+        OLED remount). Maps True → SD_MOUNTED, False → SD_MOUNT_FAILED and
+        keeps _sd_state coherent. For the recovery loop's three-way
+        distinction (including a deliberately removed card), use
+        set_sd_state().
 
         Args:
             healthy (bool): True = SD mounted and working (LED off).
@@ -206,6 +234,7 @@ class StatusManager:
         """
         changed = healthy != self._sd_healthy
         self._sd_healthy = healthy
+        self._sd_state = SD_MOUNTED if healthy else SD_MOUNT_FAILED
         if healthy:
             self._sd_led.off()
         else:
@@ -217,6 +246,35 @@ class StatusManager:
                 self._logger.info("StatusMgr", f"SD status changed: {state}")
             else:
                 self._logger.debug("StatusMgr", "SD status unchanged", healthy=healthy)
+
+    def set_sd_state(self, state: str) -> None:
+        """
+        Update SD subsystem state (tri-state API).
+
+        Args:
+            state (str): one of SD_NO_CARD / SD_MOUNTED / SD_MOUNT_FAILED.
+
+        LED policy: mounted and no_card leave the sd_led OFF (a missing
+        card is a normal operator action, not a fault); mount_failed lights
+        it solid. The precise state is exposed via get_status()["sd_state"]
+        for the OLED. Raises ValueError on an unknown state.
+        """
+        if state not in _SD_STATES:
+            raise ValueError(f"sd state must be one of {_SD_STATES}, got {state!r}")
+
+        changed = state != self._sd_state
+        self._sd_state = state
+        self._sd_healthy = state == SD_MOUNTED
+        if state == SD_MOUNT_FAILED:
+            self._sd_led.on()
+        else:
+            self._sd_led.off()
+
+        if self._logger:
+            if changed:
+                self._logger.info("StatusMgr", f"SD state changed: {state}")
+            else:
+                self._logger.debug("StatusMgr", "SD state unchanged", state=state)
 
     # ── Warning LED (GP7) ──────────────────────────────────────────────
 
@@ -365,6 +423,7 @@ class StatusManager:
                 'warnings': list of active warning keys,
                 'errors': list of active error keys,
                 'sd_healthy': bool,
+                'sd_state': str (SD_NO_CARD / SD_MOUNTED / SD_MOUNT_FAILED),
                 'heartbeat_count': int,
                 'post_passed': bool,
             }
@@ -373,6 +432,7 @@ class StatusManager:
             "warnings": sorted(self._active_warnings),
             "errors": sorted(self._active_errors),
             "sd_healthy": self._sd_healthy,
+            "sd_state": self._sd_state,
             "heartbeat_count": self._heartbeat_count,
             "post_passed": self._post_passed,
         }

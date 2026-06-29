@@ -202,6 +202,100 @@ class TestStatusManagerSD:
         assert sm.get_status()["sd_healthy"] is True
 
 
+class TestStatusManagerSDState:
+    """Tests for the tri-state SD API (set_sd_state)."""
+
+    def test_state_constants_exposed(self):
+        """SD state constants are importable and re-exported on the class."""
+        from lib import status_manager
+        from lib.status_manager import StatusManager
+
+        assert status_manager.SD_MOUNTED == "mounted"
+        assert status_manager.SD_NO_CARD == "no_card_inserted"
+        assert status_manager.SD_MOUNT_FAILED == "mount_failed"
+        assert StatusManager.SD_MOUNTED == "mounted"
+
+    def test_set_state_mounted_led_off(self):
+        """mounted → LED off, healthy True, state mounted."""
+        from lib.status_manager import SD_MOUNTED, StatusManager
+
+        sm = StatusManager(4, 6, 7, 8, 25)
+        sm.set_sd_state(SD_MOUNTED)
+
+        sm._sd_led.pin.off.assert_called()  # type: ignore[attr-defined]
+        status = sm.get_status()
+        assert status["sd_state"] == "mounted"
+        assert status["sd_healthy"] is True
+
+    def test_set_state_mount_failed_led_on(self):
+        """mount_failed → LED solid on, healthy False."""
+        from lib.status_manager import SD_MOUNT_FAILED, StatusManager
+
+        sm = StatusManager(4, 6, 7, 8, 25)
+        sm.set_sd_state(SD_MOUNT_FAILED)
+
+        sm._sd_led.pin.on.assert_called()  # type: ignore[attr-defined]
+        status = sm.get_status()
+        assert status["sd_state"] == "mount_failed"
+        assert status["sd_healthy"] is False
+
+    def test_set_state_no_card_led_off(self):
+        """no_card_inserted → LED off (not a fault), healthy False."""
+        from lib.status_manager import SD_MOUNT_FAILED, SD_NO_CARD, StatusManager
+
+        sm = StatusManager(4, 6, 7, 8, 25)
+        # Light the LED first via a fault, then prove no_card clears it.
+        sm.set_sd_state(SD_MOUNT_FAILED)
+        sm._sd_led.pin.off.reset_mock()  # type: ignore[attr-defined]
+        sm.set_sd_state(SD_NO_CARD)
+
+        sm._sd_led.pin.off.assert_called()  # type: ignore[attr-defined]
+        status = sm.get_status()
+        assert status["sd_state"] == "no_card_inserted"
+        assert status["sd_healthy"] is False
+
+    def test_set_state_invalid_raises(self):
+        """An unknown SD state raises ValueError."""
+        from lib.status_manager import StatusManager
+
+        sm = StatusManager(4, 6, 7, 8, 25)
+        with pytest.raises(ValueError, match="sd state must be one of"):
+            sm.set_sd_state("ejected")
+
+    def test_set_state_transition_logged(self):
+        """A state transition logs an info line with the new state."""
+        from lib.status_manager import SD_NO_CARD, StatusManager
+
+        sm = StatusManager(4, 6, 7, 8, 25)
+        logger = Mock()
+        sm.set_logger(logger)
+
+        sm.set_sd_state(SD_NO_CARD)
+        logger.info.assert_called_with("StatusMgr", "SD state changed: no_card_inserted")
+
+    def test_set_state_same_not_logged_as_change(self):
+        """Re-asserting the same state does not log an info change."""
+        from lib.status_manager import SD_MOUNTED, StatusManager
+
+        sm = StatusManager(4, 6, 7, 8, 25)
+        logger = Mock()
+        sm.set_logger(logger)
+
+        # Default state is mounted; setting mounted again should not log info.
+        sm.set_sd_state(SD_MOUNTED)
+        logger.info.assert_not_called()
+
+    def test_set_sd_status_keeps_state_coherent(self):
+        """Legacy set_sd_status maps onto the tri-state field."""
+        from lib.status_manager import StatusManager
+
+        sm = StatusManager(4, 6, 7, 8, 25)
+        sm.set_sd_status(False)
+        assert sm.get_status()["sd_state"] == "mount_failed"
+        sm.set_sd_status(True)
+        assert sm.get_status()["sd_state"] == "mounted"
+
+
 class TestStatusManagerActivity:
     """Tests for activity LED blink (GP4)."""
 
@@ -260,6 +354,7 @@ class TestStatusManagerGetStatus:
             "warnings": [],
             "errors": [],
             "sd_healthy": True,
+            "sd_state": "mounted",
             "heartbeat_count": 0,
             "post_passed": False,
         }

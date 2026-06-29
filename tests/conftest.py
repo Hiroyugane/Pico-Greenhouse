@@ -314,6 +314,7 @@ def mock_status_manager():
     sm = Mock()
     sm.blink_activity = AsyncMock()
     sm.set_sd_status = Mock()
+    sm.set_sd_state = Mock()
     sm.set_warning = Mock()
     sm.clear_warning = Mock()
     sm.set_error = Mock()
@@ -324,6 +325,7 @@ def mock_status_manager():
             "warnings": [],
             "errors": [],
             "sd_healthy": True,
+            "sd_state": "mounted",
             "heartbeat_count": 0,
         }
     )

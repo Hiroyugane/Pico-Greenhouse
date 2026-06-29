@@ -54,7 +54,7 @@ from lib.oled_display import OLEDDisplay
 from lib.relay import FanController, GrowlightController, RelayController
 from lib.sht31 import SHT31
 from lib.soil_logger import SoilLogger
-from lib.status_manager import StatusManager
+from lib.status_manager import SD_MOUNT_FAILED, SD_MOUNTED, SD_NO_CARD, StatusManager
 from lib.temp_humidity_logger import TempHumidityLogger
 from lib.time_provider import RTCTimeProvider
 from lib.updater import run_pending_update
@@ -881,6 +881,11 @@ async def main():
 
     logger.debug("MAIN", f"health_check={normal_interval}s, sd_recovery={recovery_interval}s")
 
+    # Card-detect edge tracking for the recovery loop. Seed from the
+    # current DET reading so the first iteration doesn't see a phantom
+    # absent→present edge. With no DET wired, is_card_present() is True.
+    card_present_prev = hardware.is_card_present()
+
     while True:
         await asyncio.sleep(health_interval)
 
@@ -939,46 +944,68 @@ async def main():
         if load_snapshot:
             logger.debug("MAIN", "runtime load", **load_snapshot)
 
-        # Hot-swap recovery: attempt SD refresh when primary is
-        # reported down OR when the in-memory buffer is growing.
-        # The second condition catches the case where is_primary_available()
-        # returns True (cached VFS metadata) but real writes are failing.
-        # refresh_sd() performs a block-level readblocks check and is
-        # cheap when the card is actually present.
-        primary_avail = buffer_manager.is_primary_available()
-        sd_needs_check = not primary_avail or buffered > 0
-        logger.debug(
-            "MAIN",
-            "SD check decision",
-            sd_needs_check=sd_needs_check,
-            primary_available=primary_avail if not sd_needs_check else "skipped",
-            buffered=buffered,
-        )
-        if sd_needs_check:
+        # Hot-swap recovery, now card-detect aware (Adafruit 4682 DET).
+        # When DET reports the slot empty we skip refresh_sd() entirely —
+        # no SPI traffic and no "retrying soon" spam for a card the
+        # operator pulled on purpose. A DET absent→present edge forces an
+        # immediate remount instead of waiting out sd_recovery_interval_s.
+        # When no DET is wired, is_card_present() is always True, so this
+        # falls back to the prior primary-down / buffer-growing logic.
+        card_present = hardware.is_card_present()
+        card_reinserted = card_present and not card_present_prev
+        card_present_prev = card_present
+
+        if not card_present:
+            # Slot empty: park on fallback, flag it, but do not probe the bus.
+            logger.debug("MAIN", "SD card-detect reports no card; skipping refresh")
+            status_manager.set_sd_state(SD_NO_CARD)
+            if buffered > 0:
+                status_manager.set_warning("fallback_active", True)
+            else:
+                status_manager.clear_warning("fallback_active")
+            # Poll DET on the fast interval so reinsertion is caught promptly.
+            health_interval = recovery_interval
+        else:
+            # Card present: refresh when primary is down, the buffer is
+            # growing (is_primary_available() can return True on cached VFS
+            # metadata while real writes fail), or a card was just inserted.
+            primary_avail = buffer_manager.is_primary_available()
+            sd_needs_check = card_reinserted or not primary_avail or buffered > 0
             logger.debug(
                 "MAIN",
-                f"SD needs check: primary_avail={primary_avail}, buffered={buffered}",
+                "SD check decision",
+                sd_needs_check=sd_needs_check,
+                card_reinserted=card_reinserted,
+                primary_available=primary_avail if not sd_needs_check else "skipped",
+                buffered=buffered,
             )
-            if hardware.refresh_sd():
-                logger.info("MAIN", "SD card re-mounted after hot-swap")
-                logger.debug("MAIN", "SD recovery success", prev_interval=health_interval)
-                status_manager.set_sd_status(True)
-                # Clear any stale logged_error that was SD-related
-                status_manager.clear_error("logged_error")
-                # Flush in-memory buffer now that primary is back
-                if buffered > 0:
-                    buffer_manager.flush()
-                    logger.info("MAIN", f"Flushed {buffered} buffered entries to SD")
-                health_interval = normal_interval
+            if sd_needs_check:
+                logger.debug(
+                    "MAIN",
+                    f"SD needs check: reinserted={card_reinserted}, "
+                    f"primary_avail={primary_avail}, buffered={buffered}",
+                )
+                if hardware.refresh_sd():
+                    logger.info("MAIN", "SD card re-mounted after hot-swap")
+                    logger.debug("MAIN", "SD recovery success", prev_interval=health_interval)
+                    status_manager.set_sd_state(SD_MOUNTED)
+                    # Clear any stale logged_error that was SD-related
+                    status_manager.clear_error("logged_error")
+                    status_manager.clear_warning("fallback_active")
+                    # Flush in-memory buffer now that primary is back
+                    if buffered > 0:
+                        buffer_manager.flush()
+                        logger.info("MAIN", f"Flushed {buffered} buffered entries to SD")
+                    health_interval = normal_interval
+                else:
+                    logger.warning("MAIN", "SD card not accessible, retrying soon")
+                    status_manager.set_sd_state(SD_MOUNT_FAILED)
+                    status_manager.set_warning("fallback_active", True)
+                    health_interval = recovery_interval
             else:
-                logger.warning("MAIN", "SD card not accessible, retrying soon")
-                status_manager.set_sd_status(False)
-                status_manager.set_warning("fallback_active", True)
-                health_interval = recovery_interval
-        else:
-            status_manager.set_sd_status(True)
-            status_manager.clear_warning("fallback_active")
-            health_interval = normal_interval
+                status_manager.set_sd_state(SD_MOUNTED)
+                status_manager.clear_warning("fallback_active")
+                health_interval = normal_interval
 
         # Log buffer warning AFTER the SD check so the reader sees
         # the recovery attempt first, then the remaining state.

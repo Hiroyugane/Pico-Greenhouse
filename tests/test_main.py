@@ -623,6 +623,126 @@ class TestMainHealthCheck:
         info_calls = [str(c) for c in mock_logger.info.call_args_list]
         assert any("Flushed" in c and "10" in c for c in info_calls)
 
+    async def test_no_card_detected_skips_refresh(self, monkeypatch):
+        """When DET reports no card, refresh_sd is skipped and state is no_card."""
+        import main as main_module
+
+        monkeypatch.setattr(main_module, "validate_config", lambda: True)
+
+        mock_hw = Mock()
+        mock_hw.setup.return_value = True
+        mock_hw.get_rtc.return_value = Mock()
+        mock_hw.is_sd_mounted.return_value = True
+        mock_hw.is_card_present.return_value = False  # slot empty
+        monkeypatch.setattr(main_module, "HardwareFactory", lambda *a, **kw: mock_hw)
+
+        mock_buffer = Mock()
+        mock_buffer.get_metrics.return_value = {
+            "buffer_entries": 0,
+            "writes_to_fallback": 0,
+            "fallback_migrations": 0,
+            "writes_to_primary": 0,
+            "write_failures": 0,
+        }
+        mock_buffer.is_primary_available.return_value = True
+        mock_buffer._buffers = {}
+        monkeypatch.setattr(main_module, "BufferManager", lambda *a, **kw: mock_buffer)
+
+        mock_logger = Mock()
+        monkeypatch.setattr(main_module, "EventLogger", lambda *a, **kw: mock_logger)
+        monkeypatch.setattr(main_module, "TempHumidityLogger", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "FanController", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "GrowlightController", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "ServiceReminder", lambda *a, **kw: Mock())
+        mock_buzzer = Mock()
+        mock_buzzer.startup = AsyncMock()
+        monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
+        mock_sm = Mock(run_post=AsyncMock(return_value=True))
+        monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: mock_sm)
+        monkeypatch.setattr(main_module.asyncio, "create_task", _mock_create_task)
+
+        call_count = 0
+
+        async def limited_sleep(duration):
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 2:
+                raise asyncio.CancelledError()
+
+        monkeypatch.setattr(main_module.asyncio, "sleep", limited_sleep)
+        monkeypatch.setattr(main_module.asyncio, "sleep_ms", limited_sleep)
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with pytest.raises(asyncio.CancelledError):
+                await main_module.main()
+
+        # No card → no bus probe, and the tri-state reports no_card_inserted.
+        mock_hw.refresh_sd.assert_not_called()
+        mock_sm.set_sd_state.assert_any_call("no_card_inserted")
+
+    async def test_card_reinsert_forces_remount(self, monkeypatch):
+        """A DET absent→present edge forces refresh_sd even when idle/clean."""
+        import main as main_module
+
+        monkeypatch.setattr(main_module, "validate_config", lambda: True)
+
+        mock_hw = Mock()
+        mock_hw.setup.return_value = True
+        mock_hw.get_rtc.return_value = Mock()
+        mock_hw.is_sd_mounted.return_value = True
+        # Seed read (before loop) = absent; first loop read = present → edge.
+        mock_hw.is_card_present.side_effect = [False, True, True, True]
+        mock_hw.refresh_sd.return_value = True
+        monkeypatch.setattr(main_module, "HardwareFactory", lambda *a, **kw: mock_hw)
+
+        mock_buffer = Mock()
+        mock_buffer.get_metrics.return_value = {
+            "buffer_entries": 0,
+            "writes_to_fallback": 0,
+            "fallback_migrations": 0,
+            "writes_to_primary": 0,
+            "write_failures": 0,
+        }
+        # Primary claims available and buffer is empty: only the reinsert
+        # edge can trigger a refresh here.
+        mock_buffer.is_primary_available.return_value = True
+        mock_buffer._buffers = {}
+        monkeypatch.setattr(main_module, "BufferManager", lambda *a, **kw: mock_buffer)
+
+        mock_logger = Mock()
+        monkeypatch.setattr(main_module, "EventLogger", lambda *a, **kw: mock_logger)
+        monkeypatch.setattr(main_module, "TempHumidityLogger", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "FanController", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "GrowlightController", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "ServiceReminder", lambda *a, **kw: Mock())
+        mock_buzzer = Mock()
+        mock_buzzer.startup = AsyncMock()
+        monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
+        mock_sm = Mock(run_post=AsyncMock(return_value=True))
+        monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: mock_sm)
+        monkeypatch.setattr(main_module.asyncio, "create_task", _mock_create_task)
+
+        call_count = 0
+
+        async def limited_sleep(duration):
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 2:
+                raise asyncio.CancelledError()
+
+        monkeypatch.setattr(main_module.asyncio, "sleep", limited_sleep)
+        monkeypatch.setattr(main_module.asyncio, "sleep_ms", limited_sleep)
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with pytest.raises(asyncio.CancelledError):
+                await main_module.main()
+
+        # The reinsert edge forced a remount despite idle/clean buffer state.
+        mock_hw.refresh_sd.assert_called()
+        mock_sm.set_sd_state.assert_any_call("mounted")
+
     async def test_fallback_migration_attempt(self, monkeypatch):
         """When fallback writes exceed migrations, attempt migration."""
         import main as main_module

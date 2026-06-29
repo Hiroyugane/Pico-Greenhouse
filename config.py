@@ -4,6 +4,22 @@
 #
 # Central configuration for all hardware pins, intervals, file paths, and thresholds.
 # Modify values here to tune device behavior without editing module code.
+#
+# I²C device address map (keep this current — it's the first place to look
+# for an address conflict before adding a device):
+#
+#   I²C0 — shared bus (GP0/GP1, port 0), pulled up via R1/R2:
+#     0x3C  SSD1306 OLED display
+#     0x40  PCA9685 16-channel PWM fan driver
+#     0x44  SHT31-D temperature/humidity sensor (0x45 if ADDR→VCC)
+#     0x60  MCP4725 grow-light dimming DAC (plant mode; 0x61 if A0→VCC)
+#     0x68  DS3231 RTC
+#     (no soil address — the soil sensor is ANALOG on GP28/ADC2, TLC555)
+#
+#   I²C1 — SEPARATE future bus (hydroponics, not yet wired). These are on
+#   a different bus, so do NOT mistake them for I²C0 conflicts:
+#     0x63  Atlas EZO-pH
+#     0x64  Atlas EZO-EC
 
 DEVICE_CONFIG = {
     # Operating mode — single switch that picks which optional components

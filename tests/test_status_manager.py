@@ -255,7 +255,7 @@ class TestStatusManagerSDState:
 
     def test_set_state_mounted_clears_blink(self):
         """Returning to mounted clears the blink flag and turns the LED off."""
-        from lib.status_manager import SD_MOUNTED, SD_MOUNT_FAILED, StatusManager
+        from lib.status_manager import SD_MOUNT_FAILED, SD_MOUNTED, StatusManager
 
         sm = StatusManager(4, 6, 7, 8, 25)
         sm.set_sd_state(SD_MOUNT_FAILED)

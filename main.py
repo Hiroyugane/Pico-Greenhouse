@@ -829,6 +829,11 @@ async def main():
     asyncio.create_task(feed_watchdog(wdt, wdt_feed_interval_ms, logger))
     logger.debug("MAIN", "task spawned", task="feed_watchdog")
 
+    # Spawn SD-LED blink task (blinks GP5 while the SD state is mount_failed;
+    # no_card is solid on and mounted is off, both held by set_sd_state)
+    asyncio.create_task(status_manager.sd_blink_loop(status_led_config.get("sd_fault_blink_ms", 500)))
+    logger.debug("MAIN", "task spawned", task="status_manager.sd_blink_loop")
+
     # Spawn write queue drain task (async SD write batching)
     # Drain task is resilient and catches all exceptions internally (never dies)
     asyncio.create_task(write_queue.start_drain_task())

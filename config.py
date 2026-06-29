@@ -59,8 +59,8 @@ DEVICE_CONFIG = {
     #              damper at 10 MHz baud — see chat-log 2026-05-23
     #              "keep R8 = 33 Ω; fix the firmware comment instead".
     #   GP14:      Passive buzzer (BUZ_CON, with R3 pulldown to GND)
-    #   GP15:      Free (formerly DHT22 data on T/H_CON pin 4; SHT31 now
-    #              shares the I2C0 bus, GP15 is available for future use)
+    #   GP15:      SD card-detect (DET) input from SD_CON (Adafruit 4682 CD
+    #              switch; formerly DHT22 data, freed when SHT31 moved to I2C0)
     #   GP16:      UART0 TX → CO2 sensor (via R9 to CO2_CON pin 4)
     #   GP17:      UART0 RX ← CO2 sensor (via R11 from CO2_CON pin 3)
     #   GP18:      Relay 1 — fan 1     (REL_CON pin 2)
@@ -94,6 +94,8 @@ DEVICE_CONFIG = {
         "button_menu": 9,  # GP9 — Menu button (short=cycle menu, long≥3s=action)
         # Buzzer (BUZ_CON, pulled to GND via R3)
         "buzzer": 14,  # GP14 — Passive buzzer (PWM output)
+        # SD card-detect (DET) input — Adafruit 4682 CD switch on SD_CON
+        "sd_detect": 15,  # GP15 — SD card-detect input (see sd_detect block)
         # CO2 sensor (UART0 with series resistors R9/R11)
         "co2_uart_id": 0,  # UART0
         "co2_uart_tx": 16,  # GP16 — UART0 TX → CO2_CON pin 4 (via R9)
@@ -135,6 +137,23 @@ DEVICE_CONFIG = {
         "miso": 12,  # GP12 → SD_CON.MISO (via R8 = 33 Ω damper; + 10 kΩ pull-up to 3V3 next-rev)
         "cs": 13,  # GP13 → SD_CON.CS
         "mount_point": "/sd",
+    },
+    # SD card-detect (DET) — Adafruit 4682 breakout card-detect switch.
+    #
+    # The 4682 CD pin shorts to GND when a card is seated, so with an
+    # internal pull-up the DET GPIO (pins.sd_detect / GP15) reads LOW when
+    # a card is present. Polarity + pull are configurable because they are
+    # board-specific and must be bench-confirmed on the new PCB before they
+    # are trusted (see docs/test/hw-test-log.md "Adafruit 4682 SD bring-up").
+    #
+    # When enabled=False the DET line is ignored and SD hot-swap recovery
+    # falls back to the pre-DET poll-only behavior — HardwareFactory.
+    # is_card_present() then always reports True, so the health loop keeps
+    # probing the bus the way it did before DET was wired.
+    "sd_detect": {
+        "enabled": True,
+        "present_when_low": True,  # ASSUMED: 4682 CD → GND on insert; bench-confirm
+        "pull": "up",  # internal pull on the DET input: "up" | "down" | "none"
     },
     # File Paths
     "files": {
@@ -696,8 +715,10 @@ def validate_config():
             "heater_mosfet",
             "gp2_breakout",
             "adc_input",
+            "sd_detect",
         ],
         "spi": ["id", "baudrate", "sck", "mosi", "miso", "cs", "mount_point"],
+        "sd_detect": ["enabled", "present_when_low", "pull"],
         "files": ["system_log", "fallback_path"],
         "paths": [
             "sensor_root",
@@ -979,6 +1000,14 @@ def validate_config():
         raise ValueError("soil_logger.warn_pct_below must be 0-100")
     if not isinstance(soil_cfg["sensor_type"], str) or not soil_cfg["sensor_type"]:
         raise ValueError("soil_logger.sensor_type must be a non-empty string")
+
+    sd_detect_cfg = DEVICE_CONFIG["sd_detect"]
+    if not isinstance(sd_detect_cfg["enabled"], bool):
+        raise ValueError("sd_detect.enabled must be a bool")
+    if not isinstance(sd_detect_cfg["present_when_low"], bool):
+        raise ValueError("sd_detect.present_when_low must be a bool")
+    if sd_detect_cfg["pull"] not in ("up", "down", "none"):
+        raise ValueError("sd_detect.pull must be 'up', 'down', or 'none'")
 
     disp_cfg = DEVICE_CONFIG["display"]
     for delay_key in ("startup_banner_s", "vram_clear_delay_s", "invert_delay_s"):

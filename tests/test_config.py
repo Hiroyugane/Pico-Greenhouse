@@ -15,6 +15,7 @@ class TestConfigStructure:
         required = [
             "pins",
             "spi",
+            "sd_detect",
             "files",
             "paths",
             "sht31",
@@ -1102,6 +1103,80 @@ class TestValidateConfig:
                 config.validate_config()
         finally:
             config.DEVICE_CONFIG["soil_logger"]["interval_s"] = original
+
+    def test_sd_detect_pin_present_and_int(self):
+        """pins.sd_detect ships as GP15 and is an int (Adafruit 4682 DET)."""
+        from config import DEVICE_CONFIG
+
+        assert DEVICE_CONFIG["pins"]["sd_detect"] == 15
+        assert isinstance(DEVICE_CONFIG["pins"]["sd_detect"], int)
+
+    def test_sd_detect_block_defaults_valid(self):
+        """Default sd_detect block (enabled, present_when_low, pull=up) validates."""
+        from config import DEVICE_CONFIG, validate_config
+
+        assert DEVICE_CONFIG["sd_detect"]["enabled"] is True
+        assert DEVICE_CONFIG["sd_detect"]["present_when_low"] is True
+        assert DEVICE_CONFIG["sd_detect"]["pull"] == "up"
+        assert validate_config() is True
+
+    def test_sd_detect_missing_pin_raises(self):
+        """Removing pins.sd_detect raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["pins"].pop("sd_detect")
+        try:
+            with pytest.raises(ValueError, match="Missing config key"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["pins"]["sd_detect"] = original
+
+    def test_sd_detect_enabled_non_bool_raises(self):
+        """sd_detect.enabled must be a bool."""
+        import config
+
+        original = config.DEVICE_CONFIG["sd_detect"]["enabled"]
+        config.DEVICE_CONFIG["sd_detect"]["enabled"] = "yes"
+        try:
+            with pytest.raises(ValueError, match="sd_detect.enabled"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["sd_detect"]["enabled"] = original
+
+    def test_sd_detect_present_when_low_non_bool_raises(self):
+        """sd_detect.present_when_low must be a bool."""
+        import config
+
+        original = config.DEVICE_CONFIG["sd_detect"]["present_when_low"]
+        config.DEVICE_CONFIG["sd_detect"]["present_when_low"] = 0
+        try:
+            with pytest.raises(ValueError, match="sd_detect.present_when_low"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["sd_detect"]["present_when_low"] = original
+
+    def test_sd_detect_bad_pull_raises(self):
+        """sd_detect.pull outside {up, down, none} raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["sd_detect"]["pull"]
+        config.DEVICE_CONFIG["sd_detect"]["pull"] = "sideways"
+        try:
+            with pytest.raises(ValueError, match="sd_detect.pull"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["sd_detect"]["pull"] = original
+
+    def test_sd_detect_pull_none_valid(self):
+        """sd_detect.pull='none' (external pull on the board) validates."""
+        import config
+
+        original = config.DEVICE_CONFIG["sd_detect"]["pull"]
+        config.DEVICE_CONFIG["sd_detect"]["pull"] = "none"
+        try:
+            assert config.validate_config() is True
+        finally:
+            config.DEVICE_CONFIG["sd_detect"]["pull"] = original
 
     def test_growlight_dac_address_out_of_range_raises(self):
         """growlight.dac_i2c_address outside 7-bit I2C range raises ValueError."""

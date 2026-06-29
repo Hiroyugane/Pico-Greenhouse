@@ -658,6 +658,36 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["status_leds"]["walk_order"] = original
 
+    def test_sd_fault_blink_ms_default_valid(self):
+        """status_leds.sd_fault_blink_ms ships as a positive int and validates."""
+        from config import DEVICE_CONFIG, validate_config
+
+        assert DEVICE_CONFIG["status_leds"]["sd_fault_blink_ms"] == 500
+        assert validate_config() is True
+
+    def test_sd_fault_blink_ms_zero_raises(self):
+        """status_leds.sd_fault_blink_ms <= 0 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["status_leds"]["sd_fault_blink_ms"]
+        config.DEVICE_CONFIG["status_leds"]["sd_fault_blink_ms"] = 0
+        try:
+            with pytest.raises(ValueError, match="sd_fault_blink_ms"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["status_leds"]["sd_fault_blink_ms"] = original
+
+    def test_sd_fault_blink_ms_missing_raises(self):
+        """Removing status_leds.sd_fault_blink_ms raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["status_leds"].pop("sd_fault_blink_ms")
+        try:
+            with pytest.raises(ValueError, match="Missing config key"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["status_leds"]["sd_fault_blink_ms"] = original
+
     def test_heater_missing_key_raises(self):
         """Missing heater.day_min_temp raises ValueError."""
         import config

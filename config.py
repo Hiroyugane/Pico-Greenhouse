@@ -396,6 +396,7 @@ DEVICE_CONFIG = {
     "status_leds": {
         "activity_blink_ms": 50,  # Activity LED pulse duration (ms)
         "heartbeat_interval_ms": 2000,  # GP25 toggle period (ms)
+        "sd_fault_blink_ms": 500,  # SD LED toggle period while SD mount_failed (ms)
         "th_warn_threshold": 3,  # Consecutive T/H read failures → warning
         "th_error_threshold": 10,  # Consecutive T/H read failures → error
         "rtc_min_year": 2025,  # Year below this → RTC invalid warning
@@ -813,6 +814,7 @@ def validate_config():
         "status_leds": [
             "activity_blink_ms",
             "heartbeat_interval_ms",
+            "sd_fault_blink_ms",
             "th_warn_threshold",
             "th_error_threshold",
             "rtc_min_year",
@@ -1132,6 +1134,9 @@ def validate_config():
 
     if DEVICE_CONFIG["system"]["fallback_migrate_batch_max"] <= 0:
         raise ValueError("system.fallback_migrate_batch_max must be > 0")
+
+    if DEVICE_CONFIG["status_leds"]["sd_fault_blink_ms"] <= 0:
+        raise ValueError("status_leds.sd_fault_blink_ms must be > 0")
 
     # Validate status_leds.walk_order: non-empty list of unique role names
     valid_walk_roles = ("activity", "sd", "reminder", "warning", "error")

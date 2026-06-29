@@ -453,8 +453,7 @@ class HardwareFactory:
             else:
                 self._sd_detect_pin = Pin(pin_num, Pin.IN, pull)
             self._debug(
-                f"SD card-detect on GP{pin_num} "
-                f"(present_when_low={self._sd_detect_present_low}, pull={pull_name})"
+                f"SD card-detect on GP{pin_num} (present_when_low={self._sd_detect_present_low}, pull={pull_name})"
             )
             return True
         except Exception as e:

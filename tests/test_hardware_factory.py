@@ -546,9 +546,7 @@ class TestHardwareFactorySDDetect:
         from lib.hardware_factory import HardwareFactory
 
         factory = HardwareFactory()
-        monkeypatch.setitem(
-            factory.config, "sd_detect", {"enabled": False, "present_when_low": True, "pull": "up"}
-        )
+        monkeypatch.setitem(factory.config, "sd_detect", {"enabled": False, "present_when_low": True, "pull": "up"})
         assert factory._init_sd_detect() is False
         assert factory._sd_detect_pin is None
         assert factory.is_card_present() is True
@@ -559,9 +557,7 @@ class TestHardwareFactorySDDetect:
         from lib.hardware_factory import HardwareFactory
 
         factory = HardwareFactory()
-        monkeypatch.setitem(
-            factory.config, "sd_detect", {"enabled": True, "present_when_low": True, "pull": "up"}
-        )
+        monkeypatch.setitem(factory.config, "sd_detect", {"enabled": True, "present_when_low": True, "pull": "up"})
         assert factory._init_sd_detect() is True
         assert factory._sd_detect_pin is not None
 
@@ -570,9 +566,7 @@ class TestHardwareFactorySDDetect:
         from lib.hardware_factory import HardwareFactory
 
         factory = HardwareFactory()
-        monkeypatch.setitem(
-            factory.config, "sd_detect", {"enabled": True, "present_when_low": True, "pull": "up"}
-        )
+        monkeypatch.setitem(factory.config, "sd_detect", {"enabled": True, "present_when_low": True, "pull": "up"})
         factory._init_sd_detect()
         factory._sd_detect_pin._current_value = 0
         assert factory.is_card_present() is True
@@ -584,9 +578,7 @@ class TestHardwareFactorySDDetect:
         from lib.hardware_factory import HardwareFactory
 
         factory = HardwareFactory()
-        monkeypatch.setitem(
-            factory.config, "sd_detect", {"enabled": True, "present_when_low": False, "pull": "down"}
-        )
+        monkeypatch.setitem(factory.config, "sd_detect", {"enabled": True, "present_when_low": False, "pull": "down"})
         factory._init_sd_detect()
         factory._sd_detect_pin._current_value = 1
         assert factory.is_card_present() is True
@@ -598,9 +590,7 @@ class TestHardwareFactorySDDetect:
         from lib.hardware_factory import HardwareFactory
 
         factory = HardwareFactory()
-        monkeypatch.setitem(
-            factory.config, "sd_detect", {"enabled": True, "present_when_low": True, "pull": "up"}
-        )
+        monkeypatch.setitem(factory.config, "sd_detect", {"enabled": True, "present_when_low": True, "pull": "up"})
         pins_no_det = dict(factory.config.get("pins", {}))
         pins_no_det.pop("sd_detect", None)
         monkeypatch.setitem(factory.config, "pins", pins_no_det)
@@ -613,9 +603,7 @@ class TestHardwareFactorySDDetect:
         from lib.hardware_factory import HardwareFactory
 
         factory = HardwareFactory()
-        monkeypatch.setitem(
-            factory.config, "sd_detect", {"enabled": True, "present_when_low": True, "pull": "up"}
-        )
+        monkeypatch.setitem(factory.config, "sd_detect", {"enabled": True, "present_when_low": True, "pull": "up"})
         factory._init_sd_detect()
         factory._sd_detect_pin.value = Mock(side_effect=OSError("pin gone"))
         assert factory.is_card_present() is True

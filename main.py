@@ -982,8 +982,7 @@ async def main():
             if sd_needs_check:
                 logger.debug(
                     "MAIN",
-                    f"SD needs check: reinserted={card_reinserted}, "
-                    f"primary_avail={primary_avail}, buffered={buffered}",
+                    f"SD needs check: reinserted={card_reinserted}, primary_avail={primary_avail}, buffered={buffered}",
                 )
                 if hardware.refresh_sd():
                     logger.info("MAIN", "SD card re-mounted after hot-swap")

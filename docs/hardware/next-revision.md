@@ -362,12 +362,12 @@ the part already in stock) ·
   from the **12 V rail** (pin 8 to 12 V net). Chip degrades silently
   and will fail; explains any flaky grow-light dim behaviour.
 - **Use the LM358N (DIP-8) already in stock** (10 pcs on hand per
-  [inventory.md](inventory.md), order 3071191067167331). V_CC max
+  most recent order). V_CC max
   32 V, pin-compatible with the dual op-amp layout the MCP6002 used.
   Not rail-to-rail at the top, which is a feature here: at 12 V
   supply the output swings to ~10.5 V max, a natural ceiling below
   the 10 V dim-spec damage threshold. **DIP-8 sockets are also
-  already in stock** (66-pc socket kit, order 3071191067207331) so
+  already in stock** (66-pc socket kit) so
   the chip can be inserted and swapped without rework.
 - **Retune feedback divider** for clean 0–10 V output from the 0–3.3 V
   DAC: **R4 = 10 kΩ, R5 = 4.7 kΩ** → gain = 1 + 10/4.7 = 3.13 →
@@ -714,7 +714,18 @@ GND-return diodes) ·
   tracked under "I²C address map on silkscreen" in the PCB layout
   section.
 
-### [x] Soil moisture sensor → Adafruit STEMMA #4026 (I²C, 0x36)
+### [~] Soil moisture sensor → Adafruit STEMMA #4026 (I²C, 0x36) — DEFERRED 2026-06-29
+
+> **Reversed 2026-06-29:** the STEMMA I²C swap is deferred. The soil issue
+> is instead resolved by replacing the dead NE555 with a TLC555-class CMOS
+> sensor, keeping the **analog GP28/ADC2 path** — VCC → 3V3 (pin 36), AOUT
+> → GP28, **no divider** (reverts to the
+> [2026-05-15 bench decision](../notes/chat-log.md#2026-05-15--capacitive-soil-sensor-unresponsive--ne555-unit-replace)).
+> Hardware-only; **no firmware change** beyond a bench recalibration of
+> `adc_dry_raw`/`adc_wet_raw`. GP28/ADC2 is therefore **not** freed. See the
+> [2026-06-29 chat-log reversal](../notes/chat-log.md#decision--soil-stemma-ic-swap-deferred--revert-to-tlc555-analog-on-gp28)
+> and [docs/notes/sw-next-rev-migration.md](../notes/sw-next-rev-migration.md)
+> §B1. Everything below is retained as the superseded STEMMA plan.
 
 **Filed:** 2026-05-22 · superseded 2026-05-26 (analog probe + divider
 plan dropped; switch to I²C STEMMA after the 2026-05-15 NE555 dead-end) ·

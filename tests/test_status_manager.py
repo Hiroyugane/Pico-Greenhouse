@@ -227,8 +227,8 @@ class TestStatusManagerSDState:
         assert status["sd_state"] == "mounted"
         assert status["sd_healthy"] is True
 
-    def test_set_state_mount_failed_led_on(self):
-        """mount_failed → LED solid on, healthy False."""
+    def test_set_state_mount_failed_arms_blink_and_lights_led(self):
+        """mount_failed → LED lit, healthy False, _sd_blink armed for the loop."""
         from lib.status_manager import SD_MOUNT_FAILED, StatusManager
 
         sm = StatusManager(4, 6, 7, 8, 25)
@@ -238,21 +238,85 @@ class TestStatusManagerSDState:
         status = sm.get_status()
         assert status["sd_state"] == "mount_failed"
         assert status["sd_healthy"] is False
+        assert sm._sd_blink is True
 
-    def test_set_state_no_card_led_off(self):
-        """no_card_inserted → LED off (not a fault), healthy False."""
-        from lib.status_manager import SD_MOUNT_FAILED, SD_NO_CARD, StatusManager
+    def test_set_state_no_card_led_solid_on(self):
+        """no_card_inserted → LED solid on (shown, not blinking), healthy False."""
+        from lib.status_manager import SD_NO_CARD, StatusManager
 
         sm = StatusManager(4, 6, 7, 8, 25)
-        # Light the LED first via a fault, then prove no_card clears it.
-        sm.set_sd_state(SD_MOUNT_FAILED)
-        sm._sd_led.pin.off.reset_mock()  # type: ignore[attr-defined]
         sm.set_sd_state(SD_NO_CARD)
 
-        sm._sd_led.pin.off.assert_called()  # type: ignore[attr-defined]
+        sm._sd_led.pin.on.assert_called()  # type: ignore[attr-defined]
         status = sm.get_status()
         assert status["sd_state"] == "no_card_inserted"
         assert status["sd_healthy"] is False
+        assert sm._sd_blink is False
+
+    def test_set_state_mounted_clears_blink(self):
+        """Returning to mounted clears the blink flag and turns the LED off."""
+        from lib.status_manager import SD_MOUNTED, SD_MOUNT_FAILED, StatusManager
+
+        sm = StatusManager(4, 6, 7, 8, 25)
+        sm.set_sd_state(SD_MOUNT_FAILED)
+        sm._sd_led.pin.off.reset_mock()  # type: ignore[attr-defined]
+        sm.set_sd_state(SD_MOUNTED)
+
+        assert sm._sd_blink is False
+        sm._sd_led.pin.off.assert_called()  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_sd_blink_loop_toggles_when_mount_failed(self, monkeypatch):
+        """While mount_failed, the blink loop toggles the SD LED each tick."""
+        import lib.status_manager as sm_mod
+        from lib.status_manager import SD_MOUNT_FAILED, StatusManager
+
+        sm = StatusManager(4, 6, 7, 8, 25)
+        sm.set_sd_state(SD_MOUNT_FAILED)
+        sm._sd_led.pin.on.reset_mock()  # type: ignore[attr-defined]
+        sm._sd_led.pin.off.reset_mock()  # type: ignore[attr-defined]
+
+        ticks = {"n": 0}
+
+        async def fake_sleep_ms(ms):
+            ticks["n"] += 1
+            if ticks["n"] >= 2:
+                raise asyncio.CancelledError()
+
+        monkeypatch.setattr(sm_mod.asyncio, "sleep_ms", fake_sleep_ms)
+
+        with pytest.raises(asyncio.CancelledError):
+            await sm.sd_blink_loop(10)
+
+        # Two iterations → the LED was toggled (on()/off() called by toggle()).
+        toggles = sm._sd_led.pin.on.call_count + sm._sd_led.pin.off.call_count  # type: ignore[attr-defined]
+        assert toggles >= 1
+
+    @pytest.mark.asyncio
+    async def test_sd_blink_loop_idle_when_not_mount_failed(self, monkeypatch):
+        """When not mount_failed, the blink loop leaves the LED untouched."""
+        import lib.status_manager as sm_mod
+        from lib.status_manager import SD_NO_CARD, StatusManager
+
+        sm = StatusManager(4, 6, 7, 8, 25)
+        sm.set_sd_state(SD_NO_CARD)  # solid on, _sd_blink False
+        sm._sd_led.pin.on.reset_mock()  # type: ignore[attr-defined]
+        sm._sd_led.pin.off.reset_mock()  # type: ignore[attr-defined]
+
+        ticks = {"n": 0}
+
+        async def fake_sleep_ms(ms):
+            ticks["n"] += 1
+            if ticks["n"] >= 2:
+                raise asyncio.CancelledError()
+
+        monkeypatch.setattr(sm_mod.asyncio, "sleep_ms", fake_sleep_ms)
+
+        with pytest.raises(asyncio.CancelledError):
+            await sm.sd_blink_loop(10)
+
+        sm._sd_led.pin.on.assert_not_called()  # type: ignore[attr-defined]
+        sm._sd_led.pin.off.assert_not_called()  # type: ignore[attr-defined]
 
     def test_set_state_invalid_raises(self):
         """An unknown SD state raises ValueError."""

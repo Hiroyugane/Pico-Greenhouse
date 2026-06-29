@@ -22,10 +22,11 @@ from lib.led_button import LED
 # SD subsystem states (tri-state, set via set_sd_state()). With the
 # Adafruit 4682 card-detect line wired (next-rev PCB), the recovery loop
 # can tell a deliberately-removed card apart from a genuine mount fault:
-#   no_card_inserted — DET reports the slot empty (operator pulled it).
-#                      Not a fault: the sd_led stays OFF, no retry spam.
-#   mounted          — card present and the filesystem is mounted.
-#   mount_failed     — card present but it would not mount (a real fault).
+#   no_card_inserted — DET reports the slot empty. sd_led SOLID ON, no
+#                      retry spam (the bus probe is skipped).
+#   mounted          — card present and the filesystem is mounted. LED OFF.
+#   mount_failed     — card present but it would not mount (the worst SD
+#                      state). sd_led BLINKS (driven by sd_blink_loop).
 SD_NO_CARD = "no_card_inserted"
 SD_MOUNTED = "mounted"
 SD_MOUNT_FAILED = "mount_failed"
@@ -99,6 +100,7 @@ class StatusManager:
         self._active_errors = set()
         self._sd_healthy = True
         self._sd_state = SD_MOUNTED
+        self._sd_blink = False  # True only while mount_failed; driven by sd_blink_loop
         self._heartbeat_count = 0
         self._activity_blink_ms = activity_blink_ms
         self._buzzer = None
@@ -235,6 +237,7 @@ class StatusManager:
         changed = healthy != self._sd_healthy
         self._sd_healthy = healthy
         self._sd_state = SD_MOUNTED if healthy else SD_MOUNT_FAILED
+        self._sd_blink = not healthy  # mount_failed blinks (once sd_blink_loop runs)
         if healthy:
             self._sd_led.off()
         else:
@@ -254,9 +257,10 @@ class StatusManager:
         Args:
             state (str): one of SD_NO_CARD / SD_MOUNTED / SD_MOUNT_FAILED.
 
-        LED policy: mounted and no_card leave the sd_led OFF (a missing
-        card is a normal operator action, not a fault); mount_failed lights
-        it solid. The precise state is exposed via get_status()["sd_state"]
+        LED policy: mounted → OFF; no_card_inserted → SOLID ON; mount_failed
+        → BLINK (the actual toggling is done by sd_blink_loop; this just
+        arms _sd_blink and lights the LED so it's on before the first
+        toggle). The precise state is exposed via get_status()["sd_state"]
         for the OLED. Raises ValueError on an unknown state.
         """
         if state not in _SD_STATES:
@@ -265,16 +269,44 @@ class StatusManager:
         changed = state != self._sd_state
         self._sd_state = state
         self._sd_healthy = state == SD_MOUNTED
-        if state == SD_MOUNT_FAILED:
-            self._sd_led.on()
-        else:
+        self._sd_blink = state == SD_MOUNT_FAILED
+        if state == SD_MOUNTED:
             self._sd_led.off()
+        else:
+            # no_card → solid on; mount_failed → on now, sd_blink_loop toggles it.
+            self._sd_led.on()
 
         if self._logger:
             if changed:
                 self._logger.info("StatusMgr", f"SD state changed: {state}")
             else:
                 self._logger.debug("StatusMgr", "SD state unchanged", state=state)
+
+    async def sd_blink_loop(self, interval_ms: int = 500) -> None:
+        """
+        Toggle the SD LED while the SD state is mount_failed.
+
+        A genuine mount fault (card present but unmountable) is the most
+        attention-worthy SD state, so it blinks; no_card_inserted is solid
+        on and mounted is off — both set directly by set_sd_state /
+        set_sd_status, which also clear/arm _sd_blink. Runs as its own
+        async task; await-friendly so it never starves the watchdog. When
+        not blinking it leaves the LED exactly as the setters placed it.
+
+        Args:
+            interval_ms (int): toggle period in milliseconds.
+        """
+        while True:
+            try:
+                if self._sd_blink:
+                    self._sd_led.toggle()
+                await asyncio.sleep_ms(interval_ms)
+            except asyncio.CancelledError:
+                if self._logger:
+                    self._logger.warning("StatusMgr", "SD blink loop cancelled")
+                raise
+            except Exception:
+                await asyncio.sleep_ms(interval_ms)
 
     # ── Warning LED (GP7) ──────────────────────────────────────────────
 

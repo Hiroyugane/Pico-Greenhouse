@@ -140,11 +140,13 @@ DEVICE_CONFIG = {
     },
     # SD card-detect (DET) — Adafruit 4682 breakout card-detect switch.
     #
-    # The 4682 CD pin shorts to GND when a card is seated, so with an
-    # internal pull-up the DET GPIO (pins.sd_detect / GP15) reads LOW when
-    # a card is present. Polarity + pull are configurable because they are
-    # board-specific and must be bench-confirmed on the new PCB before they
-    # are trusted (see docs/test/hw-test-log.md "Adafruit 4682 SD bring-up").
+    # Field-observed polarity (2026-06-30 bring-up, system.log): with the
+    # internal pull-up, GP15 reads HIGH with a card seated and LOW with the
+    # slot empty — i.e. the CD switch shorts to GND when EMPTY and opens when
+    # a card is inserted, so present_when_low=False (present = GP15 HIGH).
+    # The earlier ASSUMED present_when_low=True made the health loop report
+    # no_card_inserted ~60 s after every clean boot; see chat-log 2026-06-30.
+    # Polarity + pull stay configurable because they are board-specific.
     #
     # When enabled=False the DET line is ignored and SD hot-swap recovery
     # falls back to the pre-DET poll-only behavior — HardwareFactory.
@@ -152,7 +154,7 @@ DEVICE_CONFIG = {
     # probing the bus the way it did before DET was wired.
     "sd_detect": {
         "enabled": True,
-        "present_when_low": True,  # ASSUMED: 4682 CD → GND on insert; bench-confirm
+        "present_when_low": False,  # GP15 HIGH = card seated (field-observed 2026-06-30)
         "pull": "up",  # internal pull on the DET input: "up" | "down" | "none"
     },
     # File Paths

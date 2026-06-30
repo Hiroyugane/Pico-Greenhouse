@@ -1174,7 +1174,7 @@ class TestValidateConfig:
         from config import DEVICE_CONFIG, validate_config
 
         assert DEVICE_CONFIG["sd_detect"]["enabled"] is True
-        assert DEVICE_CONFIG["sd_detect"]["present_when_low"] is True
+        assert DEVICE_CONFIG["sd_detect"]["present_when_low"] is False
         assert DEVICE_CONFIG["sd_detect"]["pull"] == "up"
         assert validate_config() is True
 

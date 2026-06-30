@@ -624,22 +624,42 @@ GND-return diodes) ·
 
 -> Removed vbus and 5v pins from corresponding headers. SS14 in BOM seems unnecessary
 
-### [x] Power-good LEDs — 2 mA current target across all rails
+### [x] Power-good LEDs — ~0.7 mA per rail to match the Pico's onboard LED
 
 **Filed:** 2026-05-23 ·
 [chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
+**Revised:** 2026-06-30 (target 2 mA → ~0.7 mA) ·
+[chat-log entry](../notes/chat-log.md#2026-06-30--power-good-led-brightness-retarget)
 
-- Add a 3 mm or 0805 LED + series resistor on each rail near the
-  input area, for immediate visual confirmation during bring-up and
+- One **0805 emerald-green LED** (KENTO KT-0805G, 525 nm, Vf bin
+  2.6–3.1 V; ~2.8 V used for sizing) + series resistor on each rail near
+  the input area, for immediate visual confirmation during bring-up and
   field service.
-- **Uniform 2 mA target** (long LED life over weeks of always-on
-  operation, with typical 2 V Vf):
-  - 3V3 rail: 680 Ω (1.9 mA)
-  - 5 V rail: 1.5 kΩ (2.0 mA)
-  - 12 V rail: 4.7 kΩ (2.1 mA)
-  - 19.5 V rail: 8.2 kΩ (2.2 mA)
-- Different resistor values per rail are intentional — uniform
-  current is more useful than a uniform BOM line at this scale.
+- **~0.7 mA target** so the indicators sit at roughly the Pico's
+  onboard-LED intensity. The Pico's green runs ~1.3 mA through a
+  *standard* (lower-efficiency) green; the KT-0805G is a higher-efficiency
+  emerald part, so ~0.7 mA matches its *perceived* brightness, not the
+  Pico's drive current. The earlier 2 mA target read visibly too bright.
+- **In-stock 0805 SMD series resistors** (no new BOM line — values from
+  the on-hand SMD set):
+  - 3V3 rail: 750 Ω (0.67 mA)
+  - 5 V rail: 4.7 kΩ (0.47 mA)
+  - 12 V rail: 10 kΩ (0.92 mA)
+  - 19.5 V rail: 22 kΩ (0.76 mA)
+- **Brightness is not perfectly uniform** (5 V dimmest, 12 V ~2× brighter)
+  — the coarse on-hand value steps can't all hit 0.7 mA with a single
+  resistor. Accepted in exchange for zero new parts; all four sit far
+  below the old 2 mA, so all read as dim indicators. (Declined options:
+  order 3.3 k / 13 k / 24 k for a matched bank, or series pairs on the
+  5 V and 12 V rails.)
+- **3V3 rail caveat — hand-pick on the bench.** With the emerald-green
+  Vf at 2.6–3.1 V, the 3.3 V rail leaves only ~0.2–0.7 V across the
+  resistor, so the *same* resistor yields ~3–4× different current across
+  the LED's Vf bin. Measure the fitted 3V3 LED's Vf at ~1 mA and pick its
+  resistor last (750 Ω nominal). The other three rails have ≥2.2 V of
+  headroom and are insensitive to Vf spread. (A red LED here, Vf ≈ 1.9 V,
+  would be predictable — not adopted; the board standardizes on the
+  KT-0805G across all four rails.)
 
 ### [x] R8 stays — fix the firmware comment, not the schematic
 

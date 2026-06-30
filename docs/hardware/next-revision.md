@@ -624,42 +624,43 @@ GND-return diodes) ·
 
 -> Removed vbus and 5v pins from corresponding headers. SS14 in BOM seems unnecessary
 
-### [x] Power-good LEDs — ~0.7 mA per rail to match the Pico's onboard LED
+### [x] Power-good LEDs — ~0.2 mA per rail to match the Pico's onboard LED
 
 **Filed:** 2026-05-23 ·
 [chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
-**Revised:** 2026-06-30 (target 2 mA → ~0.7 mA) ·
-[chat-log entry](../notes/chat-log.md#2026-06-30--power-good-led-brightness-retarget)
+**Revised:** 2026-06-30 (target 2 mA → ~0.7 mA → bench-set ~0.2 mA) ·
+[chat-log entry](../notes/chat-log.md#2026-06-30--power-good-led-brightness-bench-set-to-02-ma)
 
 - One **0805 emerald-green LED** (KENTO KT-0805G, 525 nm, Vf bin
-  2.6–3.1 V; ~2.8 V used for sizing) + series resistor on each rail near
-  the input area, for immediate visual confirmation during bring-up and
-  field service.
-- **~0.7 mA target** so the indicators sit at roughly the Pico's
-  onboard-LED intensity. The Pico's green runs ~1.3 mA through a
-  *standard* (lower-efficiency) green; the KT-0805G is a higher-efficiency
-  emerald part, so ~0.7 mA matches its *perceived* brightness, not the
-  Pico's drive current. The earlier 2 mA target read visibly too bright.
-- **In-stock 0805 SMD series resistors** (no new BOM line — values from
-  the on-hand SMD set):
-  - 3V3 rail: 750 Ω (0.67 mA)
-  - 5 V rail: 4.7 kΩ (0.47 mA)
-  - 12 V rail: 10 kΩ (0.92 mA)
-  - 19.5 V rail: 22 kΩ (0.76 mA)
-- **Brightness is not perfectly uniform** (5 V dimmest, 12 V ~2× brighter)
-  — the coarse on-hand value steps can't all hit 0.7 mA with a single
-  resistor. Accepted in exchange for zero new parts; all four sit far
-  below the old 2 mA, so all read as dim indicators. (Declined options:
-  order 3.3 k / 13 k / 24 k for a matched bank, or series pairs on the
-  5 V and 12 V rails.)
+  2.6–3.1 V; ~2.6 V at the ~0.2 mA operating point) + series resistor on
+  each rail near the input area, for immediate visual confirmation during
+  bring-up and field service.
+- **~0.2 mA target, set empirically on the bench.** A 47 kΩ on the 12 V
+  rail was dialled in by eye to match the Pico's onboard-LED intensity:
+  I = (12 − 2.6) / 47 000 ≈ **0.20 mA**. The other rails are sized to the
+  same ~0.2 mA (identical LEDs → equal current = equal brightness). The
+  earlier 0.7 mA and 2 mA targets both read too bright for this efficient
+  emerald part.
+- **In-stock 0805 SMD series resistors** (no new BOM line — nearest single
+  value from the on-hand SMD set; I = (V_rail − 2.6 V) / R):
+  - 3V3 rail: 4.7 kΩ (~0.15 mA — see caveat)
+  - 5 V rail: 10 kΩ (~0.24 mA)
+  - 12 V rail: 47 kΩ (~0.20 mA — bench reference)
+  - 19.5 V rail: 100 kΩ (~0.17 mA)
+- **Brightness is not perfectly uniform** — the coarse on-hand value steps
+  bracket the 0.2 mA target rather than hitting it (5 V brightest at
+  ~0.24 mA, 3V3 dimmest at ~0.15 mA). Accepted for zero new parts. For a
+  tight match, series pairs from the same set land on ~0.2 mA: 5 V =
+  10 kΩ + 2.2 kΩ (12.2 kΩ), 19.5 V = 75 kΩ + 10 kΩ (85 kΩ).
 - **3V3 rail caveat — hand-pick on the bench.** With the emerald-green
   Vf at 2.6–3.1 V, the 3.3 V rail leaves only ~0.2–0.7 V across the
   resistor, so the *same* resistor yields ~3–4× different current across
-  the LED's Vf bin. Measure the fitted 3V3 LED's Vf at ~1 mA and pick its
-  resistor last (750 Ω nominal). The other three rails have ≥2.2 V of
-  headroom and are insensitive to Vf spread. (A red LED here, Vf ≈ 1.9 V,
-  would be predictable — not adopted; the board standardizes on the
-  KT-0805G across all four rails.)
+  the LED's Vf bin. 4.7 kΩ is the nominal; verify by eye against the 12 V
+  LED and step to the neighbour value (2.2 kΩ brighter / 6.8 kΩ dimmer),
+  or a 2.2 kΩ + 1 kΩ pair (~0.21 mA), as needed. The other three rails
+  have ≥2.4 V of headroom and are insensitive to Vf spread. (A red LED
+  here, Vf ≈ 1.9 V, would be predictable — not adopted; the board
+  standardizes on the KT-0805G across all four rails.)
 
 ### [x] R8 stays — fix the firmware comment, not the schematic
 

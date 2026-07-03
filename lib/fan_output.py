@@ -1,41 +1,17 @@
 # Fan Output Abstraction
 # Dennis Hiro, 2026-05-16
 #
-# FanOutput decouples fan policy classes (FanController,
+# Fan outputs decouple fan policy classes (FanController,
 # AlwaysOnFanController, HeaterFollowerFanController) from the physical
 # drive layer. Relay-backed fans wrap a RelayController via
-# RelayFanOutput; future PCA9685+MOSFET fans wrap a PWM channel via
-# Pca9685FanOutput (added in a later step). Both expose
-# on/off/set_duty/is_on so the same policy code drives either.
+# RelayFanOutput; PCA9685+MOSFET fans wrap a PWM channel via
+# Pca9685FanOutput. Both expose the same duck-typed contract —
+# on/off/set_duty/is_on plus a name attribute — so the same policy code
+# drives either. set_duty(pct) takes a percentage 0-100; binary
+# backends (relays) treat any positive value as "fully on" and 0 as off.
 
 
-class FanOutput:
-    """
-    Abstract drive backend for fan controllers.
-
-    Implementations must provide on/off/set_duty/is_on and a name
-    attribute. set_duty(pct) takes a percentage 0-100; binary backends
-    (relays) treat any positive value as "fully on" and 0 as off.
-    """
-
-    @property
-    def name(self) -> str:
-        raise NotImplementedError
-
-    def on(self) -> None:
-        raise NotImplementedError
-
-    def off(self) -> None:
-        raise NotImplementedError
-
-    def set_duty(self, pct: float) -> None:
-        raise NotImplementedError
-
-    def is_on(self) -> bool:
-        raise NotImplementedError
-
-
-class RelayFanOutput(FanOutput):
+class RelayFanOutput:
     """
     FanOutput adapter over a RelayController.
 
@@ -74,7 +50,7 @@ class RelayFanOutput(FanOutput):
         return self._relay.is_on()
 
 
-class Pca9685FanOutput(FanOutput):
+class Pca9685FanOutput:
     """
     FanOutput driving one PCA9685 PWM channel.
 

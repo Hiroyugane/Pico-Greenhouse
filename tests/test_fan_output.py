@@ -1,26 +1,7 @@
 # Tests for lib/fan_output.py
-# Covers FanOutput interface + RelayFanOutput adapter
+# Covers the RelayFanOutput and Pca9685FanOutput adapters
 
 import pytest
-
-
-class TestFanOutputInterface:
-    """The abstract FanOutput contract."""
-
-    def test_interface_methods_raise(self):
-        from lib.fan_output import FanOutput
-
-        out = FanOutput()
-        with pytest.raises(NotImplementedError):
-            out.on()
-        with pytest.raises(NotImplementedError):
-            out.off()
-        with pytest.raises(NotImplementedError):
-            out.set_duty(50)
-        with pytest.raises(NotImplementedError):
-            out.is_on()
-        with pytest.raises(NotImplementedError):
-            _ = out.name
 
 
 class TestRelayFanOutput:

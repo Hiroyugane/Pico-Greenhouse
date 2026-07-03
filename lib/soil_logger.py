@@ -7,8 +7,6 @@
 # range the REPL helper print_raw() exposes. SoilLogger scales the raw
 # 16-bit read_u16() result down to 10 bits internally.
 
-import time
-
 import uasyncio as asyncio
 
 try:
@@ -248,8 +246,3 @@ class SoilLogger:
             "read_failures": self.read_failures,
             "write_failures": self.write_failures,
         }
-
-
-# Suppress unused-import warning while keeping `time` available for any
-# future timing instrumentation (mirrors CO2Logger's import shape).
-_ = time

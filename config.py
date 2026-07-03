@@ -406,7 +406,7 @@ DEVICE_CONFIG = {
         "post_enabled": True,  # Run LED power-on self-test at startup
         "post_step_ms": 150,  # Duration each LED stays on during POST walk (ms)
         "walk_order": ["activity", "sd", "reminder", "warning", "error"],
-        "mem_warning_pct": 80,  # RAM usage % above this → warning LED
+        "mem_warning_pct": 85,  # RAM usage % above this → warning LED
         "mem_error_pct": 90,  # RAM usage % above this → error LED
     },
     # Buffer Manager Configuration

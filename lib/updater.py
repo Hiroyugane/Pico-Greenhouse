@@ -148,8 +148,6 @@ class Updater:
         max_retries (int): Per-file write retry count
         retry_delay_ms (int): Sleep between retries
         wdt: Optional WDT instance; fed between file copies
-        time_provider: Optional time provider (currently unused; reserved
-            for future structured log timestamps)
     """
 
     def __init__(
@@ -161,7 +159,6 @@ class Updater:
         max_retries=3,
         retry_delay_ms=200,
         wdt=None,
-        time_provider=None,
         feedback=None,
         log_max_size=50000,
         verify_max_retries=3,
@@ -174,7 +171,6 @@ class Updater:
         self.max_retries = int(max_retries)
         self.retry_delay_ms = int(retry_delay_ms)
         self.wdt = wdt
-        self.time_provider = time_provider
         self.feedback = feedback
         self.log_max_size = int(log_max_size)
         self.verify_max_retries = int(verify_max_retries)

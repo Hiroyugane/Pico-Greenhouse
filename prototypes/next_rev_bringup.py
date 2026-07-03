@@ -57,6 +57,7 @@ I2C_PORT = _PINS["rtc_i2c_port"]
 I2C_SDA = _PINS["rtc_sda"]
 I2C_SCL = _PINS["rtc_scl"]
 I2C_FREQ = DEVICE_CONFIG.get("system", {}).get("i2c_freq", 400000)
+FAN_RAMP_S = 10  # fan ramp-down duration (s) for the per-channel PWM check
 
 # Accumulated verdicts; the report is rebuilt from this after each item.
 RESULTS = []
@@ -298,43 +299,42 @@ def act_soil_three_point():
     return "air=%s moist=%s water=%s" % (vals.get("air/bone-dry"), vals.get("moist soil"), vals.get("water"))
 
 
-def act_fan_roster():
+def act_fan_channels():
+    # Per-channel isolation + PWM: force EVERY channel off, then drive only the
+    # selected one at 100 %, 50 %, and a smooth ramp to 0 % over FAN_RAMP_S.
+    # Zeroing all channels first is what isolates a cross-talk / stuck-100 %
+    # fault (each fan should move only while its own channel is driven).
     pca = _pca()
     if pca is None:
         return None
     roster = sorted(
         (c["pca9685_ch"], role) for role, c in DEVICE_CONFIG["fans"].items() if c.get("output") == "pca9685"
     )
-    if not _confirm("    Are all fans clear to spin? [y/N]: "):
+    if not _confirm("    All fans clear to spin? [y/N]: "):
         return "actuation skipped"
-    swaps = []
+    results = []
+    steps = 50
     try:
         for ch, role in roster:
+            pca.all_off()  # every channel OFF before isolating this one
+            print("    --- ch%d '%s': all other channels forced OFF ---" % (ch, role))
+            if _input("    Enter to spin ONLY ch%d (or 's' to skip): " % ch).strip().lower() == "s":
+                results.append("ch%d/%s:skip" % (ch, role))
+                continue
             pca.set_duty(ch, 100)
-            ans = _input("    ch%d driving — is THIS the '%s' fan, spinning? [y/n]: " % (ch, role)).strip().lower()
+            _input("      100%% — confirm ONLY '%s' spins, all others OFF (Enter)..." % role)
+            pca.set_duty(ch, 50)
+            _input("      50%% — confirm it is visibly SLOWER (Enter)...")
+            print("      ramping 50%% -> 0%% over %d s..." % FAN_RAMP_S)
+            for i in range(steps + 1):
+                pca.set_duty(ch, 50.0 * (steps - i) / steps)
+                time.sleep(FAN_RAMP_S / steps)
             pca.set_duty(ch, 0)
-            if ans.startswith("n"):
-                swaps.append("ch%d!=%s" % (ch, role))
+            ans = _input("      ONLY ch%d ramped smoothly to a stop? [y/n] + note: " % ch).strip()
+            results.append("ch%d/%s:%s" % (ch, role, ans or "?"))
     finally:
         pca.all_off()
-    return ("swaps: " + ",".join(swaps)) if swaps else "ch0-ch4 roster matches harness"
-
-
-def act_fan_duty_sweep():
-    pca = _pca()
-    if pca is None:
-        return None
-    ch = DEVICE_CONFIG["fans"]["case"]["pca9685_ch"]
-    if not _confirm("    Spin the 'case' fan (ch%d) at 100%% then 60%%? [y/N]: " % ch):
-        return "actuation skipped"
-    try:
-        pca.set_duty(ch, 100)
-        _input("    ch%d at 100%% — note the speed, then press Enter..." % ch)
-        pca.set_duty(ch, 60)
-        _input("    ch%d at 60%% — is it visibly SLOWER (PWM proof)? Press Enter..." % ch)
-    finally:
-        pca.all_off()
-    return None
+    return " | ".join(results)
 
 
 def act_dac_sweep():

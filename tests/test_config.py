@@ -29,6 +29,7 @@ class TestConfigStructure:
             "Service_reminder",
             "buffer_manager",
             "event_logger",
+            "diagnostics",
             "output_pins",
             "display",
             "system",
@@ -1682,3 +1683,37 @@ class TestValidateConfig:
                 config.validate_config()
         finally:
             config.DEVICE_CONFIG["event_logger"]["debug_to_file"] = original
+
+
+class TestDiagnosticsConfig:
+    """Tests for the diagnostics.mem_trend_log toggle."""
+
+    def test_mem_trend_log_is_bool(self):
+        """diagnostics.mem_trend_log defaults to a boolean."""
+        from config import DEVICE_CONFIG
+
+        assert isinstance(DEVICE_CONFIG["diagnostics"]["mem_trend_log"], bool)
+
+    def test_mem_trend_log_non_bool_raises(self):
+        """diagnostics.mem_trend_log with non-bool raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["diagnostics"]["mem_trend_log"]
+        config.DEVICE_CONFIG["diagnostics"]["mem_trend_log"] = "yes"
+        try:
+            with pytest.raises(ValueError, match="mem_trend_log"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["diagnostics"]["mem_trend_log"] = original
+
+    def test_missing_mem_trend_log_raises(self):
+        """Missing diagnostics.mem_trend_log raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["diagnostics"]["mem_trend_log"]
+        del config.DEVICE_CONFIG["diagnostics"]["mem_trend_log"]
+        try:
+            with pytest.raises(ValueError, match="Missing config key"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["diagnostics"]["mem_trend_log"] = original

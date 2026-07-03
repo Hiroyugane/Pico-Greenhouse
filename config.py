@@ -428,6 +428,17 @@ DEVICE_CONFIG = {
         "debug_flush_threshold": 10,  # Flush after N debug entries buffered (when debug_to_file=True)
         "debug_max_size": 1000000,  # Rotation threshold when debug_to_file=True (lower: debug spam fills log faster)
     },
+    # Diagnostics / instrumentation toggles
+    #
+    # mem_trend_log: when True, the health loop writes one greppable INFO
+    # "mem trend" line per cycle (pre/post-GC heap, reclaimed churn, task
+    # count, buffer + write-queue depth) to system.log. Persists WITHOUT
+    # enabling event_logger.debug_to_file, so a headless greenhouse records
+    # the slow climb toward mem_warning_pct for offline diagnosis. Default
+    # off — it adds one INFO line every health_check_interval_s.
+    "diagnostics": {
+        "mem_trend_log": False,
+    },
     # Buzzer Configuration (passive buzzer via PWM)
     "buzzer": {
         "enabled": True,  # Master enable/disable
@@ -786,6 +797,7 @@ def validate_config():
             "monitor_interval_s",
         ],
         "buzzer": ["enabled", "default_freq", "default_duty_pct"],
+        "diagnostics": ["mem_trend_log"],
         "buffer_manager": ["sd_mount_point", "fallback_path", "max_buffer_entries", "max_fallback_size_kb"],
         "event_logger": [
             "logfile",
@@ -951,6 +963,9 @@ def validate_config():
 
     if DEVICE_CONFIG["event_logger"]["debug_flush_threshold"] < 1:
         raise ValueError("event_logger.debug_flush_threshold must be >= 1")
+
+    if not isinstance(DEVICE_CONFIG["diagnostics"]["mem_trend_log"], bool):
+        raise ValueError("diagnostics.mem_trend_log must be a bool")
 
     if DEVICE_CONFIG["temp_humidity_logger"]["retry_delay_s"] <= 0:
         raise ValueError("temp_humidity_logger.retry_delay_s must be > 0")

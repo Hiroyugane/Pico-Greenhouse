@@ -429,6 +429,7 @@ async def main():
             th_warn_threshold=status_led_config.get("th_warn_threshold", 3),
             th_error_threshold=status_led_config.get("th_error_threshold", 10),
             retry_delay_s=th_config.get("retry_delay_s", 0.5),
+            max_history=DEVICE_CONFIG.get("display", {}).get("max_history", 120),
             write_queue=write_queue,
         )
     except Exception as e:
@@ -444,6 +445,7 @@ async def main():
             sensor_type=th_config.get("sensor_type", "th"),
             max_retries=th_config.get("max_retries", 3),
             retry_delay_s=th_config.get("retry_delay_s", 0.5),
+            max_history=DEVICE_CONFIG.get("display", {}).get("max_history", 120),
             write_queue=write_queue,
         )
 

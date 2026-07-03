@@ -14,12 +14,9 @@ source = ["lib", "config", "rtc_set_time", "sd_test", "transfer_logs"]
 omit = [
     "tests/*",
     "host_shims/*",
-    "lib/picozero/*",
-    "lib/picozero-*",
     "lib/sdcard-*",
     "lib/sdcard.py",
     "lib/ds3231.py",
-    "lib/ds2321_gen.py",
     "lib/ssd1306.py",
     "lib/ssd1306-*",
     "hw_probe.py"
@@ -42,10 +39,8 @@ target-version = "py311"
 line-length = 120
 fix = true
 exclude = [
-    "lib/picozero*",
     "lib/sdcard*",
     "lib/ds3231.py",
-    "lib/ds2321_gen.py",
     "lib/ssd1306.py",
     "host_shims",
     "typings",

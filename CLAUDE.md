@@ -44,7 +44,7 @@ On-device (via Thonny on the Pico): run [rtc_set_time.py](prototypes/rtc_set_tim
 
 ## Coverage and lint config
 
-[pyproject.toml](pyproject.toml) is the single source of truth: `asyncio_mode = "auto"`, coverage `fail_under = 88`, ruff `line-length = 120` selecting `E,F,I` (Pyflakes + isort). Vendored drivers (`lib/picozero*`, `lib/sdcard*`, `lib/ds3231.py`, `lib/ds2321_gen.py`, `lib/ssd1306*`), `host_shims/`, and `typings/` are excluded from both lint and coverage — don't try to "fix" them.
+[pyproject.toml](pyproject.toml) is the single source of truth: `asyncio_mode = "auto"`, coverage `fail_under = 88`, ruff `line-length = 120` selecting `E,F,I` (Pyflakes + isort). Vendored drivers (`lib/sdcard*`, `lib/ds3231.py`, `lib/ssd1306*`), `host_shims/`, and `typings/` are excluded from both lint and coverage — don't try to "fix" them.
 
 ## Project-specific instructions
 

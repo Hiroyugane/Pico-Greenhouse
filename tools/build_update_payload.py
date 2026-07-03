@@ -31,9 +31,9 @@ The manifest format:
         ]
     }
 
-Vendored drivers (lib/picozero*, lib/sdcard*, lib/ds3231.py, lib/ds2321_gen.py,
-lib/ssd1306*) are excluded by default — they ship with the firmware image and
-should not be churned by an update.
+Vendored drivers (lib/sdcard*, lib/ds3231.py, lib/ssd1306*) are excluded by
+default — they ship with the firmware image and should not be churned by an
+update.
 
 With `--compiled`, sources are read from the `build/` tree produced by the
 `build-mpy` VS Code task: `build/main.py` (raw), `build/config.mpy`, and
@@ -60,11 +60,10 @@ ROOT_FILES = ("main.py", "config.py")
 # Vendored / driver files under lib/ that must NOT be shipped via update payload.
 LIB_EXCLUDES = {
     "ds3231.py",
-    "ds2321_gen.py",
     "sdcard.py",
     "ssd1306.py",
 }
-LIB_EXCLUDE_PREFIXES = ("picozero", "sdcard-", "ssd1306-")
+LIB_EXCLUDE_PREFIXES = ("sdcard-", "ssd1306-")
 
 # Read in 64 KiB chunks — fine on host, irrelevant on Pico (this script is host-only).
 _HASH_CHUNK = 64 * 1024

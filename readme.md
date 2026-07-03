@@ -249,9 +249,7 @@ Git-codebase/
 │   ├── sd_integration.py        #   mount_sd(), is_mounted() helpers
 │   ├── sdcard.py                #   SPI SD-card filesystem driver (vendored)
 │   ├── ds3231.py                #   Primary RTC driver (vendored)
-│   ├── ds2321_gen.py            #   Alternative DS3231 driver (vendored)
-│   ├── ssd1306.py               #   OLED framebuffer driver (vendored)
-│   └── picozero/                #   Vendored picozero
+│   └── ssd1306.py               #   OLED framebuffer driver (vendored)
 ├── prototypes/                  # On-device bench scripts (not part of the app)
 │   ├── rtc_set_time.py          #   One-time RTC sync
 │   ├── sd_test.py               #   SD card health-check state machine

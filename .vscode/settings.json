@@ -41,10 +41,8 @@
     // ── Search exclusions (vendored libs) ────────────────────────────
     "search.exclude": {
         "**/__pycache__": true,
-        "**/lib/picozero*": true,
         "**/lib/sdcard*": true,
-        "**/lib/ds3231.py": true,
-        "**/lib/ds2321_gen.py": true
+        "**/lib/ds3231.py": true
     },
     "workbench.colorCustomizations": {
         "activityBar.background": "#053241",

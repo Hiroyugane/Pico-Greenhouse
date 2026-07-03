@@ -339,31 +339,6 @@ class TestGracefulShutdown:
         # Verify flag cleared
         assert write_queue_manager._running is False
 
-    @pytest.mark.asyncio
-    async def test_synchronous_flush(self, write_queue_manager, mock_buffer_manager):
-        """Verify synchronous flush drains all queued writes."""
-        # Enqueue writes
-        for i in range(5):
-            write_queue_manager.enqueue_write("test.csv", f"line{i}\n")
-
-        result = write_queue_manager.flush()
-
-        assert result is True
-        assert write_queue_manager.get_queue_size() == 0
-        assert mock_buffer_manager.write.call_count == 5
-
-    def test_synchronous_flush_with_failures(self, write_queue_manager, mock_buffer_manager):
-        """Verify synchronous flush returns False if any write fails."""
-        mock_buffer_manager.write.side_effect = [True, OSError("error"), True]
-
-        # Enqueue 3 writes
-        for i in range(3):
-            write_queue_manager.enqueue_write("test.csv", f"line{i}\n")
-
-        result = write_queue_manager.flush()
-
-        assert result is False  # Errors occurred
-
 
 # ---------------------------------------------------------------------------
 # Tests: Statistics

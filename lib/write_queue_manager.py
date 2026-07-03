@@ -210,28 +210,6 @@ class WriteQueueManager:
         while self._queue:
             await self._drain_batch()
 
-    def flush(self) -> bool:
-        """
-        Synchronous flush override.
-
-        Used for graceful shutdown or manual flush when async not available.
-        Drains entire queue synchronously.
-
-        Returns:
-            bool: True if all entries flushed, False if errors occurred
-        """
-        errors = 0
-        for relpath, data in self._queue:
-            try:
-                self.buffer_manager.write(relpath, data)
-            except Exception as e:
-                errors += 1
-                self._log_debug("flush write failed", relpath=relpath, error=str(e))
-
-        self._queue = []
-        self._drained += len(self._queue)
-        return errors == 0
-
     def get_queue_size(self) -> int:
         """Return current queue size."""
         return len(self._queue)

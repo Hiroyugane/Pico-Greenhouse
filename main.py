@@ -210,6 +210,15 @@ async def main():
     is_plant_mode = device_mode == "plant"
     print(f"[STARTUP] Operating mode: {device_mode}")
 
+    # Step 1a: Tune the MicroPython GC to collect proactively, not only on
+    # OOM. Curbs the pre-GC allocation peaks (the 2026-07-03 bench run hit
+    # ~99% of the ~245 KB heap) and the fragmentation behind cold-boot
+    # framebuffer alloc failures. No-op on CPython (host has no gc.threshold).
+    gc_threshold_b = DEVICE_CONFIG.get("memory", {}).get("gc_threshold_b", -1)
+    if gc_threshold_b > 0 and hasattr(gc, "threshold"):
+        gc.threshold(gc_threshold_b)
+        print(f"[STARTUP] gc.threshold set to {gc_threshold_b} bytes")
+
     # Configure boot_log so HardwareFactory tees its SD diagnostics into
     # /boot.log (or the configured path). Each boot truncates this file
     # on first write, so reading it after a reset shows the most recent

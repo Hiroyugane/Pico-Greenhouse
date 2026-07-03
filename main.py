@@ -276,6 +276,7 @@ async def main():
 
     # Step 3b: Create StatusManager (owns activity/SD/warning/error/heartbeat LEDs)
     status_led_config = DEVICE_CONFIG.get("status_leds", {})
+    diagnostics_config = DEVICE_CONFIG.get("diagnostics", {})
     status_manager = StatusManager(
         activity_pin=DEVICE_CONFIG["pins"]["activity_led"],
         sd_pin=DEVICE_CONFIG["pins"]["sd_led"],
@@ -906,7 +907,15 @@ async def main():
         except Exception as e:
             logger.warning("MAIN", f"Log rotation check failed: {e}")
 
-        # System memory check
+        # System memory check. Capture the pre-GC allocation first so the
+        # trend log can separate reclaimable churn (pre − post) from the
+        # post-GC high-water mark, which is the real leak signal.
+        mem_alloc_pre = None
+        mem_free_pre = None
+        if hasattr(gc, "mem_alloc") and hasattr(gc, "mem_free"):
+            mem_alloc_pre = gc.mem_alloc()
+            mem_free_pre = gc.mem_free()
+
         gc.collect()
         if hasattr(gc, "mem_alloc") and hasattr(gc, "mem_free"):
             mem_alloc = gc.mem_alloc()
@@ -948,6 +957,23 @@ async def main():
         load_snapshot = _get_runtime_load_snapshot()
         if load_snapshot:
             logger.debug("MAIN", "runtime load", **load_snapshot)
+
+        # Persistent heap-trend sample (INFO, greppable) when enabled. Unlike
+        # the debug "runtime load" line above, this reaches system.log without
+        # debug_to_file, so a headless greenhouse records the slow climb toward
+        # mem_warning_pct for offline diagnosis. reclaimed_b = churn freed by
+        # this gc.collect(); post_alloc_b is the leak signal to watch.
+        if diagnostics_config.get("mem_trend_log", False) and mem_alloc_pre is not None:
+            reclaimed = mem_alloc_pre - mem_alloc
+            task_count = load_snapshot.get("task_count", -1)
+            logger.info(
+                "MAIN",
+                "mem trend | "
+                f"pre_alloc_b={mem_alloc_pre} pre_free_b={mem_free_pre} "
+                f"post_alloc_b={mem_alloc} post_free_b={mem_free} "
+                f"reclaimed_b={reclaimed} used_pct={used_pct:.1f} "
+                f"tasks={task_count} buffered={buffered} queue={write_queue.get_queue_size()}",
+            )
 
         # Hot-swap recovery, now card-detect aware (Adafruit 4682 DET).
         # When DET reports the slot empty we skip refresh_sd() entirely —

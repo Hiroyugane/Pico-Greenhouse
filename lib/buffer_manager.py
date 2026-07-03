@@ -170,21 +170,6 @@ class BufferManager:
         """
         self._logger = logger
 
-    def invalidate_primary_cache(self) -> None:
-        """
-        Invalidate the SD availability cache.
-
-        Forces the next is_primary_available() call to perform a fresh check.
-        Useful when the caller detects the SD card was ejected/reinserted.
-
-        Example:
-            >>> bm.invalidate_primary_cache()
-            >>> # Next write will force a fresh SD check
-        """
-        self._primary_avail_cache = None
-        self._primary_avail_cache_time = 0
-        self._log_debug("primary availability cache invalidated")
-
     def _log_debug(self, message: str, **fields) -> None:
         """Log debug message if logger is available.
 

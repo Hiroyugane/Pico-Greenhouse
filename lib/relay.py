@@ -211,18 +211,24 @@ class FanController:
                 # Get current temperature
                 current_temp = self.th_logger.last_temperature
 
-                self.logger.debug(
-                    "FanController",
-                    "cycle tick",
-                    name=self.name,
-                    sec_midnight=seconds_since_midnight,
-                    pos_in_cycle=position_in_cycle,
-                    schedule_on=schedule_should_be_on,
-                    temp=current_temp,
-                    thermo_active=self.thermostat_active,
-                    is_on=self._output.is_on(),
-                    last_sched=self.last_schedule_state,
-                )
+                # Guard the per-tick debug: Python builds the f-string/**fields
+                # payload at the call site before debug() can early-return, so
+                # an unguarded call allocates every poll_interval_s even with
+                # debug disabled. This is the highest-cadence churn source
+                # (5 s x N thermostat fans).
+                if self.logger.debug_enabled:
+                    self.logger.debug(
+                        "FanController",
+                        "cycle tick",
+                        name=self.name,
+                        sec_midnight=seconds_since_midnight,
+                        pos_in_cycle=position_in_cycle,
+                        schedule_on=schedule_should_be_on,
+                        temp=current_temp,
+                        thermo_active=self.thermostat_active,
+                        is_on=self._output.is_on(),
+                        last_sched=self.last_schedule_state,
+                    )
 
                 # Thermostat logic (priority over schedule)
                 if current_temp is not None:
@@ -536,17 +542,18 @@ class GrowlightController(RelayController):
 
                 should_be_on = dawn_seconds <= seconds_since_midnight < sunset_seconds
 
-                self.logger.debug(
-                    "GrowlightCtrl",
-                    "schedule tick",
-                    name=self.name,
-                    sec_midnight=seconds_since_midnight,
-                    dawn_s=dawn_seconds,
-                    sunset_s=sunset_seconds,
-                    should_on=should_be_on,
-                    last_state=self.last_state,
-                    is_on=self._state,
-                )
+                if self.logger.debug_enabled:
+                    self.logger.debug(
+                        "GrowlightCtrl",
+                        "schedule tick",
+                        name=self.name,
+                        sec_midnight=seconds_since_midnight,
+                        dawn_s=dawn_seconds,
+                        sunset_s=sunset_seconds,
+                        should_on=should_be_on,
+                        last_state=self.last_state,
+                        is_on=self._state,
+                    )
 
                 # Only log state changes
                 if should_be_on != self.last_state:

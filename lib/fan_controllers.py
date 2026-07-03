@@ -71,12 +71,13 @@ class AlwaysOnFanController:
             try:
                 await asyncio.sleep(self.refresh_interval_s)
                 self._output.set_duty(self.duty_pct)
-                self.logger.debug(
-                    "AlwaysOnFanController",
-                    "duty re-asserted",
-                    name=self.name,
-                    duty_pct=self.duty_pct,
-                )
+                if self.logger.debug_enabled:
+                    self.logger.debug(
+                        "AlwaysOnFanController",
+                        "duty re-asserted",
+                        name=self.name,
+                        duty_pct=self.duty_pct,
+                    )
             except asyncio.CancelledError:
                 self._output.set_duty(0)
                 self.logger.warning("AlwaysOnFanController", f"{self.name} cycle cancelled")
@@ -188,14 +189,15 @@ class HeaterFollowerFanController:
                     if self._output.is_on():
                         self._output.set_duty(0)
 
-                self.logger.debug(
-                    "HeaterFollowerFanController",
-                    "cycle tick",
-                    name=self.name,
-                    heater_on=heater_on,
-                    afterrun_s=self._afterrun_remaining_s,
-                    fan_on=self._output.is_on(),
-                )
+                if self.logger.debug_enabled:
+                    self.logger.debug(
+                        "HeaterFollowerFanController",
+                        "cycle tick",
+                        name=self.name,
+                        heater_on=heater_on,
+                        afterrun_s=self._afterrun_remaining_s,
+                        fan_on=self._output.is_on(),
+                    )
 
                 await asyncio.sleep(self.poll_interval_s)
 

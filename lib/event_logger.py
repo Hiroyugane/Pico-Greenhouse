@@ -183,7 +183,10 @@ class EventLogger:
         Log debug message with optional structured fields.
 
         Console-only by default. Only written to SD when debug_to_file is True.
-        Skipped entirely when debug_enabled is False (zero overhead).
+        Skipped entirely when debug_enabled is False — but note the caller
+        still evaluates the message and packs **fields before this returns,
+        so high-cadence loop callers should guard with
+        ``if logger.debug_enabled:`` to avoid per-cycle allocation churn.
 
         Debug entries support structured key=value fields for machine-parseable
         diagnostics that AI agents can analyze:

@@ -970,20 +970,21 @@ async def main():
         metrics = buffer_manager.get_metrics()
         buffered = metrics["buffer_entries"]
 
-        logger.debug(
-            "MAIN",
-            "health check",
-            health_interval=health_interval,
-            sd_primary_writes=metrics["writes_to_primary"],
-            sd_fallback_writes=metrics["writes_to_fallback"],
-            migrations=metrics["fallback_migrations"],
-            failures=metrics["write_failures"],
-            buffered=buffered,
-            mem_used_pct=f"{used_pct:.1f}%",
-        )
+        if logger.debug_enabled:
+            logger.debug(
+                "MAIN",
+                "health check",
+                health_interval=health_interval,
+                sd_primary_writes=metrics["writes_to_primary"],
+                sd_fallback_writes=metrics["writes_to_fallback"],
+                migrations=metrics["fallback_migrations"],
+                failures=metrics["write_failures"],
+                buffered=buffered,
+                mem_used_pct=f"{used_pct:.1f}%",
+            )
 
         load_snapshot = _get_runtime_load_snapshot()
-        if load_snapshot:
+        if load_snapshot and logger.debug_enabled:
             logger.debug("MAIN", "runtime load", **load_snapshot)
 
         # Persistent heap-trend sample (INFO, greppable) when enabled. Unlike
@@ -1030,14 +1031,15 @@ async def main():
             # metadata while real writes fail), or a card was just inserted.
             primary_avail = buffer_manager.is_primary_available()
             sd_needs_check = card_reinserted or not primary_avail or buffered > 0
-            logger.debug(
-                "MAIN",
-                "SD check decision",
-                sd_needs_check=sd_needs_check,
-                card_reinserted=card_reinserted,
-                primary_available=primary_avail if not sd_needs_check else "skipped",
-                buffered=buffered,
-            )
+            if logger.debug_enabled:
+                logger.debug(
+                    "MAIN",
+                    "SD check decision",
+                    sd_needs_check=sd_needs_check,
+                    card_reinserted=card_reinserted,
+                    primary_available=primary_avail if not sd_needs_check else "skipped",
+                    buffered=buffered,
+                )
             if sd_needs_check:
                 logger.debug(
                     "MAIN",

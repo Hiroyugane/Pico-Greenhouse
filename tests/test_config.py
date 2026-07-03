@@ -30,6 +30,7 @@ class TestConfigStructure:
             "buffer_manager",
             "event_logger",
             "diagnostics",
+            "memory",
             "output_pins",
             "display",
             "system",
@@ -1717,3 +1718,62 @@ class TestDiagnosticsConfig:
                 config.validate_config()
         finally:
             config.DEVICE_CONFIG["diagnostics"]["mem_trend_log"] = original
+
+
+class TestMemoryConfig:
+    """Tests for the memory.gc_threshold_b tuning key."""
+
+    def test_gc_threshold_is_valid_int(self):
+        """memory.gc_threshold_b is a positive int or -1 (disabled)."""
+        from config import DEVICE_CONFIG
+
+        v = DEVICE_CONFIG["memory"]["gc_threshold_b"]
+        assert isinstance(v, int)
+        assert v > 0 or v == -1
+
+    def test_gc_threshold_disabled_sentinel_passes(self):
+        """memory.gc_threshold_b = -1 (disabled) passes validation."""
+        import config
+
+        original = config.DEVICE_CONFIG["memory"]["gc_threshold_b"]
+        config.DEVICE_CONFIG["memory"]["gc_threshold_b"] = -1
+        try:
+            assert config.validate_config() is True
+        finally:
+            config.DEVICE_CONFIG["memory"]["gc_threshold_b"] = original
+
+    def test_gc_threshold_zero_raises(self):
+        """memory.gc_threshold_b = 0 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["memory"]["gc_threshold_b"]
+        config.DEVICE_CONFIG["memory"]["gc_threshold_b"] = 0
+        try:
+            with pytest.raises(ValueError, match="gc_threshold_b"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["memory"]["gc_threshold_b"] = original
+
+    def test_gc_threshold_non_int_raises(self):
+        """memory.gc_threshold_b with non-int raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["memory"]["gc_threshold_b"]
+        config.DEVICE_CONFIG["memory"]["gc_threshold_b"] = "24000"
+        try:
+            with pytest.raises(ValueError, match="gc_threshold_b"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["memory"]["gc_threshold_b"] = original
+
+    def test_missing_gc_threshold_raises(self):
+        """Missing memory.gc_threshold_b raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["memory"]["gc_threshold_b"]
+        del config.DEVICE_CONFIG["memory"]["gc_threshold_b"]
+        try:
+            with pytest.raises(ValueError, match="Missing config key"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["memory"]["gc_threshold_b"] = original

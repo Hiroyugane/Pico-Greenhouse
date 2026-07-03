@@ -439,6 +439,19 @@ DEVICE_CONFIG = {
     "diagnostics": {
         "mem_trend_log": True,
     },
+    # Memory management (MicroPython gc tuning)
+    #
+    # gc_threshold_b: when > 0, main() calls gc.threshold(gc_threshold_b) at
+    # boot so the runtime auto-collects after this many bytes are allocated
+    # since the last collection — not only on OOM. Curbs the pre-GC
+    # allocation peaks (the 2026-07-03 bench run saw them reach ~99% of the
+    # ~245 KB heap) and the fragmentation behind cold-boot framebuffer alloc
+    # failures. ~24 KB ≈ half the steady-state free heap (~2 collects per
+    # 60 s churn window); tune against the mem_trend_log output. Set to -1 to
+    # keep MicroPython's default (collect-on-OOM only). No-op on CPython.
+    "memory": {
+        "gc_threshold_b": 24000,
+    },
     # Buzzer Configuration (passive buzzer via PWM)
     "buzzer": {
         "enabled": True,  # Master enable/disable
@@ -798,6 +811,7 @@ def validate_config():
         ],
         "buzzer": ["enabled", "default_freq", "default_duty_pct"],
         "diagnostics": ["mem_trend_log"],
+        "memory": ["gc_threshold_b"],
         "buffer_manager": ["sd_mount_point", "fallback_path", "max_buffer_entries", "max_fallback_size_kb"],
         "event_logger": [
             "logfile",
@@ -966,6 +980,10 @@ def validate_config():
 
     if not isinstance(DEVICE_CONFIG["diagnostics"]["mem_trend_log"], bool):
         raise ValueError("diagnostics.mem_trend_log must be a bool")
+
+    gc_threshold = DEVICE_CONFIG["memory"]["gc_threshold_b"]
+    if not isinstance(gc_threshold, int) or gc_threshold == 0 or gc_threshold < -1:
+        raise ValueError("memory.gc_threshold_b must be a positive int or -1 (disabled)")
 
     if DEVICE_CONFIG["temp_humidity_logger"]["retry_delay_s"] <= 0:
         raise ValueError("temp_humidity_logger.retry_delay_s must be > 0")

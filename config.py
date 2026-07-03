@@ -437,7 +437,7 @@ DEVICE_CONFIG = {
     # the slow climb toward mem_warning_pct for offline diagnosis. Default
     # off — it adds one INFO line every health_check_interval_s.
     "diagnostics": {
-        "mem_trend_log": False,
+        "mem_trend_log": True,
     },
     # Buzzer Configuration (passive buzzer via PWM)
     "buzzer": {

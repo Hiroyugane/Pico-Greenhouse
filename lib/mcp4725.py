@@ -9,10 +9,6 @@
 #   - write() returns True/False so the caller can detect a bus failure
 #     without an exception in the schedule loop.
 
-# Power-down modes (host -> bit pattern). 'Off' is the only one we use;
-# the others tristate the output through different impedances.
-POWER_DOWN_MODE = {"Off": 0, "1k": 1, "100k": 2, "500k": 3}
-
 
 class MCP4725:
     """12-bit DAC controlled by a single 2-byte write (fast-mode).

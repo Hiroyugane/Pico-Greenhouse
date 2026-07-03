@@ -394,7 +394,7 @@ class OLEDDisplay:
             self._debug_confirm_pending = True
             self._debug_confirm_ms = _ticks_ms()
             if self._logger:
-                self._logger.info("OLEDDisplay", "Debug confirm armed", action=action["id"])
+                self._logger.info("OLEDDisplay", f"Debug confirm armed: {action['id']}")
             self.render()
             return
 
@@ -405,7 +405,7 @@ class OLEDDisplay:
         """Spawn the action's coroutine and render the running state."""
         self._debug_running = True
         if self._logger:
-            self._logger.info("OLEDDisplay", "Debug action running", action=action["id"])
+            self._logger.info("OLEDDisplay", f"Debug action running: {action['id']}")
 
         async def _runner():
             ok = True

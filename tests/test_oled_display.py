@@ -954,3 +954,60 @@ class TestServiceReminderGetStatus:
         status = reminder.get_status()
         assert status["is_due"] is True
         assert status["days_until_due"] == 0
+
+
+# ---------------------------------------------------------------------------
+# TestDebugMenuLoggerSignature
+# ---------------------------------------------------------------------------
+
+
+class _StrictLogger:
+    """EventLogger stand-in with the *real* method signatures.
+
+    The shared ``mock_event_logger`` is a ``Mock`` whose ``info`` swallows any
+    keyword argument, so it hid the on-device ``TypeError`` raised when the
+    debug sub-menu called ``info(module, message, action=...)`` — ``info`` on
+    the real EventLogger takes no ``**fields`` (only ``debug`` does). This
+    stand-in reproduces that signature so the mismatch surfaces under pytest.
+    """
+
+    def info(self, module, message):
+        pass
+
+    def warning(self, module, message):
+        pass
+
+    def error(self, module, message):
+        pass
+
+    def debug(self, module, message, **fields):
+        pass
+
+
+class TestDebugMenuLoggerSignature:
+    """Regression: debug sub-menu info() logs must not pass **fields."""
+
+    def _enter_debug_menu(self, oled_display):
+        oled_display.current_menu = MENUS.index("debug")
+        oled_display._logger = _StrictLogger()
+
+    def test_debug_confirm_arm_does_not_raise(self, oled_display):
+        """Arming a destructive action's confirm must not raise TypeError."""
+        self._enter_debug_menu(oled_display)
+        oled_display.long_press_action()  # enter sub-menu
+        oled_display.long_press_action()  # arm confirm on destructive action
+        assert oled_display._debug_confirm_pending is True
+
+    def test_debug_action_dispatch_does_not_raise(self, oled_display, monkeypatch):
+        """Dispatching a confirmed action must not raise TypeError."""
+        self._enter_debug_menu(oled_display)
+        # Close the dispatched coroutine instead of scheduling it: the sync
+        # test has no running loop, and we only assert that reaching the
+        # dispatch log line doesn't raise — not that the action runs.
+        import lib.oled_display as oled_mod
+
+        monkeypatch.setattr(oled_mod.asyncio, "create_task", lambda coro: coro.close())
+        oled_display.long_press_action()  # enter sub-menu
+        oled_display.long_press_action()  # arm confirm
+        oled_display.long_press_action()  # confirm → dispatch
+        assert oled_display._debug_confirm_pending is False

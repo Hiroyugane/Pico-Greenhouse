@@ -381,11 +381,25 @@ the part already in stock) ·
   DAC 0 → 0xFFF, measure GL_DIM+ output, confirm monotonic + clean
   ramp.
 
-### [x] Senseair S8 UART RX level protection
+### [~] Senseair S8 UART RX level protection — divider over-attenuates, re-open
 
-**Filed:** 2026-05-23 ·
+**Filed:** 2026-05-23 · **Re-opened:** 2026-07-03 ·
 [chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review) ·
-[memory: project-co2-uart-protection](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_co2_uart_protection.md)
+[2026-07-03 bench finding](../notes/chat-log.md#2026-07-03--next-rev-bench-run-findings) ·
+[memory: project-co2-uart-protection](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_co2_uart_protection.md) ·
+[memory: project-s8-uart-divider-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_s8_uart_divider_revision.md)
+
+> **2026-07-03 bench re-open (load-bearing):** measured Pico GP17 idle =
+> **1.9 V**, below the RP2040 V_IH (~0.7 × 3.3 = **2.31 V**) — the S8 idle-high
+> may not read as a reliable logic 1. Back-solving the 0.6 divider ratio puts
+> the **S8 TXD idle at ~3.17 V**, i.e. the S8 output is ~3.3 V-level, **not the
+> 5 V** this divider was sized for. Action for the next rev: measure S8 TXD
+> directly (USB detached, scope), then either **delete the divider** (wire S8
+> TXD → GP17 direct, keep only a small series R) or lighten it so GP17 idle
+> sits **≥ 2.5 V** with margin. CO₂ logging currently works but the margin is
+> thin. Re-test: hw-test-log **S8.2** (static bench, USB-detached) + **S8.3**
+> (24 h retry soak). The 5 V-TTL assumption below is what this finding
+> contradicts.
 
 - Senseair S8 UART TXD is **5 V TTL** referenced to V+. Pico GPIO
   abs-max is **3.3 V + 0.5 V = 3.8 V**. Current R11 = 100 Ω in series

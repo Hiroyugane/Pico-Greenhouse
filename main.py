@@ -270,6 +270,17 @@ async def main():
         print(f"[STARTUP] Updater raised (non-fatal): {e}")
     wdt.feed()
 
+    # Reclaim the updater bytecode: run_pending_update() runs exactly once at
+    # boot and is never called again, so its SHA-256 / manifest / apply code
+    # (plus the lazily-imported updater_feedback) is dead weight on the heap.
+    # Drop main's reference and the sys.modules entries so the GC frees them,
+    # buying back ~10 KB on the memory-tight Pico. globals().pop avoids del's
+    # function-local rebinding of run_pending_update. No-op-safe on CPython.
+    globals().pop("run_pending_update", None)
+    for _mod in ("lib.updater", "lib.updater_feedback"):
+        sys.modules.pop(_mod, None)
+    gc.collect()
+
     # Step 3: Create TimeProvider (wraps RTC)
     rtc = hardware.get_rtc()
     time_provider = RTCTimeProvider(

@@ -31,7 +31,6 @@ exclude_lines = [
     "if sys.implementation.name != .micropython.",
     "if sys.implementation.name == .micropython.",
     "if False:",
-    "def _resolve_path",
 ]
 
 [tool.ruff]

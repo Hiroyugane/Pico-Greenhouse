@@ -8,7 +8,6 @@
 # Same on-disk CSV format ("Timestamp,Temperature,Humidity") so existing
 # dashboards keep working. BufferManager still owns all storage resilience.
 
-import sys
 import time
 
 import uasyncio as asyncio
@@ -176,13 +175,6 @@ class TempHumidityLogger:
             self._created_files.add(relpath)
         self.logger.debug("TempHumidityLogger", "file exists check", relpath=relpath, found=exists)
         return exists
-
-    def _resolve_path(self, file_path: str) -> str:
-        if getattr(sys.implementation, "name", "") == "micropython":
-            return file_path
-        if file_path.startswith("/sd/"):
-            return f"{self.buffer_manager.sd_mount_point}/{file_path[4:]}"
-        return file_path
 
     def _create_file(self) -> None:
         """

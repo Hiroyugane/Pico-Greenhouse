@@ -736,27 +736,34 @@ SECTIONS = [
 # ------------------------------------------------------------------ runner
 
 
+_VERDICTS = {"p": "x", "pass": "x", "f": "!", "fail": "!", "s": "~", "skip": "~", "q": "QUIT", "quit": "QUIT"}
+
+
 def _prompt_verdict(has_fn):
+    # A note typed before (or instead of) a verdict is KEPT, not discarded —
+    # the tester can jot an observation and still be asked for the verdict.
     opts = "[p]ass [f]ail [s]kip%s [q]uit" % (" [r]epeat" if has_fn else "")
+    pending = ""
     while True:
-        raw = _input("  -> %s (+ optional note): " % opts).strip()
+        raw = _input("  -> %s  ('f my note' inline, or type a note then a verdict): " % opts).strip()
         if not raw:
-            print("     enter p / f / s / q")
+            print("     verdict required — enter p / f / s%s / q" % (" / r" if has_fn else ""))
             continue
+        if raw.startswith("+"):  # explicit note marker
+            raw = raw[1:].strip()
         parts = raw.split(None, 1)
         tok = parts[0].lower()
-        note = parts[1].strip() if len(parts) > 1 else ""
-        if tok in ("p", "pass"):
-            return "x", note
-        if tok in ("f", "fail"):
-            return "!", note
-        if tok in ("s", "skip"):
-            return "~", note
-        if tok in ("r", "repeat") and has_fn:
-            return "REPEAT", note
-        if tok in ("q", "quit"):
-            return "QUIT", note
-        print("     unrecognized: %r" % tok)
+        inline = parts[1].strip() if len(parts) > 1 else ""
+        verdict = _VERDICTS.get(tok)
+        if verdict is None and tok in ("r", "repeat") and has_fn:
+            verdict = "REPEAT"
+        if verdict is None:
+            # Not a verdict -> the whole line is a note. Keep it and re-ask.
+            pending = (pending + " " + raw).strip()
+            print("     note kept — now give a verdict (p / f / s%s / q)" % (" / r" if has_fn else ""))
+            continue
+        note = (pending + " " + inline).strip()
+        return verdict, note
 
 
 def _run_item(item, section):

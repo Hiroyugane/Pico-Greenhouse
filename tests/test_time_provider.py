@@ -27,12 +27,6 @@ class TestBaseTimeProvider:
             seconds = base_time_provider.get_seconds_since_midnight()
         assert seconds == 14 * 3600 + 23 * 60 + 45
 
-    def test_get_time_tuple(self, base_time_provider):
-        """get_time_tuple() returns RTC-style (sec, min, hour, wday, day, mon, year)."""
-        with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            tup = base_time_provider.get_time_tuple()
-        assert tup == (45, 23, 14, 3, 29, 1, 2026)
-
     def test_now_timestamp_exception_returns_TIME_ERROR(self):
         """When time.localtime raises, return 'TIME_ERROR'."""
         from lib.time_provider import TimeProvider
@@ -57,14 +51,6 @@ class TestBaseTimeProvider:
         with patch("time.localtime", side_effect=OSError("clock fail")):
             assert tp.get_seconds_since_midnight() == 0
 
-    def test_get_time_tuple_exception_returns_zeros(self):
-        """When time.localtime raises, return all-zero tuple."""
-        from lib.time_provider import TimeProvider
-
-        tp = TimeProvider()
-        with patch("time.localtime", side_effect=OSError("clock fail")):
-            assert tp.get_time_tuple() == (0, 0, 0, 0, 0, 0, 0)
-
 
 class TestRTCTimeProvider:
     """Tests for RTCTimeProvider backed by ds3231.RTC."""
@@ -87,14 +73,6 @@ class TestRTCTimeProvider:
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
             seconds = time_provider.get_seconds_since_midnight()
         assert seconds == 14 * 3600 + 23 * 60 + 45
-
-    def test_get_time_tuple(self, time_provider):
-        """RTCTimeProvider.get_time_tuple() returns raw 7-tuple."""
-        with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            tup = time_provider.get_time_tuple()
-        assert isinstance(tup, tuple)
-        assert len(tup) == 7
-        assert tup[0] == 45  # seconds
 
     def test_sync_from_rtc_forced(self, mock_rtc):
         """_sync_from_rtc(force=True) calls ReadTime and machine.RTC().datetime()."""
@@ -194,22 +172,6 @@ class TestSunriseSunset:
         assert 600 <= daylight <= 840
 
 
-class TestExportCSV:
-    """Tests for export_sunrise_sunset_2026_csv utility."""
-
-    def test_export_creates_csv_file(self, base_time_provider, tmp_path):
-        """export_sunrise_sunset_2026_csv writes a properly formatted CSV."""
-        csv_path = str(tmp_path / "sunrise_sunset.csv")
-        base_time_provider.export_sunrise_sunset_2026_csv(csv_path)
-
-        content = (tmp_path / "sunrise_sunset.csv").read_text()
-        lines = content.strip().split("\n")
-        assert lines[0] == "date,sunrise_hhmm,sunset_hhmm,sunrise_minutes,sunset_minutes"
-        assert len(lines) == 366  # header + 365 days
-        # Spot-check Jan 1
-        assert lines[1].startswith("2026-01-01,")
-
-
 class TestRTCTimeProviderErrorFallbacks:
     """Tests for RTCTimeProvider error/fallback paths."""
 
@@ -240,15 +202,6 @@ class TestRTCTimeProviderErrorFallbacks:
             provider = RTCTimeProvider(mock_rtc)
         with patch("time.localtime", side_effect=OSError):
             assert provider.get_seconds_since_midnight() == 0
-
-    def test_rtc_get_time_tuple_error(self, mock_rtc):
-        """Error fallback returns all zeros."""
-        from lib.time_provider import RTCTimeProvider
-
-        with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            provider = RTCTimeProvider(mock_rtc)
-        with patch("time.localtime", side_effect=OSError):
-            assert provider.get_time_tuple() == (0, 0, 0, 0, 0, 0, 0)
 
 
 class TestRTCTimeProviderValidity:

@@ -105,25 +105,6 @@ class TimeProvider:
         except Exception:
             return 0
 
-    def get_time_tuple(self) -> tuple:
-        """
-        Return raw time tuple (fallback for edge cases).
-
-        Returns:
-            tuple: (second, minute, hour, weekday, day, month, year)
-                   Raw numeric format from RTC (no string conversion)
-
-        Note:
-            Prefer specific methods (now_timestamp, get_seconds_since_midnight)
-            over this raw tuple for cleaner code.
-        """
-        try:
-            t = time.localtime()
-            # Return RTC-style tuple: (second, minute, hour, weekday, day, month, year)
-            return (int(t[5]), int(t[4]), int(t[3]), int(t[6]), int(t[2]), int(t[1]), int(t[0]))
-        except Exception:
-            return (0, 0, 0, 0, 0, 0, 0)
-
     def sunrise_sunset(self, year: int, month: int, day: int) -> tuple:
         # Cologne ~50.94 N, 6.96 E
         # Fixpoints: astronomical / politically meaningful
@@ -194,28 +175,6 @@ class TimeProvider:
 
         self._debug("sunrise_sunset fallback", date=f"{year}-{month}-{day}")
         return ((0, 0), (0, 0))  # error fallback
-
-    def export_sunrise_sunset_2026_csv(self, csv_path: str = "sunrise_sunset_2026.csv") -> None:
-        """
-        Generate a CSV with sunrise/sunset values for every day in 2026.
-
-        Columns: date, sunrise_hhmm, sunset_hhmm, sunrise_minutes, sunset_minutes
-        """
-        provider = TimeProvider()
-        year = 2026
-        days_per_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-
-        with open(csv_path, "w") as f:
-            f.write("date,sunrise_hhmm,sunset_hhmm,sunrise_minutes,sunset_minutes\n")
-            for month in range(1, 13):
-                for day in range(1, days_per_month[month - 1] + 1):
-                    (sr_h, sr_m), (ss_h, ss_m) = provider.sunrise_sunset(year, month, day)
-                    sr_min = sr_h * 60 + sr_m
-                    ss_min = ss_h * 60 + ss_m
-                    sr_hhmm = f"{sr_h:02d}:{sr_m:02d}"
-                    ss_hhmm = f"{ss_h:02d}:{ss_m:02d}"
-                    date_str = f"{year:04d}-{month:02d}-{day:02d}"
-                    f.write(f"{date_str},{sr_hhmm},{ss_hhmm},{sr_min},{ss_min}\n")
 
 
 class RTCTimeProvider(TimeProvider):
@@ -392,22 +351,3 @@ class RTCTimeProvider(TimeProvider):
             pass
 
         return 0  # Error fallback (midnight)
-
-    def get_time_tuple(self) -> tuple:
-        """
-        Return raw time tuple from RTC.
-
-        Returns numeric format: (second, minute, hour, weekday, day, month, year).
-        Prefer specific methods (now_timestamp, get_seconds_since_midnight) for cleaner code.
-
-        Returns:
-            tuple: (sec, min, hour, wday, day, mon, year) or (0,0,0,0,0,0,0) on error
-        """
-        self._sync_from_rtc()
-        try:
-            t = time.localtime()
-            return (int(t[5]), int(t[4]), int(t[3]), int(t[6]), int(t[2]), int(t[1]), int(t[0]))
-        except Exception:
-            pass
-
-        return (0, 0, 0, 0, 0, 0, 0)  # Error fallback

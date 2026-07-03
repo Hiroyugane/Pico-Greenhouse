@@ -155,7 +155,6 @@ class LEDButtonHandler:
         # ISR-safe flags — set in ISR, consumed by poll_button()
         self._pending_short = False
         self._pending_long = False
-        self._logger = logger
 
         if logger:
             logger.debug(

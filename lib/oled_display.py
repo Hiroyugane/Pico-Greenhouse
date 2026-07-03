@@ -139,7 +139,6 @@ class OLEDDisplay:
         self._stats_window_s = stats_window_s
         self._menu_timeout_s = menu_timeout_s
         self._display_timeout_s = display_timeout_s
-        self._menu_timeout_s = menu_timeout_s
         self._startup_banner_s = startup_banner_s
         self._vram_clear_delay_s = vram_clear_delay_s
         self._invert_delay_s = invert_delay_s

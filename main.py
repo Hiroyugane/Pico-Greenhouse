@@ -49,11 +49,9 @@ from lib.fan_output import Pca9685FanOutput, RelayFanOutput
 from lib.hardware_factory import HardwareFactory
 from lib.heater import HeaterController
 from lib.led_button import LEDButtonHandler, ServiceReminder
-from lib.mcp4725 import MCP4725
 from lib.oled_display import OLEDDisplay
 from lib.relay import FanController, GrowlightController, RelayController
 from lib.sht31 import SHT31
-from lib.soil_logger import SoilLogger
 from lib.status_manager import SD_MOUNT_FAILED, SD_MOUNTED, SD_NO_CARD, StatusManager
 from lib.temp_humidity_logger import TempHumidityLogger
 from lib.time_provider import RTCTimeProvider
@@ -558,6 +556,10 @@ async def main():
     # relay-only path. growlight.mode in DEVICE_CONFIG is no longer consulted.
     grow_dac = None
     if is_plant_mode:
+        # Plant-mode-only import: keeps the MCP4725 driver bytecode off the
+        # heap entirely in mushroom mode, where the DAC is never constructed.
+        from lib.mcp4725 import MCP4725
+
         try:
             grow_dac = MCP4725(
                 i2c=hardware.get_i2c(),
@@ -643,6 +645,10 @@ async def main():
     soil_config = DEVICE_CONFIG.get("soil_logger", {})
     soil_logger_obj = None
     if is_plant_mode:
+        # Plant-mode-only import: keeps the SoilLogger bytecode off the heap
+        # in mushroom mode, where no soil probe is constructed.
+        from lib.soil_logger import SoilLogger
+
         try:
             soil_adc = ADC(Pin(DEVICE_CONFIG["pins"]["adc_input"]))
             soil_logger_obj = SoilLogger(

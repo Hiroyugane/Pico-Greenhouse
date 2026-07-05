@@ -484,11 +484,13 @@ class HardwareFactory:
                 i2c=self.i2c1,
                 address=pca_cfg.get("i2c_address", 0x40),
                 freq_hz=pca_cfg.get("freq_hz", 1000),
+                invert=pca_cfg.get("invert", False),
             )
             self._debug(
                 "PCA9685 initialized",
                 address=hex(pca_cfg.get("i2c_address", 0x40)),
                 freq_hz=pca_cfg.get("freq_hz", 1000),
+                invert=pca_cfg.get("invert", False),
             )
             return True
         except Exception as e:

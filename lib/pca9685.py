@@ -39,10 +39,15 @@ class PCA9685:
     duty 0 (caller must set_duty explicitly to drive any output).
     """
 
-    def __init__(self, i2c, address: int = 0x40, freq_hz: int = 1000):
+    def __init__(self, i2c, address: int = 0x40, freq_hz: int = 1000, invert: bool = False):
         self.i2c = i2c
         self.address = address
         self._freq_hz = freq_hz
+        # invert=True when the downstream gate stage is inverting (fan speed
+        # tracks 100-duty). set_duty then maps pct -> 100-pct so callers keep
+        # 0=off / 100=full semantics. all_off() below relies on this being set
+        # first so it drives channels to the true OFF level.
+        self._invert = invert
         self._reset()
         self.set_freq(freq_hz)
         self.all_off()
@@ -92,6 +97,10 @@ class PCA9685:
             pct = 0
         elif pct > 100:
             pct = 100
+        if self._invert:
+            # Inverting gate stage: emit the complementary duty so 0 stays
+            # fully off (FULL_ON gate = fan off) and 100 stays fully on.
+            pct = 100 - pct
         if pct <= 0:
             # FULL_OFF flag (bit 12 of OFF) wins over count comparator.
             self._set_pwm(channel, 0, 4096)

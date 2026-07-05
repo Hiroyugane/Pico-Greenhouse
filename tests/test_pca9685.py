@@ -106,6 +106,46 @@ class TestPCA9685SetDuty:
         assert last.args[2] == bytes([0x00, 0x10, 0x00, 0x00])
 
 
+class TestPCA9685Invert:
+    @pytest.fixture
+    def pca(self):
+        from lib.pca9685 import PCA9685
+
+        i2c = _make_i2c()
+        return PCA9685(i2c, freq_hz=1000, invert=True)
+
+    def test_invert_zero_writes_full_on(self, pca):
+        # 0% requested → inverted to 100% → FULL_ON gate = fan truly off.
+        pca.i2c.writeto_mem.reset_mock()
+        pca.set_duty(0, 0)
+        last = pca.i2c.writeto_mem.call_args
+        assert last.args[2] == bytes([0x00, 0x10, 0x00, 0x00])
+
+    def test_invert_100_writes_full_off(self, pca):
+        # 100% requested → inverted to 0% → FULL_OFF gate = fan at full speed.
+        pca.i2c.writeto_mem.reset_mock()
+        pca.set_duty(0, 100)
+        last = pca.i2c.writeto_mem.call_args
+        assert last.args[2] == bytes([0x00, 0x00, 0x00, 0x10])
+
+    def test_invert_midscale_is_complementary(self, pca):
+        # 25% requested → inverted to 75% of 4095 ≈ 3071.
+        pca.i2c.writeto_mem.reset_mock()
+        pca.set_duty(0, 25)
+        _, _, off_l, off_h = pca.i2c.writeto_mem.call_args.args[2]
+        count = off_l | (off_h << 8)
+        assert 3065 <= count <= 3078
+
+    def test_invert_default_off_matches_non_inverted(self):
+        # invert defaults False: 0% keeps the plain FULL_OFF encoding.
+        from lib.pca9685 import PCA9685
+
+        pca = PCA9685(_make_i2c(), freq_hz=1000)
+        pca.i2c.writeto_mem.reset_mock()
+        pca.set_duty(0, 0)
+        assert pca.i2c.writeto_mem.call_args.args[2] == bytes([0x00, 0x00, 0x00, 0x10])
+
+
 class TestPCA9685SetFreq:
     def test_set_freq_writes_prescale(self):
         from lib.pca9685 import PCA9685

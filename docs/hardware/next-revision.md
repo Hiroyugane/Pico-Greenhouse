@@ -19,6 +19,43 @@
 
 ## Schematic — nets, components, BOM
 
+### [ ] 5 V step-down can't drive the relay coil bank — size the supply for spool current
+
+**Filed:** 2026-07-05 ·
+[chat-log entry](../notes/chat-log.md#2026-07-05--relay-coil-faults-root-caused--5-v-step-down-starves-the-spools) ·
+[2026-05-19 VSYS-starvation trace](../notes/chat-log.md#2026-05-19--external-5-v-supply-starves-vsys--1n4002-drop-traced) ·
+[memory: project-power-input-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_power_input_revision.md)
+
+Bench REL.1 (2026-07-05) root-caused the GP18/GP19 relay faults to the
+**5 V step-down being current-bottlenecked** — it can't source the relay
+coil (spool) pull-in/hold current, so a coil fails to pull in (GP19: no
+click, faint LED) or fails to release cleanly (GP18: contact stayed
+closed). Same rail as the
+[2026-05-19 VSYS starvation](#2026-05-19--external-5-v-supply-starves-vsys--1n4002-drop-traced):
+XL4015 buck with its **CC trimpot already maxed**, behind two 1N4002 input
+diodes (~1.6 V drop under load).
+
+- **Quantify the load:** relay-coil bank = N coils × ~70–90 mA hold, plus
+  inrush, on top of the Pico + I²C0 draw. Size the 5 V supply for the
+  worst-case simultaneously-energised coil count with margin.
+- **Fix options (pick per BOM/space):**
+  - Combine with the queued
+    [1N4002 → Schottky input-diode swap](#x-schottky-plan--single-rail-diode-per-input-delete-d2--d3--d6-gnd-return-diodes)
+    (recovers ~1.3 V that collapses the rail under load) — may alone lift
+    the coils over threshold.
+  - Give the relay coils a **dedicated 5 V rail** (separate buck or a
+    higher-current module) so coil inrush never sags the Pico VSYS path.
+  - If keeping the XL4015, verify its CC limit and module current rating
+    cover Pico + I²C + full coil bank; the CC pot was found **maxed** in
+    the 2026-05-19 trace, so it may already be at its ceiling.
+- **Pair with** the VSYS bulk cap (470 µF–1000 µF) already queued to
+  absorb inrush transients.
+- **Acceptance on the new board:** energise the maximum set of coils that
+  can be simultaneously active; the 5 V rail must hold **≥ 4.75 V** (relay
+  module min) with **every** coil pulling in and releasing — no faint-LED
+  / stuck-contact channel. Meter the rail under coil load per
+  [hw-test-log REL.1 follow-up](../test/hw-test-log.md).
+
 ### [ ] Fan gate stage inverts + no hard-off at duty 0 — make it non-inverting / add a gate driver
 
 **Filed:** 2026-07-05 ·

@@ -19,6 +19,41 @@
 
 ## Schematic — nets, components, BOM
 
+### [ ] Fan gate stage inverts + no hard-off at duty 0 — make it non-inverting / add a gate driver
+
+**Filed:** 2026-07-05 ·
+[chat-log entry](../notes/chat-log.md#2026-07-05--bring-up-re-run--firmware-cleared-three-hardware-faults-isolated) ·
+[memory: project-fan-hardware-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_fan_hardware_revision.md)
+
+Two independent bench runs (2026-07-05) proved the PCA9685→IRLZ44N **fan
+gate stage is inverting** (fan speed tracks `100 − duty`) and, worse,
+**duty 0 does not bring the fan to a full mechanical stop** — the fan
+creeps/windmills. Firmware currently masks the inversion with
+`pca9685.invert=True` (see the
+[fan PCA9685 entry](#x-move-fans-from-2-relays-to-pca9685--irlz44n-mosfets)),
+but firmware **cannot** force a hard stop: at 0 % it already emits the
+PCA9685 FULL_ON state, the maximal "off" the inverting stage can be given.
+
+- **Root cause to resolve on the next rev:** identify the inverting element
+  between the PCA9685 output and the IRLZ44N gate (likely a level-shift /
+  buffer transistor in common-emitter). Either **make the stage
+  non-inverting** (so `set_duty(pct)` maps directly and 0 % = gate low =
+  hard off) **or** drop in a dedicated low-side gate driver — the
+  **MCP1416** already speced for the heater
+  ([gate-driver entry](#x-mcp1416-gate-driver-for-he_mosfet-irlz44n)) is the
+  natural part to reuse across all five fan channels (and ch5 solenoid).
+- **Acceptance on the new board:** scope each fan gate at duty 0 and 100.
+  At 0 % V_GS must sit **below IRLZ44N V_GS(th)** (fan mechanically stopped,
+  no creep); at 100 % V_GS must be the full gate rail. Duty must track fan
+  speed **directly** (no inversion), letting `pca9685.invert` revert to
+  `False` in `config.py`.
+- **Firmware follow-through (lands with the board):** once the stage is
+  non-inverting, flip `DEVICE_CONFIG["pca9685"]["invert"]` back to `False`
+  (keep the flag + validator + test — the solenoid stage may still need it).
+- **Verification:** trimmed FAN.1 in `prototypes/next_rev_bringup.py`
+  (single channel, hard-stop check) +
+  [hw-test-log "Fan re-run" follow-up](../test/hw-test-log.md).
+
 ### [x] HPA mist-solenoid driver — PCA9685 ch5 + IRLZ44N, broken out as a plug-in 12 V valve connector
 
 **Filed:** 2026-05-31 ·

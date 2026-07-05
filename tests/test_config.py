@@ -767,6 +767,24 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["pca9685"]["enabled"] = original
 
+    def test_pca9685_invert_default_true(self):
+        """pca9685.invert ships True — the next-rev fan MOSFET stage inverts."""
+        from config import DEVICE_CONFIG
+
+        assert DEVICE_CONFIG["pca9685"]["invert"] is True
+
+    def test_pca9685_invert_non_bool_raises(self):
+        """pca9685.invert must be a bool."""
+        import config
+
+        original = config.DEVICE_CONFIG["pca9685"]["invert"]
+        config.DEVICE_CONFIG["pca9685"]["invert"] = 1
+        try:
+            with pytest.raises(ValueError, match="pca9685.invert"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["pca9685"]["invert"] = original
+
     # --- fans dict validation ---
 
     def test_fans_default_roster(self):

@@ -280,10 +280,17 @@ DEVICE_CONFIG = {
     # i2c_address: A5..A0 strap pins on the PCA9685 select 0x40..0x7F;
     # 0x40 is the default with all straps tied LOW.
     # freq_hz: shared across all 16 channels per datasheet, 24..1526 Hz.
+    # invert: the next-rev fan/solenoid MOSFET gate stage is inverting —
+    # bench (2026-07-05) showed a PWM ramp-DOWN spun the fans UP and duty 0
+    # never fully stopped them, i.e. fan speed tracks (100 - duty). True
+    # makes lib/pca9685.py map set_duty(pct) -> 100-pct so on/off/ramp read
+    # right everywhere (main.py fan control AND the bring-up runner). Applies
+    # to every channel; the solenoid stage (future ch5) shares the wiring.
     "pca9685": {
         "enabled": True,
         "i2c_address": 0x40,
         "freq_hz": 1000,
+        "invert": True,
     },
     # Heater Configuration (GP3 → R6 → IRLZ44N gate, ACTIVE HIGH)
     #
@@ -763,6 +770,7 @@ def validate_config():
             "enabled",
             "i2c_address",
             "freq_hz",
+            "invert",
         ],
         "heater": [
             "day_min_temp",
@@ -1000,6 +1008,8 @@ def validate_config():
         raise ValueError("pca9685.i2c_address must be a 7-bit I2C address (0x08-0x77)")
     if not isinstance(pca_cfg["freq_hz"], int) or not (24 <= pca_cfg["freq_hz"] <= 1526):
         raise ValueError("pca9685.freq_hz must be an int 24-1526 (PCA9685 datasheet range)")
+    if not isinstance(pca_cfg["invert"], bool):
+        raise ValueError("pca9685.invert must be a bool")
 
     heater_cfg = DEVICE_CONFIG["heater"]
     if heater_cfg["temp_hysteresis"] < 0:

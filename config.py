@@ -196,6 +196,12 @@ DEVICE_CONFIG = {
     # relay output stays supported for any fan that needs it. Only main.py
     # wiring changes between backends; policy is untouched.
     #
+    # pca9685_ch below is the BENCH-CONFIRMED physical map (2026-07-05 fan
+    # bring-up): ch0=growroom_walls, ch1=growroom_center, ch2=heater_
+    # distribution, ch3=case, ch4=exhaust. The as-designed order did not
+    # match how the harness landed; do not "tidy" these back to 0-4 by role
+    # order without re-running the bring-up fan check.
+    #
     # Modes:
     #   thermostat_schedule — time-of-day on-cycle + temperature override
     #                         (FanController). Needs interval_s, on_time_s,
@@ -217,7 +223,7 @@ DEVICE_CONFIG = {
             "enabled": True,
             "mode": "thermostat_schedule",
             "output": "pca9685",
-            "pca9685_ch": 0,
+            "pca9685_ch": 4,
             "interval_s": 600,
             "on_time_s": 20,
             "max_temp": 23.8,
@@ -229,7 +235,7 @@ DEVICE_CONFIG = {
             "enabled": True,
             "mode": "thermostat_schedule",
             "output": "pca9685",
-            "pca9685_ch": 1,
+            "pca9685_ch": 0,
             "interval_s": 500,
             "on_time_s": 20,
             "max_temp": 27.0,
@@ -241,7 +247,7 @@ DEVICE_CONFIG = {
             "enabled": True,
             "mode": "thermostat_schedule",
             "output": "pca9685",
-            "pca9685_ch": 2,
+            "pca9685_ch": 1,
             "interval_s": 500,
             "on_time_s": 20,
             "max_temp": 27.0,
@@ -253,7 +259,7 @@ DEVICE_CONFIG = {
             "enabled": True,
             "mode": "heater_follower",
             "output": "pca9685",
-            "pca9685_ch": 3,
+            "pca9685_ch": 2,
             "post_run_s": 60,
             "duty_pct": 80,
             "poll_interval_s": 5,
@@ -262,7 +268,7 @@ DEVICE_CONFIG = {
             "enabled": True,
             "mode": "always_on",
             "output": "pca9685",
-            "pca9685_ch": 4,
+            "pca9685_ch": 3,
             "duty_pct": 60,
             "refresh_interval_s": 300,
         },

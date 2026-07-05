@@ -546,9 +546,17 @@ def _report_text():
     return "\n".join(lines) + "\n"
 
 
+# Slug is fixed on the first save so the per-item crash-safety saves
+# overwrite ONE report per run instead of leaving a file per answer.
+_RUN_SLUG = None
+
+
 def _write_report():
+    global _RUN_SLUG
+    if _RUN_SLUG is None:
+        _RUN_SLUG = _ts().replace(" ", "_").replace(":", "")
+    slug = _RUN_SLUG
     text = _report_text()
-    slug = _ts().replace(" ", "_").replace(":", "")
     for path in ("/sd/diagnostics/bringup_%s.md" % slug, "/local/bringup_%s.md" % slug):
         try:
             d = "/".join(path.split("/")[:-1])

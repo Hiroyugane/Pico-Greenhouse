@@ -4,10 +4,10 @@
 # Linear, tick-as-you-go walk-through of the FIRMWARE-ASSISTED next-rev bench
 # checks that are still OUTSTANDING — the subset of docs/test/hw-test-log.md
 # where running code helps and the item has not yet passed:
-#   * per-channel fan isolation + PWM (re-run after the ch remap + inverted
-#     duty fix — see config pca9685.invert and the fans pca9685_ch map),
+#   * single-channel fan PWM sanity (invert direction + does duty 0 fully
+#     stop — see config pca9685.invert and the fans pca9685_ch map),
 #   * soil TLC555 three-point calibration (dry > wet),
-#   * per-relay isolation cycle (growlight + freed fan + reserved channels).
+#   * per-relay isolation cycle over the wired REL_CON ports only.
 # Checks that already PASSED (SD card-detect polarity, I2C scan, grow-light
 # DAC sweep, heater-gate drive, soil AOUT-moves) were removed once recorded
 # in docs/test/next-rev-results.md — re-add them here only if a board change
@@ -59,17 +59,18 @@ I2C_FREQ = DEVICE_CONFIG.get("system", {}).get("i2c_freq", 400000)
 FAN_RAMP_S = 10  # fan ramp-down duration (s) for the per-channel PWM check
 RELAY_PULSE_S = DEVICE_CONFIG.get("display", {}).get("debug", {}).get("test_relay_pulse_s", 1)
 
-# Relay roster for the isolation cycle: every relay_* pin, active-low
-# (HIGH=off, LOW=on). Growlight first (drives a real load), then the two
-# fan relays freed by the PCA9685 move, then the four reserved channels.
+# Relay roster for the isolation cycle: only the REL_CON channels actually
+# populated with a relay, active-low (HIGH=off, LOW=on). The 2026-07-05
+# bench found REL_CON pins 6-8 (GP22/GP26/GP27, the old relay_reserved_2/3/4)
+# carry no relay module — GP22 is the future water-level input and GP26/GP27
+# are the future I2C1 bus (docs/hardware/next-revision.md). So cycle the four
+# wired ports only: growlight (drives a real load) plus the two fan relays
+# freed by the PCA9685 move plus the one wired reserved channel.
 _RELAY_KEYS = (
     "relay_growlight",
     "relay_fan_1",
     "relay_fan_2",
     "relay_reserved_1",
-    "relay_reserved_2",
-    "relay_reserved_3",
-    "relay_reserved_4",
 )
 RELAY_PINS = [(k, _PINS[k]) for k in _RELAY_KEYS if k in _PINS]
 
@@ -193,44 +194,45 @@ def act_soil_three_point():
 
 
 def act_fan_channels():
-    # Per-channel isolation + PWM: force EVERY channel off, then drive only the
-    # selected one at 100 %, 50 %, and a smooth ramp to 0 % over FAN_RAMP_S.
-    # Zeroing all channels first is what isolates a cross-talk / stuck-100 %
-    # fault (each fan should move only while its own channel is driven).
-    # Duty semantics are corrected by pca9685.invert, so 0 % is a true stop and
-    # the ramp visibly slows the fan; a fan that speeds UP on the ramp or never
-    # stops means the invert flag is wrong for this board.
+    # Single-channel PWM sanity check. The 2026-07-05 re-run confirmed every
+    # channel spins hardware-side, so the per-channel sweep is dropped — one
+    # representative channel is enough to verify duty direction and the OPEN
+    # question: does duty 0 reach a true mechanical stop? Force EVERY channel
+    # off first (isolates cross-talk), drive the lowest-numbered pca9685 fan at
+    # 100 %, 50 %, then ramp to 0 % over FAN_RAMP_S. Duty is corrected by
+    # pca9685.invert, so the ramp should visibly SLOW the fan; a fan that speeds
+    # UP means the invert flag is wrong, and a fan that keeps windmilling at 0 %
+    # is the inverting gate stage not pulling the MOSFET fully off (hardware —
+    # see docs/hardware/next-revision.md fan gate-stage entry).
     pca = _pca()
     if pca is None:
         return None
     roster = sorted(
         (c["pca9685_ch"], role) for role, c in DEVICE_CONFIG["fans"].items() if c.get("output") == "pca9685"
     )
-    if not _confirm("    All fans clear to spin? [y/N]: "):
+    if not roster:
+        print("    no pca9685-backed fans in config — nothing to spin.")
+        return None
+    ch, role = roster[0]
+    if not _confirm("    Fan clear to spin? [y/N]: "):
         return "actuation skipped"
-    results = []
     steps = 50
     try:
-        for ch, role in roster:
-            pca.all_off()  # every channel OFF before isolating this one
-            print("    --- ch%d '%s': all other channels forced OFF ---" % (ch, role))
-            if _input("    Enter to spin ONLY ch%d (or 's' to skip): " % ch).strip().lower() == "s":
-                results.append("ch%d/%s:skip" % (ch, role))
-                continue
-            pca.set_duty(ch, 100)
-            _input("      100%% — confirm ONLY '%s' spins, all others OFF (Enter)..." % role)
-            pca.set_duty(ch, 50)
-            _input("      50%% — confirm it is visibly SLOWER (Enter)...")
-            print("      ramping 50%% -> 0%% over %d s..." % FAN_RAMP_S)
-            for i in range(steps + 1):
-                pca.set_duty(ch, 50.0 * (steps - i) / steps)
-                time.sleep(FAN_RAMP_S / steps)
-            pca.set_duty(ch, 0)
-            ans = _input("      ONLY ch%d ramped smoothly to a stop? [y/n] + note: " % ch).strip()
-            results.append("ch%d/%s:%s" % (ch, role, ans or "?"))
+        pca.all_off()  # every channel OFF before isolating this one
+        print("    --- ch%d '%s': all other channels forced OFF ---" % (ch, role))
+        pca.set_duty(ch, 100)
+        _input("      100%% — confirm ONLY '%s' (ch%d) spins, all others OFF (Enter)..." % (role, ch))
+        pca.set_duty(ch, 50)
+        _input("      50%% — confirm it is visibly SLOWER (Enter)...")
+        print("      ramping 50%% -> 0%% over %d s..." % FAN_RAMP_S)
+        for i in range(steps + 1):
+            pca.set_duty(ch, 50.0 * (steps - i) / steps)
+            time.sleep(FAN_RAMP_S / steps)
+        pca.set_duty(ch, 0)
+        ans = _input("      ch%d ramped smoothly and came to a FULL stop at 0%%? [y/n] + note: " % ch).strip()
+        return "ch%d/%s:%s" % (ch, role, ans or "?")
     finally:
         pca.all_off()
-    return " | ".join(results)
 
 
 def act_relays():
@@ -280,12 +282,12 @@ def _item(id_, text, fn=None, record=False):
 # multimeter-only checks and full-firmware behaviours in hw-test-log.md.
 SECTIONS = [
     (
-        "Fans — per-channel isolation + PWM (PCA9685, bench-mapped ch)",
+        "Fans — single-channel PWM sanity (PCA9685, invert + hard-stop check)",
         [
             _item(
                 "FAN.1",
-                "Each channel spins ALONE (others off) and ramps 100->50->0 (slows to a stop); "
-                "confirm role<->channel matches the remap.",
+                "One representative channel ramps 100->50->0; confirm it slows (invert correct) and "
+                "reaches a FULL stop at 0%.",
                 act_fan_channels,
             ),
         ],
@@ -305,8 +307,8 @@ SECTIONS = [
         [
             _item(
                 "REL.1",
-                "Each relay energises ALONE (others off): growlight + freed fan + reserved GPs click on/off, "
-                "no pin<->relay swap.",
+                "Each wired relay energises ALONE (others off): growlight + the two freed fan relays + "
+                "the one wired reserved channel click on/off, no pin<->relay swap.",
                 act_relays,
             ),
         ],

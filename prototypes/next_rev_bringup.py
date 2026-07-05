@@ -2,12 +2,17 @@
 # Dennis Hiro, 2026-06-30
 #
 # Linear, tick-as-you-go walk-through of the FIRMWARE-ASSISTED next-rev bench
-# checks — the subset of docs/test/hw-test-log.md where running code helps:
-# per-channel fan isolation + PWM, SD card-detect polarity, soil TLC555 raw,
-# I2C scan, grow-light DAC sweep, heater-gate drive. Pure design-review /
-# visual / multimeter-only items (footprints, resistor values, trace widths,
-# rail voltages) and full-firmware behaviours (thermostat, SD recovery, soaks)
-# live in hw-test-log.md, NOT here.
+# checks that are still OUTSTANDING — the subset of docs/test/hw-test-log.md
+# where running code helps and the item has not yet passed:
+#   * per-channel fan isolation + PWM (re-run after the ch remap + inverted
+#     duty fix — see config pca9685.invert and the fans pca9685_ch map),
+#   * soil TLC555 three-point calibration (dry > wet),
+#   * per-relay isolation cycle (growlight + freed fan + reserved channels).
+# Checks that already PASSED (SD card-detect polarity, I2C scan, grow-light
+# DAC sweep, heater-gate drive, soil AOUT-moves) were removed once recorded
+# in docs/test/next-rev-results.md — re-add them here only if a board change
+# invalidates the pass. Pure design-review / visual / multimeter-only items
+# and full-firmware behaviours (SD recovery, soaks) live in hw-test-log.md.
 #
 # Each item is presented IN ORDER: firmware takes the live reading or actuates
 # the output, then you verdict it [p]ass / [f]ail / [s]kip. Notes you type are
@@ -20,10 +25,11 @@
 # Run it STANDALONE (not while main.py is running) so nothing else drives the
 # bus or the relays.
 #
-# SAFETY: fan-spin, grow-light DAC and the heater-gate (GP3) steps actuate
-# real loads. Each asks for explicit confirmation first and forces the output
-# back OFF afterwards (try/finally). Do not run the heater-gate drive with a
-# live heater unless you intend to measure V_GS with the heater safely loaded.
+# SAFETY: the fan-spin and per-relay steps actuate real loads. Each asks for
+# explicit confirmation first and forces every output back OFF afterwards
+# (try/finally). The relay cycle energises one relay at a time — anything
+# wired to the growlight or reserved channels (mains grow light, pumps) WILL
+# switch, so run it with those loads unplugged unless you intend them to fire.
 
 import os
 import sys
@@ -45,15 +51,27 @@ if sys.implementation.name != "micropython":
 from config import DEVICE_CONFIG  # noqa: E402  (kept after the host path shim)
 
 _PINS = DEVICE_CONFIG["pins"]
-HEATER_PIN = _PINS["heater_mosfet"]  # GP3
-SD_LED_PIN = _PINS["sd_led"]  # GP5
-DET_PIN = _PINS["sd_detect"]  # GP15
 SOIL_PIN = _PINS["adc_input"]  # GP28
 I2C_PORT = _PINS["rtc_i2c_port"]
 I2C_SDA = _PINS["rtc_sda"]
 I2C_SCL = _PINS["rtc_scl"]
 I2C_FREQ = DEVICE_CONFIG.get("system", {}).get("i2c_freq", 400000)
 FAN_RAMP_S = 10  # fan ramp-down duration (s) for the per-channel PWM check
+RELAY_PULSE_S = DEVICE_CONFIG.get("display", {}).get("debug", {}).get("test_relay_pulse_s", 1)
+
+# Relay roster for the isolation cycle: every relay_* pin, active-low
+# (HIGH=off, LOW=on). Growlight first (drives a real load), then the two
+# fan relays freed by the PCA9685 move, then the four reserved channels.
+_RELAY_KEYS = (
+    "relay_growlight",
+    "relay_fan_1",
+    "relay_fan_2",
+    "relay_reserved_1",
+    "relay_reserved_2",
+    "relay_reserved_3",
+    "relay_reserved_4",
+)
+RELAY_PINS = [(k, _PINS[k]) for k in _RELAY_KEYS if k in _PINS]
 
 # Accumulated verdicts; the report is rebuilt from this after each item.
 RESULTS = []
@@ -61,8 +79,6 @@ RESULTS = []
 # Lazily-built, cached hardware handles (None until first needed / on host).
 _I2C = None
 _PCA = None
-_DAC = None
-_DET = None
 
 
 class _Quit(Exception):
@@ -115,55 +131,11 @@ def _pca():
         from lib.pca9685 import PCA9685
 
         cfg = DEVICE_CONFIG["pca9685"]
-        _PCA = PCA9685(bus, address=cfg["i2c_address"], freq_hz=cfg["freq_hz"])
+        _PCA = PCA9685(bus, address=cfg["i2c_address"], freq_hz=cfg["freq_hz"], invert=cfg.get("invert", False))
     except Exception as e:
         print("  PCA9685 init failed (%s) — chip absent? record manually." % e)
         _PCA = None
     return _PCA
-
-
-def _dac():
-    global _DAC
-    if _DAC is not None:
-        return _DAC
-    bus = _i2c()
-    if bus is None:
-        return None
-    addr = DEVICE_CONFIG["growlight"]["dac_i2c_address"]
-    try:
-        present = bus.scan()
-    except Exception as e:
-        print("  i2c scan failed: %s" % e)
-        return None
-    if addr not in present and 0x61 not in present:
-        print("  MCP4725 not on the bus (looked for 0x%02X / 0x61) — DAC sweep not possible." % addr)
-        return None
-    try:
-        from lib.mcp4725 import MCP4725
-
-        _DAC = MCP4725(bus, address=addr if addr in present else 0x61)
-    except Exception as e:
-        print("  MCP4725 init failed: %s" % e)
-        _DAC = None
-    return _DAC
-
-
-def _det_pin():
-    global _DET
-    if machine is None:
-        return None
-    if _DET is None:
-        pull_name = DEVICE_CONFIG["sd_detect"].get("pull", "up")
-        pull = {
-            "up": getattr(machine.Pin, "PULL_UP", None),
-            "down": getattr(machine.Pin, "PULL_DOWN", None),
-            "none": None,
-        }.get(pull_name, getattr(machine.Pin, "PULL_UP", None))
-        if pull is None:
-            _DET = machine.Pin(DET_PIN, machine.Pin.IN)
-        else:
-            _DET = machine.Pin(DET_PIN, machine.Pin.IN, pull)
-    return _DET
 
 
 def _safe_all_off():
@@ -175,83 +147,17 @@ def _safe_all_off():
             _PCA.all_off()
     except Exception:
         pass
-    try:
-        machine.Pin(HEATER_PIN, machine.Pin.OUT).value(0)
-    except Exception:
-        pass
-    try:
-        machine.Pin(SD_LED_PIN, machine.Pin.OUT).value(0)
-    except Exception:
-        pass
-    try:
-        if _DAC is not None:
-            _DAC.write(0)
-    except Exception:
-        pass
+    # Drive every relay pin to its OFF level (HIGH = off, active-low modules).
+    for _, pin_no in RELAY_PINS:
+        try:
+            machine.Pin(pin_no, machine.Pin.OUT).value(1)
+        except Exception:
+            pass
 
 
 # ------------------------------------------------------------ action fns
 # Each returns a short string captured into the report's "value" column,
 # or None. They never raise out — _run_item wraps them too.
-
-
-def act_i2c_scan():
-    bus = _i2c()
-    if bus is None:
-        return None
-    known = {
-        0x3C: "OLED",
-        0x40: "PCA9685",
-        0x44: "SHT31",
-        0x57: "AT24C32 EEPROM (DS3231 module)",
-        0x60: "MCP4725",
-        0x68: "DS3231",
-    }
-    addrs = bus.scan()
-    for a in addrs:
-        print("    0x%02X  %s" % (a, known.get(a, "unknown")))
-    expect = (0x3C, 0x44, 0x60, 0x68)
-    missing = ["0x%02X" % a for a in expect if a not in addrs]
-    if missing:
-        print("    MISSING expected: %s" % ", ".join(missing))
-    print("    PCA9685 0x40: %s" % ("present" if 0x40 in addrs else "absent (populate before B2)"))
-    return "scan=" + ",".join("0x%02X" % a for a in addrs)
-
-
-def act_det_polarity():
-    pin = _det_pin()
-    if pin is None:
-        return None
-    _input("    Insert a card, then press Enter to read DET (GP%d)..." % DET_PIN)
-    v_in = pin.value()
-    _input("    Now REMOVE the card, then press Enter to read again...")
-    v_out = pin.value()
-    print("    DET with card=%d, empty=%d" % (v_in, v_out))
-    cfg = DEVICE_CONFIG["sd_detect"]["present_when_low"]
-    if v_in == 0 and v_out == 1:
-        observed_low = True
-    elif v_in == 1 and v_out == 0:
-        observed_low = False
-    else:
-        print("    INCONCLUSIVE: levels did not change between in/out — check wiring.")
-        return "card=%d empty=%d (no change)" % (v_in, v_out)
-    print("    Observed present_when_low=%s ; config has %s" % (observed_low, cfg))
-    if observed_low != cfg:
-        print("    >>> FLIP config sd_detect.present_when_low to %s before trusting B4." % observed_low)
-    else:
-        print("    Config polarity matches reality.")
-    return "card=%d empty=%d present_when_low_observed=%s cfg=%s" % (v_in, v_out, observed_low, cfg)
-
-
-def act_det_read():
-    pin = _det_pin()
-    if pin is None:
-        return None
-    v = pin.value()
-    present_low = DEVICE_CONFIG["sd_detect"]["present_when_low"]
-    present = (v == 0) if present_low else (v == 1)
-    print("    DET GP%d = %d -> firmware reads card %s" % (DET_PIN, v, "PRESENT" if present else "ABSENT"))
-    return "det=%d present=%s" % (v, present)
 
 
 def _load_print_raw():
@@ -262,22 +168,6 @@ def _load_print_raw():
     except Exception as e:
         print("    lib.soil_logger.print_raw unavailable: %s" % e)
         return None
-
-
-def act_soil_live():
-    pr = _load_print_raw()
-    if pr is None:
-        return None
-    print("    Watching GP%d for ~8 s — submerge / lift the probe and watch it move:" % SOIL_PIN)
-    last = None
-    for _ in range(16):
-        try:
-            last = pr(SOIL_PIN)
-        except Exception as e:
-            print("    read failed: %s" % e)
-            break
-        time.sleep(0.5)
-    return "last_raw=%s" % last
 
 
 def act_soil_three_point():
@@ -307,6 +197,9 @@ def act_fan_channels():
     # selected one at 100 %, 50 %, and a smooth ramp to 0 % over FAN_RAMP_S.
     # Zeroing all channels first is what isolates a cross-talk / stuck-100 %
     # fault (each fan should move only while its own channel is driven).
+    # Duty semantics are corrected by pca9685.invert, so 0 % is a true stop and
+    # the ramp visibly slows the fan; a fan that speeds UP on the ramp or never
+    # stops means the invert flag is wrong for this board.
     pca = _pca()
     if pca is None:
         return None
@@ -340,36 +233,39 @@ def act_fan_channels():
     return " | ".join(results)
 
 
-def act_dac_sweep():
-    dac = _dac()
-    if dac is None:
-        return None
-    expect = {0: "~0 V", 25: "~2.6 V", 50: "~5.2 V", 75: "~7.7 V", 100: "~10.3 V (fw clamps 91%->~9.4 V)"}
-    readings = []
-    try:
-        for pct in (0, 25, 50, 75, 100):
-            dac.write(round(pct / 100.0 * 4095))
-            mv = _input("    DAC=%d%% (expect %s) — measure GL_DIM+, type V (Enter=skip): " % (pct, expect[pct]))
-            readings.append("%d%%=%s" % (pct, mv.strip() or "?"))
-    finally:
-        dac.write(0)
-    return " ".join(readings)
-
-
-def act_gp3_drive():
+def act_relays():
+    # Per-relay isolation cycle: force EVERY relay OFF, then energise one at a
+    # time (active-low: value(0)=on) for RELAY_PULSE_S so a single click /
+    # module LED / load pins the wiring to exactly one GP pin. Confirms no
+    # pin<->relay swap and that idle relays don't twitch when a neighbour fires.
     if machine is None:
+        print("    [machine unavailable — record relay clicks manually]")
         return None
-    print("    !! Driving GP3 HIGH turns the heater MOSFET gate ON (heater fires if connected).")
-    if not _confirm("    Type 'yes' to drive GP3 HIGH: ", strict=True):
+    if not RELAY_PINS:
+        print("    no relay_* pins in config — nothing to cycle.")
+        return None
+    if not _confirm("    Relays clear to switch (loads unplugged unless intended)? [y/N]: "):
         return "actuation skipped"
-    p = machine.Pin(HEATER_PIN, machine.Pin.OUT)
+    pins = {k: machine.Pin(p, machine.Pin.OUT) for k, p in RELAY_PINS}
+    for p in pins.values():
+        p.value(1)  # all OFF (active-low) before isolating any one
+    results = []
     try:
-        p.value(1)
-        _input("    GP3 HIGH — measure IRLZ44N V_GS now (expect ~5 V), then press Enter to release...")
+        for key, pin_no in RELAY_PINS:
+            print("    --- %s (GP%d): all other relays forced OFF ---" % (key, pin_no))
+            prompt = "    Enter to energise ONLY %s for %ss (or 's' to skip): " % (key, RELAY_PULSE_S)
+            if _input(prompt).strip().lower() == "s":
+                results.append("%s:skip" % key)
+                continue
+            pins[key].value(0)  # ON
+            time.sleep(RELAY_PULSE_S)
+            pins[key].value(1)  # OFF
+            ans = _input("      ONLY %s clicked ON then OFF, others idle? [y/n] + note: " % key).strip()
+            results.append("%s:%s" % (key, ans or "?"))
     finally:
-        p.value(0)
-        print("    GP3 LOW (heater gate off).")
-    return None
+        for p in pins.values():
+            p.value(1)
+    return " | ".join(results)
 
 
 # --------------------------------------------------------------- checklist
@@ -379,42 +275,24 @@ def _item(id_, text, fn=None, record=False):
     return {"id": id_, "text": text, "fn": fn, "record": record}
 
 
-# Firmware-assisted bench items only. Design-review / visual / multimeter-only
-# checks and full-firmware behaviours live in docs/test/hw-test-log.md, not here.
+# Firmware-assisted bench items only, and only those still OUTSTANDING —
+# passed checks live in docs/test/next-rev-results.md; design-review /
+# multimeter-only checks and full-firmware behaviours in hw-test-log.md.
 SECTIONS = [
     (
-        "Fans — per-channel isolation + PWM (PCA9685 ch0-ch4)",
+        "Fans — per-channel isolation + PWM (PCA9685, bench-mapped ch)",
         [
             _item(
                 "FAN.1",
-                "Each channel spins ALONE (all others off) and ramps 100->50->0 smoothly; confirm role<->channel.",
+                "Each channel spins ALONE (others off) and ramps 100->50->0 (slows to a stop); "
+                "confirm role<->channel matches the remap.",
                 act_fan_channels,
-            ),
-        ],
-    ),
-    (
-        "SD card-detect (DET / GP15)",
-        [
-            _item(
-                "DET.1",
-                "Polarity: DET with card vs empty; confirm sd_detect.present_when_low matches reality.",
-                act_det_polarity,
-            ),
-            _item(
-                "DET.2",
-                "Firmware read cross-check: GP15 level maps to card PRESENT / ABSENT as expected.",
-                act_det_read,
             ),
         ],
     ),
     (
         "Soil (TLC555 / GP28, plant mode)",
         [
-            _item(
-                "SOIL.1",
-                "AOUT moves on submersion (VCC->3V3 pin36, AOUT->GP28, no divider).",
-                act_soil_live,
-            ),
             _item(
                 "SOIL.2",
                 "3-point air/moist/water separate, dry>wet; then set adc_dry_raw/adc_wet_raw + reboot for %/LED/CSV.",
@@ -423,32 +301,13 @@ SECTIONS = [
         ],
     ),
     (
-        "I2C bus scan",
+        "Relays — per-channel isolation cycle (active-low)",
         [
             _item(
-                "I2C.1",
-                "Scan lists 0x3C OLED, 0x40 PCA9685, 0x44 SHT31, 0x57 EEPROM, 0x60 MCP4725, 0x68 DS3231.",
-                act_i2c_scan,
-            ),
-        ],
-    ),
-    (
-        "Grow light — MCP4725 DAC + LM358",
-        [
-            _item(
-                "GL.1",
-                "DAC sweep 0/25/50/75/100 %; GL_DIM+ ~0/2.6/5.2/7.7/10.3 V, ~9.4 V clamp at 100 %.",
-                act_dac_sweep,
-            ),
-        ],
-    ),
-    (
-        "Heater gate driver (MCP1416 / GP3)",
-        [
-            _item(
-                "GATE.1",
-                "Drive GP3 HIGH (gated): IRLZ44N V_GS ~5 V; scope the edge here for GD.8 if wanted.",
-                act_gp3_drive,
+                "REL.1",
+                "Each relay energises ALONE (others off): growlight + freed fan + reserved GPs click on/off, "
+                "no pin<->relay swap.",
+                act_relays,
             ),
         ],
     ),

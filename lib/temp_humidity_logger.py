@@ -230,7 +230,7 @@ class TempHumidityLogger:
                         hum=hum,
                         attempt=attempt + 1,
                     )
-                    self.logger.warning("TempHumidityLogger", f"Reading out of range: {temp}°C, {hum}%")
+                    self.logger.warning("TempHumidityLogger", f"Reading out of range: {temp}degC, {hum}%")
             except Exception as e:
                 self.logger.debug(
                     "TempHumidityLogger",

@@ -122,7 +122,7 @@ class HeaterController:
                             self.turn_on()
                             self.logger.info(
                                 "Heater",
-                                f"{self.name} ON at {temp:.1f}°C < {fire_temp:.1f}°C (setpoint {setpoint:.1f}°C)",
+                                f"{self.name} ON at {temp:.1f}degC < {fire_temp:.1f}degC (setpoint {setpoint:.1f}degC)",
                             )
                         except Exception as e:
                             self.logger.error("Heater", f"{self.name} turn_on failed: {e}")
@@ -131,7 +131,7 @@ class HeaterController:
                             self.turn_off()
                             self.logger.info(
                                 "Heater",
-                                f"{self.name} OFF at {temp:.1f}°C >= {release_temp:.1f}°C",
+                                f"{self.name} OFF at {temp:.1f}degC >= {release_temp:.1f}degC",
                             )
                         except Exception as e:
                             self.logger.error("Heater", f"{self.name} turn_off failed: {e}")

@@ -167,7 +167,7 @@ class FanController:
         logger.debug(
             "FanController",
             f"Initialized {self.name}: interval={interval_s}s, on_time={on_time_s}s, "
-            f"thermostat=[max={max_temp}°C, hyst={temp_hysteresis}°C]",
+            f"thermostat=[max={max_temp}degC, hyst={temp_hysteresis}degC]",
         )
         logger.debug(
             "FanController",
@@ -247,8 +247,8 @@ class FanController:
                             self.turn_on()
                             self.logger.info(
                                 "FanController",
-                                f"{self.name} THERMOSTAT ON at {current_temp:.1f}°C "
-                                f">= {self.max_temp}°C (activation #{self.thermostat_on_count})",
+                                f"{self.name} THERMOSTAT ON at {current_temp:.1f}degC "
+                                f">= {self.max_temp}degC (activation #{self.thermostat_on_count})",
                             )
                         except Exception as e:
                             self.logger.error("FanController", f"{self.name} failed to turn ON: {e}")
@@ -267,7 +267,7 @@ class FanController:
                         threshold = self.max_temp - self.temp_hysteresis
                         self.logger.debug(
                             "FanController",
-                            f"{self.name} thermostat deactivating: {current_temp:.1f}°C < {threshold}°C",
+                            f"{self.name} thermostat deactivating: {current_temp:.1f}degC < {threshold}degC",
                         )
                         # Force schedule state re-evaluation; the schedule block
                         # immediately below will make the correct turn_on/turn_off
@@ -276,7 +276,7 @@ class FanController:
                         self.logger.info(
                             "FanController",
                             f"{self.name} THERMOSTAT RESUME SCHEDULE at "
-                            f"{current_temp:.1f}°C < {self.max_temp - self.temp_hysteresis}°C",
+                            f"{current_temp:.1f}degC < {self.max_temp - self.temp_hysteresis}degC",
                         )
 
                     elif self.thermostat_active:
@@ -284,7 +284,7 @@ class FanController:
                         self.logger.debug(
                             "FanController",
                             f"{self.name} thermostat: holding ON "
-                            f"({current_temp:.1f}°C >= {self.max_temp - self.temp_hysteresis}°C, off-threshold)",
+                            f"({current_temp:.1f}degC >= {self.max_temp - self.temp_hysteresis}degC, off-threshold)",
                         )
 
                 # External override (e.g. CO2Logger high-ppm vent).

@@ -197,10 +197,11 @@ DEVICE_CONFIG = {
     # wiring changes between backends; policy is untouched.
     #
     # pca9685_ch below is the BENCH-CONFIRMED physical map (2026-07-05 fan
-    # bring-up): ch0=growroom_walls, ch1=growroom_center, ch2=heater_
-    # distribution, ch3=case, ch4=exhaust. The as-designed order did not
-    # match how the harness landed; do not "tidy" these back to 0-4 by role
-    # order without re-running the bring-up fan check.
+    # bring-up, re-run): ch0=growroom_center, ch1=growroom_walls, ch2=heater_
+    # distribution, ch3=case, ch4=exhaust. The re-run swapped ch0<->ch1 vs the
+    # first pass — center and walls were transposed on the harness. The
+    # as-designed order did not match how the harness landed; do not "tidy"
+    # these back to 0-4 by role order without re-running the bring-up fan check.
     #
     # Modes:
     #   thermostat_schedule — time-of-day on-cycle + temperature override
@@ -235,7 +236,7 @@ DEVICE_CONFIG = {
             "enabled": True,
             "mode": "thermostat_schedule",
             "output": "pca9685",
-            "pca9685_ch": 0,
+            "pca9685_ch": 1,
             "interval_s": 500,
             "on_time_s": 20,
             "max_temp": 27.0,
@@ -247,7 +248,7 @@ DEVICE_CONFIG = {
             "enabled": True,
             "mode": "thermostat_schedule",
             "output": "pca9685",
-            "pca9685_ch": 1,
+            "pca9685_ch": 0,
             "interval_s": 500,
             "on_time_s": 20,
             "max_temp": 27.0,

@@ -2,6 +2,8 @@
 # Covers validate_config() with valid/invalid configurations
 
 
+import copy
+
 import pytest
 
 
@@ -36,6 +38,7 @@ class TestConfigStructure:
             "system",
             "updater",
             "updater_feedback",
+            "regulation",
         ]
         for key in required:
             assert key in DEVICE_CONFIG, f"Missing section: {key}"
@@ -1367,15 +1370,20 @@ class TestValidateConfig:
             config.DEVICE_CONFIG["mode"] = original
 
     def test_mode_plant_valid(self):
-        """mode='plant' passes validation."""
+        """mode='plant' passes validation with a matching plant profile."""
         import config
 
         original = config.DEVICE_CONFIG["mode"]
+        orig_profile = config.DEVICE_CONFIG["regulation"]["profile"]
         config.DEVICE_CONFIG["mode"] = "plant"
+        # The regulation profile category is tied to the top-level mode, so a
+        # plant mode needs a plant profile selected.
+        config.DEVICE_CONFIG["regulation"]["profile"] = "cannabis"
         try:
             assert config.validate_config() is True
         finally:
             config.DEVICE_CONFIG["mode"] = original
+            config.DEVICE_CONFIG["regulation"]["profile"] = orig_profile
 
     def test_growlight_negative_ramp_raises(self):
         """growlight.ramp_duration_s < 0 raises ValueError."""
@@ -1795,3 +1803,252 @@ class TestMemoryConfig:
                 config.validate_config()
         finally:
             config.DEVICE_CONFIG["memory"]["gc_threshold_b"] = original
+
+
+class TestRegulationConfig:
+    """Tests for the DEVICE_CONFIG['regulation'] block and _validate_regulation()."""
+
+    @staticmethod
+    def _restore(snapshot):
+        import config
+
+        config.DEVICE_CONFIG["regulation"] = snapshot
+
+    def test_regulation_section_present(self):
+        """DEVICE_CONFIG has a regulation section."""
+        from config import DEVICE_CONFIG
+
+        assert "regulation" in DEVICE_CONFIG
+
+    def test_regulation_default_valid(self):
+        """The shipped regulation block validates clean."""
+        import config
+
+        assert config.validate_config() is True
+
+    def test_regulation_missing_section_raises(self):
+        """Removing the regulation section raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG.pop("regulation")
+        try:
+            with pytest.raises(ValueError, match="Missing config section: regulation"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["regulation"] = original
+
+    def test_regulation_disabled_by_default(self):
+        """Engine ships disabled until the actuator wiring swap lands."""
+        from config import DEVICE_CONFIG
+
+        assert DEVICE_CONFIG["regulation"]["enabled"] is False
+
+    def test_regulation_tick_zero_raises(self):
+        """regulation.tick_s <= 0 raises ValueError."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["tick_s"] = 0
+        try:
+            with pytest.raises(ValueError, match="regulation.tick_s"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_regulation_band_edges_not_ascending_raises(self):
+        """Non-ascending band_edges raise ValueError."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["band_edges"] = [5, 5, 20, 30, 40, 50]
+        try:
+            with pytest.raises(ValueError, match="band_edges"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_regulation_band_edges_not_ending_at_50_raises(self):
+        """band_edges must end at 50."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["band_edges"] = [5, 10, 20, 30, 40, 45]
+        try:
+            with pytest.raises(ValueError, match="band_edges must end at 50"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_regulation_day_window_inverted_raises(self):
+        """day_start_min >= day_end_min raises ValueError."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["day_start_min"] = 1200
+        try:
+            with pytest.raises(ValueError, match="day_start_min"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_regulation_profile_unknown_raises(self):
+        """regulation.profile not in profiles raises ValueError."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["profile"] = "triffid"
+        try:
+            with pytest.raises(ValueError, match="not in profiles"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_regulation_profile_category_mismatch_raises(self):
+        """Active profile category must match the top-level mode."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        # Top-level mode is 'mushroom'; selecting a plant profile must fail.
+        config.DEVICE_CONFIG["regulation"]["profile"] = "cannabis"
+        try:
+            with pytest.raises(ValueError, match="category must match"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_regulation_anchors_not_ascending_raises(self):
+        """Profile anchors must be strictly ascending."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["profiles"]["cubensis"]["day"]["temp"]["at_50"] = 40.0
+        try:
+            with pytest.raises(ValueError, match="strictly ascending"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_regulation_regulators_wrong_set_raises(self):
+        """Dropping a regulator (set mismatch) raises ValueError."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        del config.DEVICE_CONFIG["regulation"]["regulators"]["cooler"]
+        try:
+            with pytest.raises(ValueError, match="regulators must be exactly"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    @pytest.mark.parametrize("param,lo,hi,_default", __import__("config")._SURFACE_PARAMS)
+    def test_regulation_surface_param_out_of_range_raises(self, param, lo, hi, _default):
+        """Every surface param is range-checked by the shared schema loop."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["regulators"]["heater"]["surface"][param] = hi + 1.0
+        try:
+            with pytest.raises(ValueError, match="regulation.regulators.heater.surface"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_regulation_surface_out_min_ge_out_max_raises(self):
+        """A surface with out_min >= out_max raises ValueError."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        surf = config.DEVICE_CONFIG["regulation"]["regulators"]["heater"]["surface"]
+        surf["out_min"] = 50.0
+        surf["out_max"] = 50.0
+        try:
+            with pytest.raises(ValueError, match="out_min must be < out_max"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_regulation_relay_hysteresis_inverted_raises(self):
+        """A relay adapter with on_above <= off_below raises ValueError."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        adapter = config.DEVICE_CONFIG["regulation"]["regulators"]["cooler"]["adapter"]
+        adapter["on_above"] = 30.0
+        adapter["off_below"] = 40.0
+        try:
+            with pytest.raises(ValueError, match="on_above must be > off_below"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_regulation_pwm_channel_out_of_range_raises(self):
+        """A pwm adapter channel outside 0-15 raises ValueError."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["regulators"]["exhaust"]["adapter"]["pca9685_ch"] = 16
+        try:
+            with pytest.raises(ValueError, match="pca9685_ch"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_regulation_adapter_pin_key_unknown_raises(self):
+        """A relay adapter referencing an unknown pin raises ValueError."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["regulators"]["cooler"]["adapter"]["pin_key"] = "no_such_pin"
+        try:
+            with pytest.raises(ValueError, match="pin_key"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_regulation_conflict_unknown_regulator_raises(self):
+        """A conflict rule forcing an unknown regulator raises ValueError."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["conflicts"][0]["force"] = {"nonexistent": 0.0}
+        try:
+            with pytest.raises(ValueError, match="unknown regulator"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_regulation_conflict_unknown_dimension_raises(self):
+        """A conflict when-term with an unknown dimension raises ValueError."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["conflicts"][0]["when"] = [["pressure", "above", 30]]
+        try:
+            with pytest.raises(ValueError, match="dimension"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_regulation_latch_release_ticks_zero_raises(self):
+        """latch.release_ticks < 1 raises ValueError."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["latch"]["release_ticks"] = 0
+        try:
+            with pytest.raises(ValueError, match="release_ticks"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_regulation_external_min_factor_out_of_range_raises(self):
+        """external_sensor.min_factor outside 0-1 raises ValueError."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["external_sensor"]["min_factor"] = 1.5
+        try:
+            with pytest.raises(ValueError, match="min_factor"):
+                config.validate_config()
+        finally:
+            self._restore(snap)

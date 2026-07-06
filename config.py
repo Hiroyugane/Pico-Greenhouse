@@ -21,6 +21,82 @@
 #     0x63  Atlas EZO-pH
 #     0x64  Atlas EZO-EC
 
+# ---------------------------------------------------------------------------
+# Regulation matrix — shared parameter schemas
+# (see docs/prompts/regulation-matrix.md)
+# ---------------------------------------------------------------------------
+# Each regulator's 2D hinge surface is defined by this ordered parameter set.
+# The engine freezes every surface into an array('f') addressed by the index
+# of the name in _SURFACE_PARAMS, so ORDER IS LOAD-BEARING — append new params
+# at the end, never reorder. Tuple entries are (name, lo, hi, neutral_default);
+# the neutral defaults make an untouched surface a pass-through so a regulator
+# only needs to spell out the params it actually tunes.
+_SURFACE_PARAMS = (
+    ("ca", -1.0, 1.0, 1.0),  # cos(angle) — rotation of the linear plane
+    ("sa", -1.0, 1.0, 0.0),  # sin(angle)
+    ("cross", -100.0, 100.0, 0.0),  # cross-axis coupling
+    ("gain", -100.0, 100.0, 0.0),  # linear bandwidth (slope of the plane)
+    ("offset", -1000.0, 1000.0, 0.0),  # shift
+    ("hx_hi1", -100.0, 100.0, 0.0),  # x-high hinge 1 slope
+    ("bx_hi1", -200.0, 200.0, 50.0),  # x-high hinge 1 breakpoint
+    ("hx_hi2", -100.0, 100.0, 0.0),
+    ("bx_hi2", -200.0, 200.0, 50.0),
+    ("hx_lo1", -100.0, 100.0, 0.0),  # x-low hinge 1 slope
+    ("bx_lo1", -200.0, 200.0, 50.0),
+    ("hx_lo2", -100.0, 100.0, 0.0),
+    ("bx_lo2", -200.0, 200.0, 50.0),
+    ("hy_hi1", -100.0, 100.0, 0.0),  # y-high hinge 1 slope
+    ("by_hi1", -200.0, 200.0, 50.0),
+    ("hy_hi2", -100.0, 100.0, 0.0),
+    ("by_hi2", -200.0, 200.0, 50.0),
+    ("hy_lo1", -100.0, 100.0, 0.0),  # y-low hinge 1 slope
+    ("by_lo1", -200.0, 200.0, 50.0),
+    ("hy_lo2", -100.0, 100.0, 0.0),
+    ("by_lo2", -200.0, 200.0, 50.0),
+    ("x_top", -200.0, 200.0, 200.0),  # boost upper edge on x (neutral = out of range)
+    ("x_bot", -200.0, 200.0, -100.0),  # boost lower edge on x
+    ("y_top", -200.0, 200.0, 200.0),
+    ("y_bot", -200.0, 200.0, -100.0),
+    ("boost_base", 0.0, 100.0, 1.0),  # boost value inside the deadband
+    ("grad", -100.0, 100.0, 0.0),  # boost gradient beyond the edges
+    ("mult", -100.0, 100.0, 1.0),  # overall multiplier
+    ("out_min", -1000.0, 1000.0, 0.0),  # clamp lo (also rescale floor)
+    ("out_max", -1000.0, 1000.0, 100.0),  # clamp hi (also rescale ceil)
+)
+_SURFACE_PARAM_NAMES = tuple(p[0] for p in _SURFACE_PARAMS)
+
+# Deviation dimensions and the ordered regulator (command-vector) names. The
+# arbiter's target vector T[] is indexed by _REG_NAMES order — also load-bearing.
+_REG_DIMENSIONS = ("temp", "humidity", "co2")
+_REG_NAMES = (
+    "heater",
+    "heater_follower",
+    "cooler",
+    "humidifier",
+    "exhaust",
+    "circulation",
+    "growlight",
+)
+# Physical-unit anchor keys for one dimension in one phase (strictly ascending).
+_ANCHOR_KEYS = ("at_0", "at_50", "at_100")
+# Category → top-level mode consistency map (regulation profile must match).
+_REG_CATEGORY_MODE = {"mushroom": "mushroom", "plant": "plant"}
+
+
+def _surface(**over):
+    """Build a full surface-param dict from neutral defaults + overrides.
+
+    Overriding an unknown key raises at import so a typo in DEVICE_CONFIG fails
+    loudly instead of silently doing nothing.
+    """
+    surface = {name: default for name, _lo, _hi, default in _SURFACE_PARAMS}
+    for key, value in over.items():
+        if key not in surface:
+            raise KeyError("unknown surface param: {!r}".format(key))
+        surface[key] = float(value)
+    return surface
+
+
 DEVICE_CONFIG = {
     # Operating mode — single switch that picks which optional components
     # are constructed at boot.
@@ -626,6 +702,274 @@ DEVICE_CONFIG = {
             (880, 80, 0),  # A5
         ],
     },
+    # Regulation matrix (3.5-D situation→reaction engine).
+    #
+    # One config-driven pipeline replaces the per-device fan thermostat/
+    # schedule, heater cycle, CO2 override, and growlight scheduler. Read
+    # docs/prompts/regulation-matrix.md for the full model. Consumed DI-only:
+    # main.py reads this dict and passes plain values into the engine; no
+    # lib/ module imports DEVICE_CONFIG.
+    #
+    # enabled=False until the actuator wiring swap lands (the engine is not
+    # constructed in main.py yet; the old controllers still own the outputs).
+    "regulation": {
+        "enabled": False,
+        "tick_s": 30,  # Evaluation cadence (seconds)
+        # Active species profile — must exist in profiles below AND its
+        # category must match the top-level mode (mushroom↔mushroom, plant↔plant).
+        "profile": "cubensis",
+        # Severity band edges (strictly ascending, last = 50):
+        # perfect / ideal / organic / minor / major / emergency / shutdown.
+        "band_edges": [5, 10, 20, 30, 40, 50],
+        # Time-of-day blend (minutes since midnight). b=1 full day, b=0 full
+        # night, linear ramp of width transition_min on each edge.
+        "day_start_min": 420,  # 07:00
+        "day_end_min": 1140,  # 19:00
+        "transition_min": 30,
+        # Optional external SHT31 (gates exhaust effectiveness only). When
+        # disabled the multiplier is a constant 1.0. full_delta = outside must
+        # be cooler/drier by this much for full effect; min_factor = floor when
+        # outside is as warm/humid or worse.
+        "external_sensor": {
+            "enabled": False,
+            "i2c_address": 0x45,
+            "full_delta_c": 3.0,
+            "min_factor": 0.2,
+            "full_delta_rh": 10.0,
+            "min_factor_rh": 0.4,
+        },
+        # Latch (severity == 50): hold the safe-state vector until ALL
+        # severities <= release_max for release_ticks consecutive ticks AND
+        # min_s elapsed.
+        "latch": {
+            "release_max": 30,
+            "release_ticks": 3,
+            "min_s": 300,
+        },
+        # Species profiles. Each dimension has three physical-unit anchors per
+        # phase: at_0 (deviation 0 = far too low), at_50 (ideal), at_100 (far
+        # too high). Strictly ascending; asymmetric spacing = strict vs loose.
+        # Tune these first — they set what "50 = ideal" means per organism.
+        "profiles": {
+            # --- Mushrooms (fruiting chamber: high RH, low CO2, small day/night swing) ---
+            "cubensis": {
+                "category": "mushroom",
+                "day": {
+                    "temp": {"at_0": 16.0, "at_50": 24.0, "at_100": 30.0},
+                    "humidity": {"at_0": 75.0, "at_50": 92.0, "at_100": 100.0},
+                    "co2": {"at_0": 400.0, "at_50": 700.0, "at_100": 1400.0},
+                },
+                "night": {
+                    "temp": {"at_0": 15.0, "at_50": 23.0, "at_100": 29.0},
+                    "humidity": {"at_0": 75.0, "at_50": 92.0, "at_100": 100.0},
+                    "co2": {"at_0": 400.0, "at_50": 800.0, "at_100": 1600.0},
+                },
+            },
+            "oyster": {
+                "category": "mushroom",
+                "day": {
+                    "temp": {"at_0": 10.0, "at_50": 18.0, "at_100": 26.0},
+                    "humidity": {"at_0": 70.0, "at_50": 87.0, "at_100": 98.0},
+                    "co2": {"at_0": 400.0, "at_50": 600.0, "at_100": 1200.0},
+                },
+                "night": {
+                    "temp": {"at_0": 10.0, "at_50": 17.0, "at_100": 25.0},
+                    "humidity": {"at_0": 70.0, "at_50": 87.0, "at_100": 98.0},
+                    "co2": {"at_0": 400.0, "at_50": 700.0, "at_100": 1300.0},
+                },
+            },
+            "lions_mane": {
+                "category": "mushroom",
+                "day": {
+                    "temp": {"at_0": 12.0, "at_50": 20.0, "at_100": 28.0},
+                    "humidity": {"at_0": 80.0, "at_50": 92.0, "at_100": 100.0},
+                    "co2": {"at_0": 400.0, "at_50": 700.0, "at_100": 1300.0},
+                },
+                "night": {
+                    "temp": {"at_0": 12.0, "at_50": 19.0, "at_100": 27.0},
+                    "humidity": {"at_0": 80.0, "at_50": 92.0, "at_100": 100.0},
+                    "co2": {"at_0": 400.0, "at_50": 800.0, "at_100": 1400.0},
+                },
+            },
+            # --- Plants (wider day/night swing, moderate RH, CO2 enrichment tolerated) ---
+            "seedling": {
+                "category": "plant",
+                "day": {
+                    "temp": {"at_0": 16.0, "at_50": 24.0, "at_100": 32.0},
+                    "humidity": {"at_0": 50.0, "at_50": 70.0, "at_100": 95.0},
+                    "co2": {"at_0": 350.0, "at_50": 800.0, "at_100": 1600.0},
+                },
+                "night": {
+                    "temp": {"at_0": 14.0, "at_50": 20.0, "at_100": 28.0},
+                    "humidity": {"at_0": 50.0, "at_50": 70.0, "at_100": 95.0},
+                    "co2": {"at_0": 350.0, "at_50": 800.0, "at_100": 1600.0},
+                },
+            },
+            "cannabis": {
+                "category": "plant",
+                "day": {
+                    "temp": {"at_0": 18.0, "at_50": 26.0, "at_100": 32.0},
+                    "humidity": {"at_0": 35.0, "at_50": 55.0, "at_100": 75.0},
+                    "co2": {"at_0": 400.0, "at_50": 1000.0, "at_100": 1600.0},
+                },
+                "night": {
+                    "temp": {"at_0": 15.0, "at_50": 20.0, "at_100": 28.0},
+                    "humidity": {"at_0": 35.0, "at_50": 55.0, "at_100": 75.0},
+                    "co2": {"at_0": 400.0, "at_50": 800.0, "at_100": 1400.0},
+                },
+            },
+            "bellpepper": {
+                "category": "plant",
+                "day": {
+                    "temp": {"at_0": 16.0, "at_50": 24.0, "at_100": 32.0},
+                    "humidity": {"at_0": 45.0, "at_50": 65.0, "at_100": 85.0},
+                    "co2": {"at_0": 400.0, "at_50": 800.0, "at_100": 1500.0},
+                },
+                "night": {
+                    "temp": {"at_0": 12.0, "at_50": 18.0, "at_100": 26.0},
+                    "humidity": {"at_0": 45.0, "at_50": 65.0, "at_100": 85.0},
+                    "co2": {"at_0": 400.0, "at_50": 800.0, "at_100": 1500.0},
+                },
+            },
+        },
+        # Regulators (command-vector slots). driven: "surface" evaluates the
+        # 2D hinge surface over dims=[x,y]; "follower" derives from the heater
+        # command; "tod" is driven by the time-of-day blend (growlight).
+        # slew_normal/_fast bound the per-tick delta of the ORGANIC output;
+        # floor/emergency_value/safe_state are forced values applied AFTER slew.
+        #
+        # Relay pin_keys reference the freed fan-relay channels (fans moved to
+        # PCA9685): cooler→relay_fan_1 (GP18), humidifier→relay_fan_2 (GP19).
+        # These keys are repurposed here; a rename lands with the wiring swap.
+        "regulators": {
+            "heater": {
+                "driven": "surface",
+                "dims": ["temp", "humidity"],
+                "surface": _surface(gain=-2.0),  # cold (temp dev < 50) → full heat
+                "adapter": {
+                    "type": "heater",
+                    "pin_key": "heater_mosfet",
+                    "window_s": 600,  # time-proportioning window (resistive load)
+                    "min_on_s": 30,
+                    "min_off_s": 30,
+                },
+                "slew_normal": 20.0,
+                "slew_fast": 50.0,
+                "floor": 0.0,
+                "emergency_value": 0.0,  # heat source off in emergency
+                "safe_state": 0.0,
+            },
+            "heater_follower": {
+                "driven": "follower",
+                "follower_gain": 0.8,
+                "follower_floor": 0.0,
+                "adapter": {"type": "pwm", "pca9685_ch": 2},
+                "slew_normal": 30.0,
+                "slew_fast": 60.0,
+                "floor": 0.0,
+                "emergency_value": 0.0,
+                "safe_state": 0.0,
+            },
+            "cooler": {
+                "driven": "surface",
+                "dims": ["temp", "humidity"],
+                "surface": _surface(gain=2.0),  # hot (temp dev > 50) → cool
+                "adapter": {
+                    "type": "relay",
+                    "pin_key": "relay_fan_1",  # GP18 (freed), repurposed as cooler
+                    "on_above": 60.0,
+                    "off_below": 40.0,
+                    "min_on_s": 120,
+                    "min_off_s": 300,  # compressor anti-short-cycle
+                },
+                "slew_normal": 100.0,
+                "slew_fast": 100.0,
+                "floor": 0.0,
+                "emergency_value": 0.0,
+                "safe_state": 0.0,
+            },
+            "humidifier": {
+                "driven": "surface",
+                "dims": ["humidity", "temp"],
+                "surface": _surface(gain=-2.0),  # dry (RH dev < 50) → humidify
+                "adapter": {
+                    "type": "relay",
+                    "pin_key": "relay_fan_2",  # GP19 (freed), repurposed as humidifier
+                    "on_above": 60.0,
+                    "off_below": 40.0,
+                    "min_on_s": 30,
+                    "min_off_s": 30,
+                },
+                "slew_normal": 100.0,
+                "slew_fast": 100.0,
+                "floor": 0.0,
+                "emergency_value": 0.0,  # humidity source off in emergency
+                "safe_state": 0.0,
+            },
+            "exhaust": {
+                "driven": "surface",
+                "dims": ["temp", "humidity"],
+                "surface": _surface(gain=2.0),  # hot → vent
+                "co2_gain": 0.8,  # additive: co2_gain * relu(co2_dev - co2_break)
+                "co2_break": 60.0,
+                "external": True,  # apply external-effectiveness multiplier
+                "adapter": {"type": "pwm", "pca9685_ch": 4},
+                "slew_normal": 25.0,
+                "slew_fast": 60.0,
+                "floor": 40.0,
+                "emergency_value": 100.0,  # vent hard in emergency
+                "safe_state": 100.0,
+            },
+            "circulation": {
+                "driven": "surface",
+                "dims": ["temp", "humidity"],
+                "surface": _surface(gain=1.0),
+                "adapter": {
+                    "type": "pwm_pair",
+                    "center_ch": 0,
+                    "wall_ch": 1,
+                    "center_scale": 1.0,
+                    "wall_scale": 0.8,
+                },
+                "slew_normal": 30.0,
+                "slew_fast": 60.0,
+                "floor": 30.0,
+                "emergency_value": 100.0,
+                "safe_state": 100.0,
+            },
+            "growlight": {
+                "driven": "tod",
+                "light_level_day": 80.0,  # dimmable target at full day (b=1)
+                "dimmable": False,  # relay bulb (matches growlight.mode relay_only)
+                "adapter": {
+                    "type": "growlight",
+                    "pin_key": "relay_growlight",
+                    "dac_i2c_address": 0x60,
+                    "on_above": 50.0,
+                    "off_below": 40.0,
+                    "min_on_s": 60,
+                    "min_off_s": 60,
+                },
+                "slew_normal": 100.0,
+                "slew_fast": 100.0,
+                "floor": 0.0,
+                "emergency_value": 0.0,
+                "safe_state": 0.0,
+            },
+        },
+        # Conflict override rules (global band >= 30), applied in order — later
+        # rules win. when-terms are AND-combined: (dimension, above|below, band
+        # severity threshold on the signed side of 50). force sets exact values;
+        # prefer applies max(). Ship the mold-risk rule: hot+humid → humidifier
+        # hard-cut, exhaust+cooler preferred.
+        "conflicts": [
+            {
+                "when": [["humidity", "above", 30], ["temp", "above", 30]],
+                "force": {"humidifier": 0.0},
+                "prefer": {"exhaust": 60.0, "cooler": 100.0},
+            },
+        ],
+    },
 }
 
 
@@ -716,6 +1060,257 @@ def _validate_fans(fans_cfg, pins_cfg):
                 raise ValueError(f"{prefix}.duty_pct must be 0-100")
             if cfg["poll_interval_s"] <= 0:
                 raise ValueError(f"{prefix}.poll_interval_s must be > 0")
+
+
+def _validate_surface(surface, ctx):
+    """Validate one surface param dict against _SURFACE_PARAMS (loop, not hand-written)."""
+    if not isinstance(surface, dict):
+        raise ValueError("{} must be a dict".format(ctx))
+    for name, lo, hi, _default in _SURFACE_PARAMS:
+        if name not in surface:
+            raise ValueError("Missing config key: {}.{}".format(ctx, name))
+        value = surface[name]
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or not (lo <= value <= hi):
+            raise ValueError("{}.{} must be a number in [{}, {}]".format(ctx, name, lo, hi))
+    if surface["out_min"] >= surface["out_max"]:
+        raise ValueError("{}.out_min must be < out_max".format(ctx))
+
+
+def _validate_anchor_set(anchors, ctx):
+    """Validate one dimension's {at_0, at_50, at_100} strictly-ascending anchors."""
+    if not isinstance(anchors, dict):
+        raise ValueError("{} must be a dict".format(ctx))
+    vals = []
+    for key in _ANCHOR_KEYS:
+        if key not in anchors:
+            raise ValueError("Missing config key: {}.{}".format(ctx, key))
+        v = anchors[key]
+        if not isinstance(v, (int, float)) or isinstance(v, bool):
+            raise ValueError("{}.{} must be a number".format(ctx, key))
+        vals.append(v)
+    if not (vals[0] < vals[1] < vals[2]):
+        raise ValueError("{} anchors must be strictly ascending (at_0 < at_50 < at_100)".format(ctx))
+
+
+def _validate_reg_adapter(adapter, reg_name, pins_cfg):
+    """Validate a regulator's actuator-adapter block by type."""
+    ctx = "regulation.regulators.{}.adapter".format(reg_name)
+    if not isinstance(adapter, dict) or "type" not in adapter:
+        raise ValueError("{} must be a dict with a type".format(ctx))
+    atype = adapter["type"]
+
+    def _pin(key_name):
+        pk = adapter.get(key_name)
+        if not isinstance(pk, str) or pk not in pins_cfg:
+            raise ValueError("{}.{} must reference a pin in pins section".format(ctx, key_name))
+
+    def _cycle():
+        for k in ("min_on_s", "min_off_s"):
+            v = adapter.get(k)
+            if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0:
+                raise ValueError("{}.{} must be a number >= 0".format(ctx, k))
+
+    def _hysteresis():
+        for k in ("on_above", "off_below"):
+            v = adapter.get(k)
+            if not isinstance(v, (int, float)) or isinstance(v, bool) or not (0 <= v <= 100):
+                raise ValueError("{}.{} must be 0-100".format(ctx, k))
+        if adapter["on_above"] <= adapter["off_below"]:
+            raise ValueError("{}.on_above must be > off_below".format(ctx))
+
+    def _channel(key_name):
+        ch = adapter.get(key_name)
+        if not isinstance(ch, int) or isinstance(ch, bool) or not (0 <= ch <= 15):
+            raise ValueError("{}.{} must be an int 0-15".format(ctx, key_name))
+
+    if atype == "pwm":
+        _channel("pca9685_ch")
+    elif atype == "pwm_pair":
+        _channel("center_ch")
+        _channel("wall_ch")
+        if adapter["center_ch"] == adapter["wall_ch"]:
+            raise ValueError("{} center_ch and wall_ch must differ".format(ctx))
+        for k in ("center_scale", "wall_scale"):
+            v = adapter.get(k)
+            if not isinstance(v, (int, float)) or isinstance(v, bool) or not (0 <= v <= 2):
+                raise ValueError("{}.{} must be 0-2".format(ctx, k))
+    elif atype == "heater":
+        _pin("pin_key")
+        w = adapter.get("window_s")
+        if not isinstance(w, (int, float)) or isinstance(w, bool) or w <= 0:
+            raise ValueError("{}.window_s must be > 0".format(ctx))
+        _cycle()
+    elif atype == "relay":
+        _pin("pin_key")
+        _hysteresis()
+        _cycle()
+    elif atype == "growlight":
+        _pin("pin_key")
+        _hysteresis()
+        _cycle()
+        addr = adapter.get("dac_i2c_address")
+        if not isinstance(addr, int) or isinstance(addr, bool) or not (0x08 <= addr <= 0x77):
+            raise ValueError("{}.dac_i2c_address must be a 7-bit I2C address".format(ctx))
+    else:
+        raise ValueError("{}.type {!r} is not a known adapter type".format(ctx, atype))
+
+
+def _validate_regulation(reg_cfg, pins_cfg, top_mode):
+    """Validate the DEVICE_CONFIG['regulation'] block (called from validate_config)."""
+    if not isinstance(reg_cfg, dict):
+        raise ValueError("regulation must be a dict")
+    for key in ("enabled", "tick_s", "profile", "band_edges"):
+        if key not in reg_cfg:
+            raise ValueError("Missing config key: regulation.{}".format(key))
+    if not isinstance(reg_cfg["enabled"], bool):
+        raise ValueError("regulation.enabled must be a bool")
+    if not isinstance(reg_cfg["tick_s"], (int, float)) or reg_cfg["tick_s"] <= 0:
+        raise ValueError("regulation.tick_s must be > 0")
+
+    edges = reg_cfg["band_edges"]
+    if not isinstance(edges, list) or not edges:
+        raise ValueError("regulation.band_edges must be a non-empty list")
+    if edges[-1] != 50:
+        raise ValueError("regulation.band_edges must end at 50")
+    for i, e in enumerate(edges):
+        if not isinstance(e, (int, float)) or isinstance(e, bool) or not (0 < e <= 50):
+            raise ValueError("regulation.band_edges entries must be in (0, 50]")
+        if i > 0 and e <= edges[i - 1]:
+            raise ValueError("regulation.band_edges must be strictly ascending")
+
+    for key in ("day_start_min", "day_end_min", "transition_min"):
+        v = reg_cfg.get(key)
+        if not isinstance(v, int) or isinstance(v, bool) or not (0 <= v <= 1440):
+            raise ValueError("regulation.{} must be an int 0-1440".format(key))
+    if reg_cfg["day_start_min"] >= reg_cfg["day_end_min"]:
+        raise ValueError("regulation.day_start_min must be < day_end_min")
+
+    ext = reg_cfg.get("external_sensor")
+    if not isinstance(ext, dict):
+        raise ValueError("regulation.external_sensor must be a dict")
+    if not isinstance(ext.get("enabled"), bool):
+        raise ValueError("regulation.external_sensor.enabled must be a bool")
+    if not isinstance(ext.get("i2c_address"), int) or not (0x08 <= ext["i2c_address"] <= 0x77):
+        raise ValueError("regulation.external_sensor.i2c_address must be a 7-bit I2C address")
+    for key in ("full_delta_c", "full_delta_rh"):
+        v = ext.get(key)
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
+            raise ValueError("regulation.external_sensor.{} must be > 0".format(key))
+    for key in ("min_factor", "min_factor_rh"):
+        v = ext.get(key)
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or not (0 <= v <= 1):
+            raise ValueError("regulation.external_sensor.{} must be 0-1".format(key))
+
+    latch = reg_cfg.get("latch")
+    if not isinstance(latch, dict):
+        raise ValueError("regulation.latch must be a dict")
+    rmax = latch.get("release_max")
+    if not isinstance(rmax, (int, float)) or isinstance(rmax, bool) or not (0 <= rmax <= 50):
+        raise ValueError("regulation.latch.release_max must be 0-50")
+    if not isinstance(latch.get("release_ticks"), int) or latch["release_ticks"] < 1:
+        raise ValueError("regulation.latch.release_ticks must be an int >= 1")
+    if not isinstance(latch.get("min_s"), (int, float)) or latch["min_s"] < 0:
+        raise ValueError("regulation.latch.min_s must be >= 0")
+
+    profiles = reg_cfg.get("profiles")
+    if not isinstance(profiles, dict) or not profiles:
+        raise ValueError("regulation.profiles must be a non-empty dict")
+    for pname, pcfg in profiles.items():
+        pctx = "regulation.profiles.{}".format(pname)
+        if not isinstance(pcfg, dict):
+            raise ValueError("{} must be a dict".format(pctx))
+        if pcfg.get("category") not in _REG_CATEGORY_MODE:
+            raise ValueError("{}.category must be 'mushroom' or 'plant'".format(pctx))
+        for phase in ("day", "night"):
+            if phase not in pcfg:
+                raise ValueError("Missing config key: {}.{}".format(pctx, phase))
+            for dim in _REG_DIMENSIONS:
+                if dim not in pcfg[phase]:
+                    raise ValueError("Missing config key: {}.{}.{}".format(pctx, phase, dim))
+                _validate_anchor_set(pcfg[phase][dim], "{}.{}.{}".format(pctx, phase, dim))
+
+    profile = reg_cfg["profile"]
+    if profile not in profiles:
+        raise ValueError("regulation.profile {!r} not in profiles".format(profile))
+    if profiles[profile]["category"] != _REG_CATEGORY_MODE.get(top_mode):
+        raise ValueError("regulation.profile category must match top-level mode {!r}".format(top_mode))
+
+    regulators = reg_cfg.get("regulators")
+    if not isinstance(regulators, dict):
+        raise ValueError("regulation.regulators must be a dict")
+    if set(regulators) != set(_REG_NAMES):
+        raise ValueError("regulation.regulators must be exactly {}".format(_REG_NAMES))
+    for rname in _REG_NAMES:
+        rcfg = regulators[rname]
+        rctx = "regulation.regulators.{}".format(rname)
+        if not isinstance(rcfg, dict):
+            raise ValueError("{} must be a dict".format(rctx))
+        driven = rcfg.get("driven")
+        if driven not in ("surface", "follower", "tod"):
+            raise ValueError("{}.driven must be surface|follower|tod".format(rctx))
+        for key in ("slew_normal", "slew_fast"):
+            v = rcfg.get(key)
+            if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
+                raise ValueError("{}.{} must be > 0".format(rctx, key))
+        for key in ("floor", "emergency_value", "safe_state"):
+            v = rcfg.get(key)
+            if not isinstance(v, (int, float)) or isinstance(v, bool) or not (0 <= v <= 100):
+                raise ValueError("{}.{} must be 0-100".format(rctx, key))
+        if driven == "surface":
+            dims = rcfg.get("dims")
+            if not isinstance(dims, list) or len(dims) != 2 or any(d not in _REG_DIMENSIONS for d in dims):
+                raise ValueError("{}.dims must be two of {}".format(rctx, _REG_DIMENSIONS))
+            _validate_surface(rcfg.get("surface"), "{}.surface".format(rctx))
+        elif driven == "follower":
+            for key in ("follower_gain", "follower_floor"):
+                v = rcfg.get(key)
+                if not isinstance(v, (int, float)) or isinstance(v, bool):
+                    raise ValueError("{}.{} must be a number".format(rctx, key))
+        else:  # tod
+            v = rcfg.get("light_level_day")
+            if not isinstance(v, (int, float)) or isinstance(v, bool) or not (0 <= v <= 100):
+                raise ValueError("{}.light_level_day must be 0-100".format(rctx))
+            if not isinstance(rcfg.get("dimmable"), bool):
+                raise ValueError("{}.dimmable must be a bool".format(rctx))
+        if rname == "exhaust":
+            if not isinstance(rcfg.get("co2_gain"), (int, float)) or rcfg["co2_gain"] < 0:
+                raise ValueError("{}.co2_gain must be >= 0".format(rctx))
+            cb = rcfg.get("co2_break")
+            if not isinstance(cb, (int, float)) or isinstance(cb, bool) or not (0 <= cb <= 100):
+                raise ValueError("{}.co2_break must be 0-100".format(rctx))
+            if not isinstance(rcfg.get("external"), bool):
+                raise ValueError("{}.external must be a bool".format(rctx))
+        _validate_reg_adapter(rcfg.get("adapter"), rname, pins_cfg)
+
+    conflicts = reg_cfg.get("conflicts")
+    if not isinstance(conflicts, list):
+        raise ValueError("regulation.conflicts must be a list")
+    for i, rule in enumerate(conflicts):
+        cctx = "regulation.conflicts[{}]".format(i)
+        if not isinstance(rule, dict):
+            raise ValueError("{} must be a dict".format(cctx))
+        when = rule.get("when")
+        if not isinstance(when, list) or not when:
+            raise ValueError("{}.when must be a non-empty list".format(cctx))
+        for term in when:
+            if not isinstance(term, (list, tuple)) or len(term) != 3:
+                raise ValueError("{}.when terms must be [dimension, above|below, threshold]".format(cctx))
+            dim, op, thresh = term
+            if dim not in _REG_DIMENSIONS:
+                raise ValueError("{}.when dimension {!r} unknown".format(cctx, dim))
+            if op not in ("above", "below"):
+                raise ValueError("{}.when op must be 'above' or 'below'".format(cctx))
+            if not isinstance(thresh, (int, float)) or isinstance(thresh, bool) or not (0 <= thresh <= 50):
+                raise ValueError("{}.when threshold must be 0-50".format(cctx))
+        for action in ("force", "prefer"):
+            block = rule.get(action, {})
+            if not isinstance(block, dict):
+                raise ValueError("{}.{} must be a dict".format(cctx, action))
+            for reg_name, value in block.items():
+                if reg_name not in _REG_NAMES:
+                    raise ValueError("{}.{} references unknown regulator {!r}".format(cctx, action, reg_name))
+                if not isinstance(value, (int, float)) or isinstance(value, bool) or not (0 <= value <= 100):
+                    raise ValueError("{}.{}.{} must be 0-100".format(cctx, action, reg_name))
 
 
 def validate_config():
@@ -1268,5 +1863,9 @@ def validate_config():
             for v in step:
                 if not isinstance(v, int) or v < 0:
                     raise ValueError(f"updater_feedback.{pattern_key} entries must contain non-negative ints")
+
+    if "regulation" not in DEVICE_CONFIG:
+        raise ValueError("Missing config section: regulation")
+    _validate_regulation(DEVICE_CONFIG["regulation"], DEVICE_CONFIG["pins"], DEVICE_CONFIG["mode"])
 
     return True

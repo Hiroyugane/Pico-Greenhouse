@@ -19,6 +19,32 @@
 
 ## Schematic — nets, components, BOM
 
+### [ ] Regulation matrix needs cooler relay feed, humidifier output, external SHT31
+
+**Filed:** 2026-07-06 ·
+[chat-log entry](../notes/chat-log.md#2026-07-06--regulation-matrix-35-d-situationreaction--architecture-decided) ·
+[memory: project-regulation-matrix-plan](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_regulation_matrix_plan.md)
+
+The unified RegulationEngine
+([spec](../prompts/regulation-matrix.md)) adds three outputs/inputs the
+current board doesn't provide:
+
+- **Cooler (230 V, on/off):** assign a dedicated spare relay channel;
+  silkscreen it `COOLER`. Compressor anti-short-cycle is firmware
+  (min-off ≥ 300 s), but the contact must be rated for compressor inrush —
+  verify the relay module's rating or spec an SSR.
+- **Humidifier (on/off):** second spare relay channel, silkscreen
+  `HUMID`. Ultrasonic/evaporative load, no special inrush.
+- **External SHT31-D** (outside the tent) on I2C0 at **0x45** (ADDR pin
+  high; inside sensor stays 0x44): panel connector + gland, shielded
+  4-wire harness ≤ 1 m. Works with the queued 2.2 k pull-up change; add
+  the address to the I²C silkscreen map.
+- Growlight dimming needs **no new hardware** — MCP4725 + LM358 0–10 V
+  path already shipped.
+- **Acceptance:** [hw-test-log REG.1](../test/hw-test-log.md) — both new
+  relay channels click/release under engine control honoring min-cycle,
+  external sensor reads plausible values at 0x45 alongside 0x44.
+
 ### [ ] 5 V step-down can't drive the relay coil bank — size the supply for spool current
 
 **Filed:** 2026-07-05 ·

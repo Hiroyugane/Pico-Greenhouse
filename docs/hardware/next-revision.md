@@ -56,40 +56,76 @@ diodes (~1.6 V drop under load).
   / stuck-contact channel. Meter the rail under coil load per
   [hw-test-log REL.1 follow-up](../test/hw-test-log.md).
 
-### [ ] Fan gate stage inverts + no hard-off at duty 0 — make it non-inverting / add a gate driver
+### [ ] Fan drive can't hard-off — move the MOSFET into the fan's power return (was: "inverting gate stage")
 
-**Filed:** 2026-07-05 ·
-[chat-log entry](../notes/chat-log.md#2026-07-05--bring-up-re-run--firmware-cleared-three-hardware-faults-isolated) ·
+**Filed:** 2026-07-05 · **root cause corrected 2026-07-06** ·
+[2026-07-06 root-cause + fix](../notes/chat-log.md#2026-07-06--fan-hard-off-root-caused--mosfet-switches-the-pwm-pin-not-the-power) ·
+[2026-07-05 bench observation](../notes/chat-log.md#2026-07-05--bring-up-re-run--firmware-cleared-three-hardware-faults-isolated) ·
 [memory: project-fan-hardware-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_fan_hardware_revision.md)
 
-Two independent bench runs (2026-07-05) proved the PCA9685→IRLZ44N **fan
-gate stage is inverting** (fan speed tracks `100 − duty`) and, worse,
-**duty 0 does not bring the fan to a full mechanical stop** — the fan
-creeps/windmills. Firmware currently masks the inversion with
-`pca9685.invert=True` (see the
-[fan PCA9685 entry](#x-move-fans-from-2-relays-to-pca9685--irlz44n-mosfets)),
-but firmware **cannot** force a hard stop: at 0 % it already emits the
-PCA9685 FULL_ON state, the maximal "off" the inverting stage can be given.
+Two bench runs (2026-07-05) showed fan speed tracks `100 − duty` and
+**duty 0 never fully stops the fan** — it creeps/windmills. The earlier
+hypothesis here (a "common-emitter buffer transistor" inverting the gate)
+was **wrong** — no such part exists in the netlist. The real cause,
+confirmed 2026-07-06:
 
-- **Root cause to resolve on the next rev:** identify the inverting element
-  between the PCA9685 output and the IRLZ44N gate (likely a level-shift /
-  buffer transistor in common-emitter). Either **make the stage
-  non-inverting** (so `set_duty(pct)` maps directly and 0 % = gate low =
-  hard off) **or** drop in a dedicated low-side gate driver — the
-  **MCP1416** already speced for the heater
-  ([gate-driver entry](#x-mcp1416-gate-driver-for-he_mosfet-irlz44n)) is the
-  natural part to reuse across all five fan channels (and ch5 solenoid).
-- **Acceptance on the new board:** scope each fan gate at duty 0 and 100.
-  At 0 % V_GS must sit **below IRLZ44N V_GS(th)** (fan mechanically stopped,
-  no creep); at 100 % V_GS must be the full gate rail. Duty must track fan
-  speed **directly** (no inversion), letting `pca9685.invert` revert to
-  `False` in `config.py`.
-- **Firmware follow-through (lands with the board):** once the stage is
-  non-inverting, flip `DEVICE_CONFIG["pca9685"]["invert"]` back to `False`
-  (keep the flag + validator + test — the solenoid stage may still need it).
+**The MOSFET switches the fan's PWM *signal* line, not its power.** The
+current board wires each fan connector as `pin1 = GND (permanent)`,
+`pin2 = +12 V (permanent rail)`, `pin4 = MOSFET drain`. For a 4-wire fan
+that means power is **always on** and the MOSFET only pulls the fan's
+25 kHz PWM control input:
+
+- PCA9685 duty high → MOSFET on → PWM pin pulled low → fan idles at min RPM.
+- PCA9685 duty low → MOSFET off → PWM pin floats to the fan's internal
+  pull-up → full RPM.
+
+That is exactly why speed tracks `100 − duty` (hence `pca9685.invert=True`)
+and why 0 % can't stop the fan — firmware never controls the fan's power,
+so no duty value cuts it. (This topology was a deliberate original design
+choice; the fix is to change it, not to patch firmware.)
+
+- **Fix — put the low-side MOSFET in the fan's ground return so it
+  switches power:**
+  - `pin1 (fan GND)` → **MOSFET drain** (switched return)
+  - `pin2 (+12 V)` → permanent 12 V rail (unchanged — hard-off comes from
+    breaking the ground, so +12 V may stay live)
+  - `pin3 (TACH)` and `pin4 (PWM)` → **no-connect** (silkscreen NC)
+  - MOSFET **Q (AO3400A) unchanged**, gate ← PCA9685 through the existing
+    150 Ω series + 10 kΩ gate→GND pull-down; flyback diode retained.
+  - **No gate driver needed** — the inversion is gone once the FET is in the
+    power path, so the MCP1416 idea for the fans is **dropped** (the heater
+    keeps its own MCP1416).
+- **Every fan type on one connector.** With only pins 1 & 2 electrically
+  used, a 2-, 3-, or 4-wire fan all plug into the same 4-pin header; the
+  tach/PWM pins are ignored. A 4-wire fan behaves like a 2-wire fan whose
+  speed follows the switched-power duty. `set_duty(0)` = ground open = fan
+  **fully dead**; mid-duty = ~proportional speed; 100 % = full.
+- **No 25 kHz path (decided 2026-07-06).** Power is PWM'd directly by the
+  PCA9685 (≤ 1526 Hz), so fans buzz audibly at low duty — **accepted** for
+  a greenhouse. Run the fan channels at the PCA9685 max **1526 Hz** to push
+  the whine as high as possible. A dedicated 25 kHz fan controller (EMC2305)
+  was considered and **rejected** — silent PWM was its only benefit and it
+  isn't wanted here. PCA9685 stays as-is for both fans and the ch5 solenoid.
+- **Ratings check (fans confirmed ≤ 0.5 A each, 2026-07-06):** the MOSFET
+  and flyback now carry full motor current, not a signal. At 0.5 A the
+  **AO3400A** (SOT-23, ~5.7 A pulsed) has ample margin — **no FET change**.
+  **Verify the flyback diodes D10–D14** cover running + inductive current;
+  if they were sized as small-signal parts, upsize to a Schottky
+  (e.g. SS34, 3 A / 40 V).
+- **Firmware follow-through (lands with the board):** flip
+  `DEVICE_CONFIG["pca9685"]["invert"]` back to **`False`** (non-inverting
+  low-side switch), set `pca9685.freq_hz` to **1526** (minimise whine;
+  solenoid PWM-hold is unaffected by the higher frequency), and correct the
+  "inverting gate stage" wording in the `pca9685` config comment
+  ([config.py:290-295](../../config.py#L290-L295)). Keep the `invert` flag +
+  validator + test — the solenoid stage may still use it.
+- **Acceptance on the new board:** on a 2/3/4-wire fan, `set_duty(0)` brings
+  it to a **complete mechanical stop** (no creep); duty sweep 0→100 raises
+  speed **monotonically** (no inversion, `pca9685.invert=False`); confirm the
+  1526 Hz whine is tolerable and the MOSFET + flyback run cool at 0.5 A.
 - **Verification:** trimmed FAN.1 in `prototypes/next_rev_bringup.py`
   (single channel, hard-stop check) +
-  [hw-test-log "Fan re-run" follow-up](../test/hw-test-log.md).
+  [hw-test-log "Fan power-path switch" checklist](../test/hw-test-log.md).
 
 ### [x] HPA mist-solenoid driver — PCA9685 ch5 + IRLZ44N, broken out as a plug-in 12 V valve connector
 

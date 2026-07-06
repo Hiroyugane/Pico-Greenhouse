@@ -1867,6 +1867,18 @@ class TestRegulationConfig:
         finally:
             self._restore(snap)
 
+    def test_regulation_band_edges_too_few_raises(self):
+        """Fewer than 4 band_edges raise ValueError (arbiter needs four thresholds)."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["band_edges"] = [40, 50]
+        try:
+            with pytest.raises(ValueError, match="at least 4"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
     def test_regulation_band_edges_not_ending_at_50_raises(self):
         """band_edges must end at 50."""
         import config

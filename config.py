@@ -1170,6 +1170,10 @@ def _validate_regulation(reg_cfg, pins_cfg, top_mode):
     edges = reg_cfg["band_edges"]
     if not isinstance(edges, list) or not edges:
         raise ValueError("regulation.band_edges must be a non-empty list")
+    # The arbiter derives its minor/conflict/emergency/latch thresholds from
+    # the last four edges, so at least four are required.
+    if len(edges) < 4:
+        raise ValueError("regulation.band_edges must have at least 4 entries")
     if edges[-1] != 50:
         raise ValueError("regulation.band_edges must end at 50")
     for i, e in enumerate(edges):

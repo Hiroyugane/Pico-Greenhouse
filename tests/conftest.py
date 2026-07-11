@@ -354,41 +354,19 @@ def relay_controller():
 
 
 @pytest.fixture
-def fan_controller(time_provider, mock_th_logger, mock_event_logger):
-    """FanController with all dependencies mocked."""
-    from lib.fan_output import RelayFanOutput
-    from lib.relay import FanController, RelayController
+def fan_controller(mock_event_logger):
+    """Fan relay switch as the OLED sees it post-wiring-swap (raw RelayController)."""
+    from lib.relay import RelayController
 
-    relay = RelayController(16, invert=True, name="TestFan")
-    output = RelayFanOutput(relay)
-    return FanController(
-        output=output,
-        time_provider=time_provider,
-        th_logger=mock_th_logger,
-        logger=mock_event_logger,
-        interval_s=600,
-        on_time_s=20,
-        max_temp=24.0,
-        temp_hysteresis=1.0,
-        name="TestFan",
-    )
+    return RelayController(16, invert=True, name="TestFan", logger=mock_event_logger)
 
 
 @pytest.fixture
-def growlight_controller(time_provider, mock_event_logger):
-    """GrowlightController with explicit schedule."""
-    from lib.relay import GrowlightController
+def growlight_controller(mock_event_logger):
+    """Growlight master relay switch (main.py passes the raw switch to the OLED)."""
+    from lib.relay import RelayController
 
-    return GrowlightController(
-        pin=17,
-        time_provider=time_provider,
-        logger=mock_event_logger,
-        dawn_hour=6,
-        dawn_minute=0,
-        sunset_hour=20,
-        sunset_minute=0,
-        name="TestGrowlight",
-    )
+    return RelayController(17, invert=True, name="TestGrowlight", logger=mock_event_logger)
 
 
 # ---------------------------------------------------------------------------

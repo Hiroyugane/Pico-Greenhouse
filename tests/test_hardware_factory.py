@@ -377,7 +377,7 @@ class TestHardwareFactoryPins:
         factory = HardwareFactory()
         factory._init_pins()
         assert isinstance(factory.pins, dict)
-        # Should have created pins for relay_fan_1, relay_fan_2, etc.
+        # Should have created pins for relay_cooler, relay_humidifier, etc.
         assert len(factory.pins) > 0
 
     def test_init_pins_button_with_pullup(self):

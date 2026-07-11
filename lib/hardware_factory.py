@@ -515,7 +515,7 @@ class HardwareFactory:
         Get GPIO pin by name.
 
         Args:
-            name (str): Pin name from config (e.g., 'relay_fan_1', 'reminder_led')
+            name (str): Pin name from config (e.g., 'relay_cooler', 'reminder_led')
 
         Returns:
             Pin: machine.Pin instance or None if not initialized

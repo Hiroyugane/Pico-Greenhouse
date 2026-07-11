@@ -68,8 +68,8 @@ RELAY_PULSE_S = DEVICE_CONFIG.get("display", {}).get("debug", {}).get("test_rela
 # freed by the PCA9685 move plus the one wired reserved channel.
 _RELAY_KEYS = (
     "relay_growlight",
-    "relay_fan_1",
-    "relay_fan_2",
+    "relay_cooler",
+    "relay_humidifier",
     "relay_reserved_1",
 )
 RELAY_PINS = [(k, _PINS[k]) for k in _RELAY_KEYS if k in _PINS]

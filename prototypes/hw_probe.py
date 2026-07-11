@@ -754,8 +754,8 @@ def probe_relays():
     from machine import Pin
 
     relay_pins = {
-        "relay_fan_1": PINS["relay_fan_1"],
-        "relay_fan_2": PINS["relay_fan_2"],
+        "relay_cooler": PINS["relay_cooler"],
+        "relay_humidifier": PINS["relay_humidifier"],
         "relay_growlight": PINS["relay_growlight"],
     }
     result = {}

@@ -139,8 +139,8 @@ DEVICE_CONFIG = {
     #              switch; formerly DHT22 data, freed when SHT31 moved to I2C0)
     #   GP16:      UART0 TX → CO2 sensor (via R9 to CO2_CON pin 4)
     #   GP17:      UART0 RX ← CO2 sensor (via R11 from CO2_CON pin 3)
-    #   GP18:      Relay 1 — fan 1     (REL_CON pin 2)
-    #   GP19:      Relay 2 — fan 2     (REL_CON pin 3)
+    #   GP18:      Relay 1 — cooler     (REL_CON pin 2, ex fan 1)
+    #   GP19:      Relay 2 — humidifier (REL_CON pin 3, ex fan 2)
     #   GP20:      Relay 3 — growlight (REL_CON pin 4)
     #   GP21-GP22: Reserved relays (REL_CON pins 5-6, future use)
     #   GP25:      On-board LED (heartbeat)
@@ -178,8 +178,8 @@ DEVICE_CONFIG = {
         "co2_uart_rx": 17,  # GP17 — UART0 RX ← CO2_CON pin 3 (via R11)
         "co2_baudrate": 9600,
         # Relays (REL_CON pins 2-8 → 7 GPIO control lines)
-        "relay_fan_1": 18,  # GP18 — Fan relay 1 (REL_CON pin 2)
-        "relay_fan_2": 19,  # GP19 — Fan relay 2 (REL_CON pin 3)
+        "relay_cooler": 18,  # GP18 — Cooler relay (REL_CON pin 2, ex fan 1)
+        "relay_humidifier": 19,  # GP19 — Humidifier relay (REL_CON pin 3, ex fan 2)
         "relay_growlight": 20,  # GP20 — Grow light relay (REL_CON pin 4)
         "relay_reserved_1": 21,  # GP21 — Reserved relay (REL_CON pin 5)
         "relay_reserved_2": 22,  # GP22 — Reserved relay (REL_CON pin 6)
@@ -267,8 +267,8 @@ DEVICE_CONFIG = {
     # Each entry names a physical fan role. The controller class is picked
     # by `mode`; the drive backend by `output`. The next-rev PCB drives all
     # five fans from PCA9685 PWM channels ch0–ch4 (IRLZ44N MOSFET gates), so
-    # every role uses output="pca9685". The old relay outputs (relay_fan_1/2
-    # on GP18/GP19) are freed and repurposed by the hydroponics revision;
+    # every role uses output="pca9685". The old fan relay outputs on GP18/GP19
+    # are freed and repurposed as relay_cooler/relay_humidifier;
     # relay output stays supported for any fan that needs it. Only main.py
     # wiring changes between backends; policy is untouched.
     #
@@ -600,8 +600,8 @@ DEVICE_CONFIG = {
     },
     # Output Pin Initial States
     "output_pins": {
-        "relay_fan_1": True,  # HIGH = off (relay module inverted logic)
-        "relay_fan_2": True,  # HIGH = off (relay module inverted logic)
+        "relay_cooler": True,  # HIGH = off (relay module inverted logic)
+        "relay_humidifier": True,  # HIGH = off (relay module inverted logic)
         "relay_growlight": True,  # HIGH = off (relay module inverted logic)
         # Reserved relay channels GP21/22/26/27 — driven HIGH at boot so the
         # active-low relay inputs don't float into a half-powered pseudo-state.
@@ -839,8 +839,7 @@ DEVICE_CONFIG = {
         # floor/emergency_value/safe_state are forced values applied AFTER slew.
         #
         # Relay pin_keys reference the freed fan-relay channels (fans moved to
-        # PCA9685): cooler→relay_fan_1 (GP18), humidifier→relay_fan_2 (GP19).
-        # These keys are repurposed here; a rename lands with the wiring swap.
+        # PCA9685): cooler→relay_cooler (GP18), humidifier→relay_humidifier (GP19).
         "regulators": {
             "heater": {
                 "driven": "surface",
@@ -904,7 +903,7 @@ DEVICE_CONFIG = {
                 ),
                 "adapter": {
                     "type": "relay",
-                    "pin_key": "relay_fan_1",  # GP18 (freed), repurposed as cooler
+                    "pin_key": "relay_cooler",  # GP18 (freed fan relay 1)
                     "on_above": 60.0,
                     "off_below": 40.0,
                     "min_on_s": 120,
@@ -939,7 +938,7 @@ DEVICE_CONFIG = {
                 ),
                 "adapter": {
                     "type": "relay",
-                    "pin_key": "relay_fan_2",  # GP19 (freed), repurposed as humidifier
+                    "pin_key": "relay_humidifier",  # GP19 (freed fan relay 2)
                     "on_above": 60.0,
                     "off_below": 40.0,
                     "min_on_s": 30,
@@ -1419,8 +1418,8 @@ def validate_config():
             "rtc_i2c_port",
             "rtc_sda",
             "rtc_scl",
-            "relay_fan_1",
-            "relay_fan_2",
+            "relay_cooler",
+            "relay_humidifier",
             "relay_growlight",
             "relay_reserved_1",
             "relay_reserved_2",
@@ -1515,8 +1514,8 @@ def validate_config():
             "debug_flush_threshold",
         ],
         "output_pins": [
-            "relay_fan_1",
-            "relay_fan_2",
+            "relay_cooler",
+            "relay_humidifier",
             "relay_growlight",
             "relay_reserved_1",
             "relay_reserved_2",

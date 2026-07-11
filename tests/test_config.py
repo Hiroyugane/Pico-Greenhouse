@@ -917,7 +917,7 @@ class TestValidateConfig:
         for role in ("exhaust", "growroom_walls"):
             fans[role].pop("pca9685_ch", None)
             fans[role]["output"] = "relay"
-            fans[role]["relay_pin_key"] = "relay_fan_1"
+            fans[role]["relay_pin_key"] = "relay_cooler"
         try:
             with pytest.raises(ValueError, match="is used by another fan"):
                 config.validate_config()

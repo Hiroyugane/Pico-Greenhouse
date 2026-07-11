@@ -13,9 +13,10 @@
 #   4: alerts    – active warnings and errors
 #   5: system    – current time, uptime, buffer entries
 #   6: relays    – fan and growlight relay states
-#   7: co2       – CO2 ppm + override status
-#   8: soil      – soil moisture % + raw value
-#   9: debug     – debug-actions entry; long-press opens a sub-menu where
+#   7: reg       – regulation engine band/latch, deviations, commanded vector
+#   8: co2       – CO2 ppm + override status
+#   9: soil      – soil moisture % + raw value
+#  10: debug     – debug-actions entry; long-press opens a sub-menu where
 #                  short-press cycles actions (wipe logs, cycle relays,
 #                  heater 5 s, growlight pulse, growlight dim sweep) and
 #                  long-press executes the highlighted action (destructive
@@ -45,7 +46,7 @@ except ImportError:
 
 
 # ── Menu identifiers (ordered) ─────────────────────────────────────────────
-MENUS = ("temp", "humidity", "service", "sd", "alerts", "system", "relays", "co2", "soil", "debug")
+MENUS = ("temp", "humidity", "service", "sd", "alerts", "system", "relays", "reg", "co2", "soil", "debug")
 
 
 class OLEDDisplay:
@@ -106,6 +107,7 @@ class OLEDDisplay:
         co2_logger=None,
         soil_logger=None,
         heater=None,
+        regulation=None,
         feedback_blink_cb=None,
         event_log_path=None,
         debug_confirm_timeout_s: float = 8.0,
@@ -130,6 +132,7 @@ class OLEDDisplay:
         self._co2_logger = co2_logger
         self._soil_logger = soil_logger
         self._heater = heater
+        self._regulation = regulation
         self._feedback_blink_cb = feedback_blink_cb
         self._event_log_path = event_log_path
         self._width = width
@@ -790,6 +793,31 @@ class OLEDDisplay:
         if self._growlight:
             state = "ON " if self._growlight.is_on() else "OFF"
             self._row(f"Light: {state}", row)
+
+    def _render_reg(self) -> None:
+        """Regulation engine state: band + latch, deviations, commanded vector."""
+        self._header("REGULATION")
+        if self._regulation is None:
+            self._row("Not active", 0)
+            return
+        try:
+            s = self._regulation.get_state()
+        except Exception:
+            self._row("State error", 0)
+            return
+        if s["latched"]:
+            mode = "LATCHED"
+        elif s["emergency"]:
+            mode = "EMERG"
+        else:
+            mode = "ok"
+        self._row(f"Band {s['band']} {mode}", 0)
+        d = s["deviations"]
+        self._row(f"T{d[0]:.0f} H{d[1]:.0f} C{d[2]:.0f}", 1)
+        c = s["commanded"]
+        self._row(f"He{c['heater']:.0f} Fo{c['heater_follower']:.0f} Cl{c['cooler']:.0f}", 2)
+        self._row(f"Hu{c['humidifier']:.0f} Ex{c['exhaust']:.0f} Ci{c['circulation']:.0f}", 3)
+        self._row(f"Gl{c['growlight']:.0f} b{s['blend']:.2f}", 4)
 
     def _render_co2(self) -> None:
         self._header("CO2")

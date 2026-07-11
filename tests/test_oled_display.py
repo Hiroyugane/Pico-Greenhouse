@@ -93,6 +93,7 @@ class TestOLEDDisplayMenuCycling:
             "alerts",
             "system",
             "relays",
+            "reg",
             "co2",
             "soil",
             "debug",
@@ -547,6 +548,69 @@ class TestOLEDDisplayAdditionalCoverage:
         oled_display._co2_logger = cl
         oled_display._render_co2()
         oled_display._row.assert_any_call("Vent: ON", 1)
+
+    @staticmethod
+    def _fake_reg_state(latched=False, emergency=False):
+        return {
+            "blend": 1.0,
+            "global_severity": 12.0,
+            "band": 2,
+            "latched": latched,
+            "emergency": emergency,
+            "deviations": [64.0, 50.0, 48.0],
+            "severities": [14.0, 0.0, 2.0],
+            "commanded": {
+                "heater": 0.0,
+                "heater_follower": 0.0,
+                "cooler": 60.0,
+                "humidifier": 0.0,
+                "exhaust": 40.0,
+                "circulation": 30.0,
+                "growlight": 80.0,
+            },
+        }
+
+    def test_render_reg_not_active(self, oled_display):
+        oled_display._row = Mock()
+        oled_display._regulation = None
+        oled_display._render_reg()
+        oled_display._row.assert_any_call("Not active", 0)
+
+    def test_render_reg_shows_band_deviations_and_commands(self, oled_display):
+        oled_display._row = Mock()
+        engine = Mock()
+        engine.get_state = Mock(return_value=self._fake_reg_state())
+        oled_display._regulation = engine
+        oled_display._render_reg()
+        oled_display._row.assert_any_call("Band 2 ok", 0)
+        oled_display._row.assert_any_call("T64 H50 C48", 1)
+        oled_display._row.assert_any_call("He0 Fo0 Cl60", 2)
+        oled_display._row.assert_any_call("Hu0 Ex40 Ci30", 3)
+        oled_display._row.assert_any_call("Gl80 b1.00", 4)
+
+    def test_render_reg_latched_wins_over_emergency(self, oled_display):
+        oled_display._row = Mock()
+        engine = Mock()
+        engine.get_state = Mock(return_value=self._fake_reg_state(latched=True, emergency=True))
+        oled_display._regulation = engine
+        oled_display._render_reg()
+        oled_display._row.assert_any_call("Band 2 LATCHED", 0)
+
+    def test_render_reg_emergency_label(self, oled_display):
+        oled_display._row = Mock()
+        engine = Mock()
+        engine.get_state = Mock(return_value=self._fake_reg_state(emergency=True))
+        oled_display._regulation = engine
+        oled_display._render_reg()
+        oled_display._row.assert_any_call("Band 2 EMERG", 0)
+
+    def test_render_reg_state_error_is_non_fatal(self, oled_display):
+        oled_display._row = Mock()
+        engine = Mock()
+        engine.get_state = Mock(side_effect=RuntimeError("boom"))
+        oled_display._regulation = engine
+        oled_display._render_reg()
+        oled_display._row.assert_any_call("State error", 0)
 
 
 # ---------------------------------------------------------------------------

@@ -23,8 +23,6 @@ class TestConfigStructure:
             "sht31",
             "temp_humidity_logger",
             "fans",
-            "growlight",
-            "heater",
             "pca9685",
             "co2_logger",
             "soil_logger",
@@ -64,13 +62,13 @@ class TestValidateConfig:
         """Missing top-level section raises ValueError."""
         import config
 
-        original = config.DEVICE_CONFIG.get("growlight")
-        del config.DEVICE_CONFIG["growlight"]
+        original = config.DEVICE_CONFIG.get("sht31")
+        del config.DEVICE_CONFIG["sht31"]
         try:
             with pytest.raises(ValueError, match="Missing config section"):
                 config.validate_config()
         finally:
-            config.DEVICE_CONFIG["growlight"] = original
+            config.DEVICE_CONFIG["sht31"] = original
 
     def test_missing_subkey_raises(self):
         """Missing sub-key raises ValueError."""
@@ -563,57 +561,6 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["temp_humidity_logger"]["retry_delay_s"] = original
 
-    def test_zero_growlight_poll_interval_raises(self):
-        """growlight.poll_interval_s = 0 raises ValueError."""
-        import config
-
-        original = config.DEVICE_CONFIG["growlight"]["poll_interval_s"]
-        config.DEVICE_CONFIG["growlight"]["poll_interval_s"] = 0
-        try:
-            with pytest.raises(ValueError, match="poll_interval_s"):
-                config.validate_config()
-        finally:
-            config.DEVICE_CONFIG["growlight"]["poll_interval_s"] = original
-
-    def test_heater_zero_poll_interval_raises(self):
-        """heater.poll_interval_s = 0 raises ValueError."""
-        import config
-
-        original = config.DEVICE_CONFIG["heater"]["poll_interval_s"]
-        config.DEVICE_CONFIG["heater"]["poll_interval_s"] = 0
-        try:
-            with pytest.raises(ValueError, match="heater.poll_interval_s"):
-                config.validate_config()
-        finally:
-            config.DEVICE_CONFIG["heater"]["poll_interval_s"] = original
-
-    def test_heater_negative_hysteresis_raises(self):
-        """heater.temp_hysteresis < 0 raises ValueError."""
-        import config
-
-        original = config.DEVICE_CONFIG["heater"]["temp_hysteresis"]
-        config.DEVICE_CONFIG["heater"]["temp_hysteresis"] = -0.5
-        try:
-            with pytest.raises(ValueError, match="heater.temp_hysteresis"):
-                config.validate_config()
-        finally:
-            config.DEVICE_CONFIG["heater"]["temp_hysteresis"] = original
-
-    def test_heater_day_below_night_raises(self):
-        """heater.day_min_temp < night_min_temp raises ValueError."""
-        import config
-
-        orig_day = config.DEVICE_CONFIG["heater"]["day_min_temp"]
-        orig_night = config.DEVICE_CONFIG["heater"]["night_min_temp"]
-        config.DEVICE_CONFIG["heater"]["day_min_temp"] = 10.0
-        config.DEVICE_CONFIG["heater"]["night_min_temp"] = 15.0
-        try:
-            with pytest.raises(ValueError, match="day_min_temp"):
-                config.validate_config()
-        finally:
-            config.DEVICE_CONFIG["heater"]["day_min_temp"] = orig_day
-            config.DEVICE_CONFIG["heater"]["night_min_temp"] = orig_night
-
     def test_status_leds_walk_order_default_valid(self):
         """Default DEVICE_CONFIG (with the shipped walk_order) validates."""
         import config
@@ -692,18 +639,6 @@ class TestValidateConfig:
                 config.validate_config()
         finally:
             config.DEVICE_CONFIG["status_leds"]["sd_fault_blink_ms"] = original
-
-    def test_heater_missing_key_raises(self):
-        """Missing heater.day_min_temp raises ValueError."""
-        import config
-
-        original = config.DEVICE_CONFIG["heater"]["day_min_temp"]
-        del config.DEVICE_CONFIG["heater"]["day_min_temp"]
-        try:
-            with pytest.raises(ValueError, match="Missing config key"):
-                config.validate_config()
-        finally:
-            config.DEVICE_CONFIG["heater"]["day_min_temp"] = original
 
     def test_pca9685_enabled_default_true(self):
         """pca9685 ships enabled now that the chip is on the next-rev PCB."""
@@ -791,40 +726,33 @@ class TestValidateConfig:
     # --- fans dict validation ---
 
     def test_fans_default_roster(self):
-        """Default config has the five planned fan roles."""
+        """Only the case fan lives in the roster — the rest are engine actuators."""
         from config import DEVICE_CONFIG
 
-        for role in (
-            "exhaust",
-            "growroom_walls",
-            "growroom_center",
-            "heater_distribution",
-            "case",
-        ):
-            assert role in DEVICE_CONFIG["fans"]
+        assert set(DEVICE_CONFIG["fans"]) == {"case"}
 
     def test_fans_default_enabled_set(self):
-        """All five fan roles run from PCA9685 channels on the next-rev board."""
+        """The case fan is enabled on PCA9685 ch3 (bench-confirmed map)."""
         from config import DEVICE_CONFIG
 
-        enabled = {r for r, c in DEVICE_CONFIG["fans"].items() if c["enabled"]}
-        assert enabled == {
-            "exhaust",
-            "growroom_walls",
-            "growroom_center",
-            "heater_distribution",
-            "case",
+        case = DEVICE_CONFIG["fans"]["case"]
+        assert case["enabled"] is True
+        assert case["output"] == "pca9685"
+        assert case["pca9685_ch"] == 3
+
+    def test_fans_channels_disjoint_from_regulation(self):
+        """Roster channels must not collide with regulation adapter channels."""
+        from config import DEVICE_CONFIG
+
+        roster = {c["pca9685_ch"] for c in DEVICE_CONFIG["fans"].values() if c["output"] == "pca9685"}
+        regs = DEVICE_CONFIG["regulation"]["regulators"]
+        reg_chans = {
+            regs["heater_follower"]["adapter"]["pca9685_ch"],
+            regs["exhaust"]["adapter"]["pca9685_ch"],
+            regs["circulation"]["adapter"]["center_ch"],
+            regs["circulation"]["adapter"]["wall_ch"],
         }
-
-    def test_fans_all_pca9685_on_distinct_channels(self):
-        """Every fan drives a distinct PCA9685 channel ch0–ch4 (relays freed)."""
-        from config import DEVICE_CONFIG
-
-        chans = []
-        for role, cfg in DEVICE_CONFIG["fans"].items():
-            assert cfg["output"] == "pca9685", f"{role} not on pca9685"
-            chans.append(cfg["pca9685_ch"])
-        assert sorted(chans) == [0, 1, 2, 3, 4]
+        assert not (roster & reg_chans)
 
     def test_fans_empty_dict_raises(self):
         import config
@@ -850,80 +778,84 @@ class TestValidateConfig:
     def test_fans_missing_mode_raises(self):
         import config
 
-        original = config.DEVICE_CONFIG["fans"]["exhaust"].pop("mode")
+        original = config.DEVICE_CONFIG["fans"]["case"].pop("mode")
         try:
-            with pytest.raises(ValueError, match="fans.exhaust.mode"):
+            with pytest.raises(ValueError, match="fans.case.mode"):
                 config.validate_config()
         finally:
-            config.DEVICE_CONFIG["fans"]["exhaust"]["mode"] = original
+            config.DEVICE_CONFIG["fans"]["case"]["mode"] = original
 
     def test_fans_bad_mode_raises(self):
+        """Regulated policies are gone; anything but always_on is rejected."""
         import config
 
-        original = config.DEVICE_CONFIG["fans"]["exhaust"]["mode"]
-        config.DEVICE_CONFIG["fans"]["exhaust"]["mode"] = "wishful"
+        original = config.DEVICE_CONFIG["fans"]["case"]["mode"]
+        config.DEVICE_CONFIG["fans"]["case"]["mode"] = "thermostat_schedule"
         try:
-            with pytest.raises(ValueError, match="fans.exhaust.mode"):
+            with pytest.raises(ValueError, match="fans.case.mode"):
                 config.validate_config()
         finally:
-            config.DEVICE_CONFIG["fans"]["exhaust"]["mode"] = original
+            config.DEVICE_CONFIG["fans"]["case"]["mode"] = original
 
     def test_fans_bad_output_raises(self):
         import config
 
-        original = config.DEVICE_CONFIG["fans"]["exhaust"]["output"]
-        config.DEVICE_CONFIG["fans"]["exhaust"]["output"] = "magic"
+        original = config.DEVICE_CONFIG["fans"]["case"]["output"]
+        config.DEVICE_CONFIG["fans"]["case"]["output"] = "magic"
         try:
-            with pytest.raises(ValueError, match="fans.exhaust.output"):
+            with pytest.raises(ValueError, match="fans.case.output"):
                 config.validate_config()
         finally:
-            config.DEVICE_CONFIG["fans"]["exhaust"]["output"] = original
+            config.DEVICE_CONFIG["fans"]["case"]["output"] = original
 
     def test_fans_enabled_non_bool_raises(self):
         import config
 
-        original = config.DEVICE_CONFIG["fans"]["exhaust"]["enabled"]
-        config.DEVICE_CONFIG["fans"]["exhaust"]["enabled"] = "yes"
+        original = config.DEVICE_CONFIG["fans"]["case"]["enabled"]
+        config.DEVICE_CONFIG["fans"]["case"]["enabled"] = "yes"
         try:
-            with pytest.raises(ValueError, match="fans.exhaust.enabled"):
+            with pytest.raises(ValueError, match="fans.case.enabled"):
                 config.validate_config()
         finally:
-            config.DEVICE_CONFIG["fans"]["exhaust"]["enabled"] = original
+            config.DEVICE_CONFIG["fans"]["case"]["enabled"] = original
+
+    @staticmethod
+    def _aux_relay_fan(pin_key):
+        """A minimal relay-backed always_on fan for validator branch tests."""
+        return {
+            "enabled": True,
+            "mode": "always_on",
+            "output": "relay",
+            "relay_pin_key": pin_key,
+            "duty_pct": 100,
+            "refresh_interval_s": 300,
+        }
 
     def test_fans_relay_pin_key_unknown_raises(self):
         """A relay-output fan referencing an unknown pin raises ValueError."""
         import config
 
-        # The roster is all-PCA9685 now; flip one fan to relay output to
-        # exercise the relay_pin_key validation branch.
         fans = config.DEVICE_CONFIG["fans"]
-        orig_exhaust = dict(fans["exhaust"])
-        fans["exhaust"].pop("pca9685_ch", None)
-        fans["exhaust"]["output"] = "relay"
-        fans["exhaust"]["relay_pin_key"] = "no_such_pin"
+        fans["aux"] = self._aux_relay_fan("no_such_pin")
         try:
             with pytest.raises(ValueError, match="relay_pin_key"):
                 config.validate_config()
         finally:
-            fans["exhaust"] = orig_exhaust
+            del fans["aux"]
 
     def test_fans_relay_pin_key_collision_raises(self):
         """Two relay-backed fans cannot share the same pin."""
         import config
 
         fans = config.DEVICE_CONFIG["fans"]
-        orig_exhaust = dict(fans["exhaust"])
-        orig_walls = dict(fans["growroom_walls"])
-        for role in ("exhaust", "growroom_walls"):
-            fans[role].pop("pca9685_ch", None)
-            fans[role]["output"] = "relay"
-            fans[role]["relay_pin_key"] = "relay_cooler"
+        fans["aux1"] = self._aux_relay_fan("relay_reserved_1")
+        fans["aux2"] = self._aux_relay_fan("relay_reserved_1")
         try:
             with pytest.raises(ValueError, match="is used by another fan"):
                 config.validate_config()
         finally:
-            fans["exhaust"] = orig_exhaust
-            fans["growroom_walls"] = orig_walls
+            del fans["aux1"]
+            del fans["aux2"]
 
     def test_fans_pca9685_channel_out_of_range_raises(self):
         import config
@@ -940,15 +872,20 @@ class TestValidateConfig:
         """Two pca9685-backed fans cannot share the same channel."""
         import config
 
-        original = config.DEVICE_CONFIG["fans"]["case"]["pca9685_ch"]
-        config.DEVICE_CONFIG["fans"]["case"]["pca9685_ch"] = config.DEVICE_CONFIG["fans"]["growroom_center"][
-            "pca9685_ch"
-        ]
+        fans = config.DEVICE_CONFIG["fans"]
+        fans["aux"] = {
+            "enabled": True,
+            "mode": "always_on",
+            "output": "pca9685",
+            "pca9685_ch": fans["case"]["pca9685_ch"],
+            "duty_pct": 100,
+            "refresh_interval_s": 300,
+        }
         try:
             with pytest.raises(ValueError, match="is used by another fan"):
                 config.validate_config()
         finally:
-            config.DEVICE_CONFIG["fans"]["case"]["pca9685_ch"] = original
+            del fans["aux"]
 
     def test_fans_pca9685_missing_channel_raises(self):
         import config
@@ -959,49 +896,6 @@ class TestValidateConfig:
                 config.validate_config()
         finally:
             config.DEVICE_CONFIG["fans"]["case"]["pca9685_ch"] = original
-
-    def test_fans_thermostat_missing_interval_raises(self):
-        import config
-
-        original = config.DEVICE_CONFIG["fans"]["exhaust"].pop("interval_s")
-        try:
-            with pytest.raises(ValueError, match="interval_s"):
-                config.validate_config()
-        finally:
-            config.DEVICE_CONFIG["fans"]["exhaust"]["interval_s"] = original
-
-    def test_fans_thermostat_zero_interval_raises(self):
-        import config
-
-        original = config.DEVICE_CONFIG["fans"]["exhaust"]["interval_s"]
-        config.DEVICE_CONFIG["fans"]["exhaust"]["interval_s"] = 0
-        try:
-            with pytest.raises(ValueError, match="interval_s"):
-                config.validate_config()
-        finally:
-            config.DEVICE_CONFIG["fans"]["exhaust"]["interval_s"] = original
-
-    def test_fans_thermostat_negative_hysteresis_raises(self):
-        import config
-
-        original = config.DEVICE_CONFIG["fans"]["exhaust"]["temp_hysteresis"]
-        config.DEVICE_CONFIG["fans"]["exhaust"]["temp_hysteresis"] = -1
-        try:
-            with pytest.raises(ValueError, match="temp_hysteresis"):
-                config.validate_config()
-        finally:
-            config.DEVICE_CONFIG["fans"]["exhaust"]["temp_hysteresis"] = original
-
-    def test_fans_thermostat_duty_out_of_range_raises(self):
-        import config
-
-        original = config.DEVICE_CONFIG["fans"]["exhaust"]["default_duty_pct"]
-        config.DEVICE_CONFIG["fans"]["exhaust"]["default_duty_pct"] = 150
-        try:
-            with pytest.raises(ValueError, match="default_duty_pct"):
-                config.validate_config()
-        finally:
-            config.DEVICE_CONFIG["fans"]["exhaust"]["default_duty_pct"] = original
 
     def test_fans_always_on_missing_duty_raises(self):
         import config
@@ -1045,32 +939,6 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["fans"]["case"]["duty_pct"] = original
 
-    def test_fans_heater_follower_missing_post_run_raises(self):
-        import config
-
-        original = config.DEVICE_CONFIG["fans"]["heater_distribution"].pop("post_run_s")
-        try:
-            with pytest.raises(ValueError, match="post_run_s"):
-                config.validate_config()
-        finally:
-            config.DEVICE_CONFIG["fans"]["heater_distribution"]["post_run_s"] = original
-
-    def test_fans_heater_follower_negative_post_run_raises(self):
-        import config
-
-        original = config.DEVICE_CONFIG["fans"]["heater_distribution"]["post_run_s"]
-        config.DEVICE_CONFIG["fans"]["heater_distribution"]["post_run_s"] = -1
-        try:
-            with pytest.raises(ValueError, match="post_run_s"):
-                config.validate_config()
-        finally:
-            config.DEVICE_CONFIG["fans"]["heater_distribution"]["post_run_s"] = original
-
-    def test_co2_override_fan_default_is_exhaust(self):
-        from config import DEVICE_CONFIG
-
-        assert DEVICE_CONFIG["co2_logger"]["override_fan"] == "exhaust"
-
     def test_co2_logger_zero_interval_raises(self):
         """co2_logger.interval_s = 0 raises ValueError."""
         import config
@@ -1097,18 +965,6 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["co2_logger"]["override_ppm_on"] = orig_on
             config.DEVICE_CONFIG["co2_logger"]["override_ppm_off"] = orig_off
-
-    def test_co2_logger_unknown_override_fan_raises(self):
-        """co2_logger.override_fan not in fans dict raises ValueError."""
-        import config
-
-        original = config.DEVICE_CONFIG["co2_logger"]["override_fan"]
-        config.DEVICE_CONFIG["co2_logger"]["override_fan"] = "nonexistent_fan"
-        try:
-            with pytest.raises(ValueError, match="override_fan"):
-                config.validate_config()
-        finally:
-            config.DEVICE_CONFIG["co2_logger"]["override_fan"] = original
 
     def test_co2_logger_missing_key_raises(self):
         """Missing co2_logger.interval_s raises ValueError."""
@@ -1259,92 +1115,6 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["sd_detect"]["pull"] = original
 
-    def test_growlight_dac_address_out_of_range_raises(self):
-        """growlight.dac_i2c_address outside 7-bit I2C range raises ValueError."""
-        import config
-
-        original = config.DEVICE_CONFIG["growlight"]["dac_i2c_address"]
-        config.DEVICE_CONFIG["growlight"]["dac_i2c_address"] = 0x80
-        try:
-            with pytest.raises(ValueError, match="dac_i2c_address"):
-                config.validate_config()
-        finally:
-            config.DEVICE_CONFIG["growlight"]["dac_i2c_address"] = original
-
-    def test_growlight_dac_address_non_int_raises(self):
-        """growlight.dac_i2c_address non-int raises ValueError."""
-        import config
-
-        original = config.DEVICE_CONFIG["growlight"]["dac_i2c_address"]
-        config.DEVICE_CONFIG["growlight"]["dac_i2c_address"] = "0x60"
-        try:
-            with pytest.raises(ValueError, match="dac_i2c_address"):
-                config.validate_config()
-        finally:
-            config.DEVICE_CONFIG["growlight"]["dac_i2c_address"] = original
-
-    def test_growlight_max_level_out_of_range_raises(self):
-        """growlight.max_level_pct > 100 raises ValueError."""
-        import config
-
-        original = config.DEVICE_CONFIG["growlight"]["max_level_pct"]
-        config.DEVICE_CONFIG["growlight"]["max_level_pct"] = 150
-        try:
-            with pytest.raises(ValueError, match="max_level_pct"):
-                config.validate_config()
-        finally:
-            config.DEVICE_CONFIG["growlight"]["max_level_pct"] = original
-
-    def test_growlight_default_above_max_raises(self):
-        """growlight.default_level_pct > max_level_pct raises ValueError."""
-        import config
-
-        orig_default = config.DEVICE_CONFIG["growlight"]["default_level_pct"]
-        orig_max = config.DEVICE_CONFIG["growlight"]["max_level_pct"]
-        config.DEVICE_CONFIG["growlight"]["max_level_pct"] = 50
-        config.DEVICE_CONFIG["growlight"]["default_level_pct"] = 80
-        try:
-            with pytest.raises(ValueError, match="default_level_pct"):
-                config.validate_config()
-        finally:
-            config.DEVICE_CONFIG["growlight"]["default_level_pct"] = orig_default
-            config.DEVICE_CONFIG["growlight"]["max_level_pct"] = orig_max
-
-    def test_growlight_min_above_max_raises(self):
-        """growlight.min_level_pct > max_level_pct raises ValueError."""
-        import config
-
-        orig_min = config.DEVICE_CONFIG["growlight"]["min_level_pct"]
-        config.DEVICE_CONFIG["growlight"]["min_level_pct"] = 100
-        try:
-            with pytest.raises(ValueError, match="min_level_pct"):
-                config.validate_config()
-        finally:
-            config.DEVICE_CONFIG["growlight"]["min_level_pct"] = orig_min
-
-    def test_growlight_mode_invalid_raises(self):
-        """growlight.mode outside {'dimmed','relay_only'} raises ValueError."""
-        import config
-
-        original = config.DEVICE_CONFIG["growlight"]["mode"]
-        config.DEVICE_CONFIG["growlight"]["mode"] = "bogus"
-        try:
-            with pytest.raises(ValueError, match="growlight.mode"):
-                config.validate_config()
-        finally:
-            config.DEVICE_CONFIG["growlight"]["mode"] = original
-
-    def test_growlight_mode_dimmed_valid(self):
-        """growlight.mode='dimmed' passes validation."""
-        import config
-
-        original = config.DEVICE_CONFIG["growlight"]["mode"]
-        config.DEVICE_CONFIG["growlight"]["mode"] = "dimmed"
-        try:
-            assert config.validate_config() is True
-        finally:
-            config.DEVICE_CONFIG["growlight"]["mode"] = original
-
     def test_mode_invalid_raises(self):
         """Top-level mode outside {'plant','mushroom'} raises ValueError."""
         import config
@@ -1384,18 +1154,6 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["mode"] = original
             config.DEVICE_CONFIG["regulation"]["profile"] = orig_profile
-
-    def test_growlight_negative_ramp_raises(self):
-        """growlight.ramp_duration_s < 0 raises ValueError."""
-        import config
-
-        original = config.DEVICE_CONFIG["growlight"]["ramp_duration_s"]
-        config.DEVICE_CONFIG["growlight"]["ramp_duration_s"] = -1
-        try:
-            with pytest.raises(ValueError, match="ramp_duration_s"):
-                config.validate_config()
-        finally:
-            config.DEVICE_CONFIG["growlight"]["ramp_duration_s"] = original
 
     def test_display_negative_startup_banner_raises(self):
         """display.startup_banner_s < 0 raises ValueError."""

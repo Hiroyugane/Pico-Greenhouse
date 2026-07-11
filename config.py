@@ -107,8 +107,8 @@ DEVICE_CONFIG = {
     #
     # Disabled components are skipped entirely in main.py (no task, no I/O),
     # so the only cost of being in the wrong mode is what's missing — not
-    # idle objects holding RAM. Override growlight.mode below is ignored;
-    # the top-level mode is the source of truth for grow-light wiring.
+    # idle objects holding RAM. The active regulation.profile's category
+    # must match this mode (validated at boot).
     "mode": "mushroom",
     # Hardware Pins
     #
@@ -264,83 +264,26 @@ DEVICE_CONFIG = {
     },
     # Fan Roster (role-keyed, mode-dispatched).
     #
-    # Each entry names a physical fan role. The controller class is picked
-    # by `mode`; the drive backend by `output`. The next-rev PCB drives all
-    # five fans from PCA9685 PWM channels ch0–ch4 (IRLZ44N MOSFET gates), so
-    # every role uses output="pca9685". The old fan relay outputs on GP18/GP19
-    # are freed and repurposed as relay_cooler/relay_humidifier;
-    # relay output stays supported for any fan that needs it. Only main.py
-    # wiring changes between backends; policy is untouched.
+    # Only fans OUTSIDE the RegulationEngine pipeline live here. The
+    # regulated fans (exhaust ch4, circulation center ch0 / walls ch1,
+    # heater follower ch2) are engine actuators configured under
+    # regulation.regulators.*.adapter — do not re-add them here or the
+    # channel would be claimed twice.
     #
-    # pca9685_ch below is the BENCH-CONFIRMED physical map (2026-07-05 fan
-    # bring-up, re-run): ch0=growroom_center, ch1=growroom_walls, ch2=heater_
-    # distribution, ch3=case, ch4=exhaust. The re-run swapped ch0<->ch1 vs the
-    # first pass — center and walls were transposed on the harness. The
-    # as-designed order did not match how the harness landed; do not "tidy"
-    # these back to 0-4 by role order without re-running the bring-up fan check.
+    # pca9685_ch is the BENCH-CONFIRMED physical map (2026-07-05 fan
+    # bring-up, re-run): ch0=growroom_center, ch1=growroom_walls,
+    # ch2=heater_distribution, ch3=case, ch4=exhaust. Do not "tidy" channel
+    # numbers without re-running the bring-up fan check.
     #
     # Modes:
-    #   thermostat_schedule — time-of-day on-cycle + temperature override
-    #                         (FanController). Needs interval_s, on_time_s,
-    #                         max_temp, temp_hysteresis, poll_interval_s,
-    #                         default_duty_pct.
-    #   always_on           — constant duty (AlwaysOnFanController).
-    #                         Needs duty_pct.
-    #   heater_follower     — runs while heater.is_on() plus post_run_s
-    #                         afterrun (HeaterFollowerFanController). Needs
-    #                         post_run_s, duty_pct, poll_interval_s.
+    #   always_on — constant duty (AlwaysOnFanController). Needs duty_pct,
+    #               refresh_interval_s.
     #
     # Outputs:
     #   relay    — wraps a RelayController on the pin named by
     #              relay_pin_key (must reference DEVICE_CONFIG["pins"]).
-    #   pca9685  — drives PCA9685 channel pca9685_ch (0..15). Disabled
-    #              until pca9685.enabled flips True.
+    #   pca9685  — drives PCA9685 channel pca9685_ch (0..15).
     "fans": {
-        "exhaust": {
-            "enabled": True,
-            "mode": "thermostat_schedule",
-            "output": "pca9685",
-            "pca9685_ch": 4,
-            "interval_s": 600,
-            "on_time_s": 20,
-            "max_temp": 23.8,
-            "temp_hysteresis": 0.5,
-            "poll_interval_s": 5,
-            "default_duty_pct": 100,
-        },
-        "growroom_walls": {
-            "enabled": True,
-            "mode": "thermostat_schedule",
-            "output": "pca9685",
-            "pca9685_ch": 1,
-            "interval_s": 500,
-            "on_time_s": 20,
-            "max_temp": 27.0,
-            "temp_hysteresis": 0.5,
-            "poll_interval_s": 5,
-            "default_duty_pct": 100,
-        },
-        "growroom_center": {
-            "enabled": True,
-            "mode": "thermostat_schedule",
-            "output": "pca9685",
-            "pca9685_ch": 0,
-            "interval_s": 500,
-            "on_time_s": 20,
-            "max_temp": 27.0,
-            "temp_hysteresis": 0.5,
-            "poll_interval_s": 5,
-            "default_duty_pct": 80,
-        },
-        "heater_distribution": {
-            "enabled": True,
-            "mode": "heater_follower",
-            "output": "pca9685",
-            "pca9685_ch": 2,
-            "post_run_s": 60,
-            "duty_pct": 80,
-            "poll_interval_s": 5,
-        },
         "case": {
             "enabled": True,
             "mode": "always_on",
@@ -374,21 +317,6 @@ DEVICE_CONFIG = {
         "i2c_address": 0x40,
         "freq_hz": 1000,
         "invert": True,
-    },
-    # Heater Configuration (GP3 → R6 → IRLZ44N gate, ACTIVE HIGH)
-    #
-    # Day/night setpoints inherit the growlight schedule plus an optional
-    # offset in minutes. day_start = growlight.dawn + day_offset_min;
-    # night_start = growlight.sunset + night_offset_min. With both offsets
-    # at 0 the heater follows the lamp 1:1.
-    "heater": {
-        "day_min_temp": 22.0,  # Setpoint while day window is active (°C)
-        "night_min_temp": 16.0,  # Setpoint while night window is active (°C)
-        "temp_hysteresis": 0.5,  # Drop below setpoint before re-firing (°C)
-        "day_offset_min": 0,  # Minutes after growlight dawn for day window start
-        "night_offset_min": 0,  # Minutes after growlight sunset for night window start
-        "max_stale_reads": 3,  # Tolerate N consecutive DHT failures before failing OFF
-        "poll_interval_s": 30,  # Thermostat check cadence (seconds)
     },
     # Soil Moisture Logger Configuration (GP28 / ADC2, single-probe)
     #
@@ -425,42 +353,19 @@ DEVICE_CONFIG = {
     # Poll/response framing matches the prototype in tests/co2log.py:
     # 7-byte request 0xFE 0x44 0x00 0x08 0x02 0x9F 0x25 → 7-byte reply
     # whose bytes 3-4 (0-indexed) encode ppm as high*256 + low.
-    # The override_fan key names a role in DEVICE_CONFIG["fans"]; that
-    # fan gets force-on when ppm crosses override_ppm_on, until ppm
-    # drops below override_ppm_off. The exhaust fan is the natural CO2
-    # vent target.
+    # The override_ppm thresholds drive the logger's is_override_active()
+    # advisory flag (shown on the OLED CO2 page); actual venting is the
+    # RegulationEngine's job via the CO2 deviation dimension.
     "co2_logger": {
         "interval_s": 30,  # Poll cadence (seconds)
         "warmup_s": 30,  # Sensor warm-up window where read failures don't escalate
         "max_retries": 3,  # UART read retries per poll
         "override_ppm_on": 2500,  # Trip threshold (ppm)
         "override_ppm_off": 2200,  # Release threshold (ppm), must be < on
-        "override_fan": "exhaust",  # Which fans-dict role to force-on
         "sensor_type": "co2",  # Folder + filename prefix under paths.sensor_root
     },
-    # Grow Light Configuration
-    "growlight": {
-        # "relay_only": drive GP20 relay as plain on/off, skip MCP4725 init.
-        # "dimmed":     init MCP4725 DAC for ViparSpectra XS1500 dimming over
-        #               the relay master-switch. Falls back to relay-only at
-        #               runtime if DAC init throws (logged as warning).
-        "mode": "relay_only",
-        "dawn_hour": 7,  # Light ON at 7:00 AM
-        "dawn_minute": 0,
-        "sunset_hour": 19,  # Light OFF at 19:00 (10 PM)
-        "sunset_minute": 0,
-        "poll_interval_s": 60,  # Schedule check interval (seconds)
-        # MCP4725 dimming DAC on shared I2C0. Only consulted when mode="dimmed".
-        # Tentative default 0x60 (A0=GND); confirm with prototypes/i2c_scan.py —
-        # A0=VCC is 0x61.
-        "dac_i2c_address": 0x60,
-        # Dimming layer over the master-switch relay. Relay handles
-        # ON/OFF; DAC sets brightness via op-amp buffer to GL_CON.
-        "default_level_pct": 80,  # Brightness when no override active
-        "max_level_pct": 91,  # ViparSpectra XS1500 safe ceiling — never exceed
-        "min_level_pct": 0,  # Below this snaps to 0 (relay off)
-        "ramp_duration_s": 300,  # Linear fade duration on dawn/sunset edges
-    },
+    # Grow light schedule + dimming live under regulation.regulators.growlight
+    # (tod-driven, MCP4725 via adapter dac_i2c_address/dac_max_pct).
     # Service Reminder Configuration
     "Service_reminder": {
         "days_interval": 7,  # Remind every 7 days
@@ -1046,7 +951,7 @@ DEVICE_CONFIG = {
 }
 
 
-_VALID_FAN_MODES = ("thermostat_schedule", "always_on", "heater_follower")
+_VALID_FAN_MODES = ("always_on",)
 _VALID_FAN_OUTPUTS = ("relay", "pca9685")
 
 
@@ -1091,48 +996,15 @@ def _validate_fans(fans_cfg, pins_cfg):
                 raise ValueError(f"{prefix}.pca9685_ch={ch} is used by another fan")
             used_pca_channels.add(ch)
 
-        mode = cfg["mode"]
-        if mode == "thermostat_schedule":
-            required = (
-                "interval_s",
-                "on_time_s",
-                "max_temp",
-                "temp_hysteresis",
-                "poll_interval_s",
-                "default_duty_pct",
-            )
-            for k in required:
-                if k not in cfg:
-                    raise ValueError(f"Missing config key: {prefix}.{k}")
-            if cfg["interval_s"] <= 0 or cfg["on_time_s"] <= 0:
-                raise ValueError(f"{prefix}: interval_s and on_time_s must be > 0")
-            if cfg["temp_hysteresis"] < 0:
-                raise ValueError(f"{prefix}.temp_hysteresis must be >= 0")
-            if cfg["poll_interval_s"] <= 0:
-                raise ValueError(f"{prefix}.poll_interval_s must be > 0")
-            v = cfg["default_duty_pct"]
-            if not isinstance(v, (int, float)) or not (0 <= v <= 100):
-                raise ValueError(f"{prefix}.default_duty_pct must be 0-100")
-        elif mode == "always_on":
-            for k in ("duty_pct", "refresh_interval_s"):
-                if k not in cfg:
-                    raise ValueError(f"Missing config key: {prefix}.{k}")
-            v = cfg["duty_pct"]
-            if not isinstance(v, (int, float)) or not (0 <= v <= 100):
-                raise ValueError(f"{prefix}.duty_pct must be 0-100")
-            if cfg["refresh_interval_s"] <= 0:
-                raise ValueError(f"{prefix}.refresh_interval_s must be > 0")
-        else:  # heater_follower
-            for k in ("post_run_s", "duty_pct", "poll_interval_s"):
-                if k not in cfg:
-                    raise ValueError(f"Missing config key: {prefix}.{k}")
-            if cfg["post_run_s"] < 0:
-                raise ValueError(f"{prefix}.post_run_s must be >= 0")
-            v = cfg["duty_pct"]
-            if not isinstance(v, (int, float)) or not (0 <= v <= 100):
-                raise ValueError(f"{prefix}.duty_pct must be 0-100")
-            if cfg["poll_interval_s"] <= 0:
-                raise ValueError(f"{prefix}.poll_interval_s must be > 0")
+        # mode is guaranteed always_on here (checked against _VALID_FAN_MODES).
+        for k in ("duty_pct", "refresh_interval_s"):
+            if k not in cfg:
+                raise ValueError(f"Missing config key: {prefix}.{k}")
+        v = cfg["duty_pct"]
+        if not isinstance(v, (int, float)) or not (0 <= v <= 100):
+            raise ValueError(f"{prefix}.duty_pct must be 0-100")
+        if cfg["refresh_interval_s"] <= 0:
+            raise ValueError(f"{prefix}.refresh_interval_s must be > 0")
 
 
 def _validate_surface(surface, ctx):
@@ -1454,22 +1326,12 @@ def validate_config():
             "freq_hz",
             "invert",
         ],
-        "heater": [
-            "day_min_temp",
-            "night_min_temp",
-            "temp_hysteresis",
-            "day_offset_min",
-            "night_offset_min",
-            "max_stale_reads",
-            "poll_interval_s",
-        ],
         "co2_logger": [
             "interval_s",
             "warmup_s",
             "max_retries",
             "override_ppm_on",
             "override_ppm_off",
-            "override_fan",
             "sensor_type",
         ],
         "soil_logger": [
@@ -1478,19 +1340,6 @@ def validate_config():
             "adc_wet_raw",
             "warn_pct_below",
             "sensor_type",
-        ],
-        "growlight": [
-            "mode",
-            "dawn_hour",
-            "dawn_minute",
-            "sunset_hour",
-            "sunset_minute",
-            "poll_interval_s",
-            "dac_i2c_address",
-            "default_level_pct",
-            "max_level_pct",
-            "min_level_pct",
-            "ramp_duration_s",
         ],
         "Service_reminder": [
             "days_interval",
@@ -1680,9 +1529,6 @@ def validate_config():
 
     _validate_fans(DEVICE_CONFIG.get("fans"), DEVICE_CONFIG["pins"])
 
-    if DEVICE_CONFIG["growlight"]["poll_interval_s"] <= 0:
-        raise ValueError("growlight.poll_interval_s must be > 0")
-
     pca_cfg = DEVICE_CONFIG["pca9685"]
     if not isinstance(pca_cfg["enabled"], bool):
         raise ValueError("pca9685.enabled must be a bool")
@@ -1692,16 +1538,6 @@ def validate_config():
         raise ValueError("pca9685.freq_hz must be an int 24-1526 (PCA9685 datasheet range)")
     if not isinstance(pca_cfg["invert"], bool):
         raise ValueError("pca9685.invert must be a bool")
-
-    heater_cfg = DEVICE_CONFIG["heater"]
-    if heater_cfg["temp_hysteresis"] < 0:
-        raise ValueError("heater.temp_hysteresis must be >= 0")
-    if heater_cfg["poll_interval_s"] <= 0:
-        raise ValueError("heater.poll_interval_s must be > 0")
-    if heater_cfg["max_stale_reads"] < 0:
-        raise ValueError("heater.max_stale_reads must be >= 0")
-    if heater_cfg["day_min_temp"] < heater_cfg["night_min_temp"]:
-        raise ValueError("heater.day_min_temp must be >= night_min_temp")
 
     co2_cfg = DEVICE_CONFIG["co2_logger"]
     if co2_cfg["interval_s"] <= 0:
@@ -1714,8 +1550,6 @@ def validate_config():
         raise ValueError("co2_logger.override_ppm_on must be > override_ppm_off")
     if co2_cfg["override_ppm_off"] < 0:
         raise ValueError("co2_logger.override_ppm_off must be >= 0")
-    if co2_cfg["override_fan"] not in DEVICE_CONFIG.get("fans", {}):
-        raise ValueError(f"co2_logger.override_fan must be a key in fans dict (got {co2_cfg['override_fan']!r})")
     if not isinstance(co2_cfg["sensor_type"], str) or not co2_cfg["sensor_type"]:
         raise ValueError("co2_logger.sensor_type must be a non-empty string")
 
@@ -1781,24 +1615,6 @@ def validate_config():
     levels = debug_cfg["test_growlight_dim_levels_pct"]
     if not isinstance(levels, list) or not levels or any(not isinstance(x, int) or not (0 <= x <= 100) for x in levels):
         raise ValueError("display.debug.test_growlight_dim_levels_pct must be a non-empty list of ints 0-100")
-
-    dac_addr = DEVICE_CONFIG["growlight"]["dac_i2c_address"]
-    if not isinstance(dac_addr, int) or not (0x08 <= dac_addr <= 0x77):
-        raise ValueError("growlight.dac_i2c_address must be a 7-bit I2C address (0x08-0x77)")
-
-    gl_cfg = DEVICE_CONFIG["growlight"]
-    if gl_cfg["mode"] not in ("dimmed", "relay_only"):
-        raise ValueError("growlight.mode must be 'dimmed' or 'relay_only'")
-    for key in ("default_level_pct", "max_level_pct", "min_level_pct"):
-        v = gl_cfg[key]
-        if not isinstance(v, (int, float)) or not (0 <= v <= 100):
-            raise ValueError(f"growlight.{key} must be 0-100")
-    if gl_cfg["min_level_pct"] > gl_cfg["max_level_pct"]:
-        raise ValueError("growlight.min_level_pct must be <= max_level_pct")
-    if gl_cfg["default_level_pct"] > gl_cfg["max_level_pct"]:
-        raise ValueError("growlight.default_level_pct must be <= max_level_pct")
-    if gl_cfg["ramp_duration_s"] < 0:
-        raise ValueError("growlight.ramp_duration_s must be >= 0")
 
     if DEVICE_CONFIG["Service_reminder"]["blink_after_days"] < 0:
         raise ValueError("Service_reminder.blink_after_days must be >= 0")

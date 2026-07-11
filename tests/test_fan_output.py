@@ -1,7 +1,33 @@
 # Tests for lib/fan_output.py
-# Covers the RelayFanOutput and Pca9685FanOutput adapters
+# Covers the RelayFanOutput, Pca9685FanOutput, and NullFanOutput adapters
 
 import pytest
+
+
+class TestNullFanOutput:
+    """NullFanOutput records commands but drives no hardware."""
+
+    @pytest.fixture
+    def output(self):
+        from lib.fan_output import NullFanOutput
+
+        return NullFanOutput("ghost")
+
+    def test_initial_state_off(self, output):
+        assert output.is_on() is False
+        assert output.name == "ghost"
+
+    def test_on_off_track_state(self, output):
+        output.on()
+        assert output.is_on() is True
+        output.off()
+        assert output.is_on() is False
+
+    def test_set_duty_clamps_and_tracks(self, output):
+        output.set_duty(150)
+        assert output.is_on() is True
+        output.set_duty(-5)
+        assert output.is_on() is False
 
 
 class TestRelayFanOutput:

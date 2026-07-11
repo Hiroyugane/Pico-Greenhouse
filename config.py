@@ -1017,6 +1017,7 @@ DEVICE_CONFIG = {
                     "type": "growlight",
                     "pin_key": "relay_growlight",
                     "dac_i2c_address": 0x60,
+                    "dac_max_pct": 91,  # ViparSpectra XS1500 safe ceiling — never exceed
                     "on_above": 50.0,
                     "off_below": 40.0,
                     "min_on_s": 60,
@@ -1223,6 +1224,9 @@ def _validate_reg_adapter(adapter, reg_name, pins_cfg):
         addr = adapter.get("dac_i2c_address")
         if not isinstance(addr, int) or isinstance(addr, bool) or not (0x08 <= addr <= 0x77):
             raise ValueError("{}.dac_i2c_address must be a 7-bit I2C address".format(ctx))
+        cap = adapter.get("dac_max_pct")
+        if not isinstance(cap, (int, float)) or isinstance(cap, bool) or not (0 <= cap <= 100):
+            raise ValueError("{}.dac_max_pct must be 0-100".format(ctx))
     else:
         raise ValueError("{}.type {!r} is not a known adapter type".format(ctx, atype))
 

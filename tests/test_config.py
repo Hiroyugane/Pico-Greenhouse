@@ -2017,6 +2017,24 @@ class TestRegulationConfig:
         finally:
             self._restore(snap)
 
+    def test_regulation_growlight_dac_max_pct_out_of_range_raises(self):
+        """growlight adapter dac_max_pct outside 0-100 raises ValueError."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["regulators"]["growlight"]["adapter"]["dac_max_pct"] = 150
+        try:
+            with pytest.raises(ValueError, match="dac_max_pct"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_regulation_growlight_dac_max_pct_default_is_xs1500_ceiling(self):
+        """Shipped dac_max_pct stays at the ViparSpectra XS1500 safe ceiling."""
+        from config import DEVICE_CONFIG
+
+        assert DEVICE_CONFIG["regulation"]["regulators"]["growlight"]["adapter"]["dac_max_pct"] == 91
+
     def test_regulation_conflict_unknown_regulator_raises(self):
         """A conflict rule forcing an unknown regulator raises ValueError."""
         import config

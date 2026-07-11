@@ -141,11 +141,13 @@ class TestEmergencyLatch:
 
 class TestExternalGate:
     def test_external_hotter_outside_suppresses_exhaust(self):
-        # Outside hotter than inside → exhaust effectiveness floored.
+        # Outside hotter than inside → exhaust effectiveness floored. temp 28.5
+        # puts the surface output above the exhaust floor so the external
+        # suppression is observable (not masked by the floor).
         engine_gated, ad_gated, names = _engine(
-            temp=27.0, minutes=720, external_read=lambda: (35.0, 50.0)
+            temp=28.5, minutes=720, external_read=lambda: (35.0, 50.0)
         )
-        engine_open, ad_open, _ = _engine(temp=27.0, minutes=720)
+        engine_open, ad_open, _ = _engine(temp=28.5, minutes=720)
         engine_gated.tick(now_s=0.0)
         engine_open.tick(now_s=0.0)
         assert _adapter(ad_gated, names, "exhaust").value < _adapter(ad_open, names, "exhaust").value

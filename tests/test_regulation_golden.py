@@ -139,6 +139,8 @@ class TestScenarioTable:
         assert cmd["cooler"] >= 100.0
 
     def test_external_hotter_suppresses_exhaust(self):
-        hot_inside = _run_scenario(temp=27.0, hum=92.0, co2=700.0)
-        gated = _run_scenario(temp=27.0, hum=92.0, co2=700.0, external_read=lambda: (35.0, 50.0))
+        # temp 28.5 keeps the exhaust surface above its floor so the external
+        # gate's suppression is visible (below the floor both would read 40).
+        hot_inside = _run_scenario(temp=28.5, hum=92.0, co2=700.0)
+        gated = _run_scenario(temp=28.5, hum=92.0, co2=700.0, external_read=lambda: (35.0, 50.0))
         assert gated["exhaust"] < hot_inside["exhaust"]

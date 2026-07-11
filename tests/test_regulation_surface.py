@@ -86,6 +86,94 @@ class TestClampAndRescale:
         assert abs(evaluate(p, 75.0, 50.0) - 100.0) < 1e-3
 
 
+def _cfg_surface(name):
+    """Freeze the shipped config surface for a regulator by name."""
+    import config
+    from lib.regulation_surface import freeze_surface
+
+    return freeze_surface(config.DEVICE_CONFIG["regulation"]["regulators"][name]["surface"])
+
+
+class TestShippedCouplings:
+    """Physics couplings baked into the default surfaces (operator-tunable)."""
+
+    def test_humidifier_evaporative_cooling_at_ideal_rh(self):
+        # x = RH dev (50 = ideal), y = temp dev. Hot air pulls humidifier on for
+        # evaporative cooling even at ideal RH; cold air suppresses it.
+        from lib.regulation_surface import evaluate
+
+        p = _cfg_surface("humidifier")
+        hot = evaluate(p, 50.0, 100.0)
+        cold = evaluate(p, 50.0, 0.0)
+        assert hot > 0.0
+        assert cold == 0.0
+        assert hot > cold
+
+    def test_humidifier_suppressed_when_already_humid(self):
+        # Humid (x>55) cancels the evaporative-cooling bias so it never adds
+        # moisture to a humid room, even when hot.
+        from lib.regulation_surface import evaluate
+
+        p = _cfg_surface("humidifier")
+        assert evaluate(p, 80.0, 100.0) == 0.0
+
+    def test_humidifier_dry_is_hotter_wetter(self):
+        from lib.regulation_surface import evaluate
+
+        p = _cfg_surface("humidifier")
+        assert evaluate(p, 20.0, 100.0) > evaluate(p, 20.0, 0.0)
+
+    def test_exhaust_vents_on_humidity_alone(self):
+        # Ideal temp, high humidity → exhaust still opens (dumps moisture).
+        from lib.regulation_surface import evaluate
+
+        p = _cfg_surface("exhaust")
+        assert evaluate(p, 50.0, 100.0) > 0.0
+
+    def test_cooler_amplified_by_humidity(self):
+        # Mildly hot: humid air runs the cooler harder (condensation dehumidifies).
+        from lib.regulation_surface import evaluate
+
+        p = _cfg_surface("cooler")
+        assert evaluate(p, 75.0, 100.0) > evaluate(p, 75.0, 0.0)
+
+    def test_cooler_never_runs_when_cold(self):
+        from lib.regulation_surface import evaluate
+
+        p = _cfg_surface("cooler")
+        assert evaluate(p, 30.0, 100.0) == 0.0  # cold + humid → still off
+
+    def test_heater_amplified_by_humidity(self):
+        # Cold: humid air warms a touch more (warming lowers relative humidity).
+        from lib.regulation_surface import evaluate
+
+        p = _cfg_surface("heater")
+        assert evaluate(p, 25.0, 100.0) > evaluate(p, 25.0, 0.0)
+
+    def test_heater_never_runs_when_hot(self):
+        from lib.regulation_surface import evaluate
+
+        p = _cfg_surface("heater")
+        assert evaluate(p, 80.0, 100.0) == 0.0  # hot + humid → still off
+
+    def test_circulation_is_a_bowl(self):
+        # Zero at ideal, positive whenever either axis drifts either direction.
+        from lib.regulation_surface import evaluate
+
+        p = _cfg_surface("circulation")
+        assert evaluate(p, 50.0, 50.0) == 0.0
+        for x, y in ((100.0, 50.0), (0.0, 50.0), (50.0, 100.0), (50.0, 0.0), (0.0, 0.0), (100.0, 100.0)):
+            assert evaluate(p, x, y) > 0.0
+
+    def test_deadband_near_ideal(self):
+        from lib.regulation_surface import evaluate
+
+        # Small deviations sit inside each actuator's deadband → no output.
+        assert evaluate(_cfg_surface("heater"), 55.0, 50.0) == 0.0
+        assert evaluate(_cfg_surface("cooler"), 45.0, 50.0) == 0.0
+        assert evaluate(_cfg_surface("exhaust"), 55.0, 55.0) == 0.0
+
+
 class TestHinges:
     def test_high_hinge_adds_above_breakpoint(self):
         """A positive x-high hinge kinks the surface upward past its breakpoint."""

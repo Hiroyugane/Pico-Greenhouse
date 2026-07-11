@@ -845,7 +845,21 @@ DEVICE_CONFIG = {
             "heater": {
                 "driven": "surface",
                 "dims": ["temp", "humidity"],
-                "surface": _surface(gain=-2.0),  # cold (temp dev < 50) → full heat
+                # Cold (temp dev < 50) → heat, with a deadband below dev 40 and a
+                # steeper ramp below dev 25. Humidity amplifies (warming lowers
+                # relative humidity) via the y-boost, which only scales the
+                # already-active cold response — no heat when it is hot.
+                "surface": _surface(
+                    hx_lo1=1.5,
+                    bx_lo1=40.0,
+                    hx_lo2=1.6,
+                    bx_lo2=25.0,
+                    x_top=200.0,
+                    x_bot=-100.0,  # neutral x-boost
+                    y_top=60.0,
+                    y_bot=-100.0,  # humid (y>60) amplifies
+                    grad=0.008,
+                ),
                 "adapter": {
                     "type": "heater",
                     "pin_key": "heater_mosfet",
@@ -873,7 +887,21 @@ DEVICE_CONFIG = {
             "cooler": {
                 "driven": "surface",
                 "dims": ["temp", "humidity"],
-                "surface": _surface(gain=2.0),  # hot (temp dev > 50) → cool
+                # Hot (temp dev > 50) → cool, deadband above dev 60, steeper above
+                # 75. Humidity amplifies (compressor coils condense moisture) via
+                # the y-boost; because it only scales the hot-side response it
+                # cannot overcool a cold+humid room.
+                "surface": _surface(
+                    hx_hi1=1.5,
+                    bx_hi1=60.0,
+                    hx_hi2=1.6,
+                    bx_hi2=75.0,
+                    x_top=200.0,
+                    x_bot=-100.0,  # neutral x-boost
+                    y_top=60.0,
+                    y_bot=-100.0,  # humid (y>60) amplifies
+                    grad=0.01,
+                ),
                 "adapter": {
                     "type": "relay",
                     "pin_key": "relay_fan_1",  # GP18 (freed), repurposed as cooler
@@ -891,7 +919,24 @@ DEVICE_CONFIG = {
             "humidifier": {
                 "driven": "surface",
                 "dims": ["humidity", "temp"],
-                "surface": _surface(gain=-2.0),  # dry (RH dev < 50) → humidify
+                # x = RH dev, y = temp dev. Dry (RH dev < 50) → humidify (low-x
+                # hinges, deadband below 40, steeper below 25). Temp couples
+                # additively (ca=0, sa=1, gain): hot → humidify MORE as
+                # evaporative cooling even at ideal RH; cold → humidify LESS
+                # (misting would chill further). A negative high-RH hinge cuts
+                # humidifying once the air is already humid, so the evaporative
+                # bias never adds moisture to a humid room.
+                "surface": _surface(
+                    ca=0.0,
+                    sa=1.0,
+                    gain=0.5,
+                    hx_lo1=1.5,
+                    bx_lo1=40.0,
+                    hx_lo2=1.6,
+                    bx_lo2=25.0,
+                    hx_hi1=-2.0,
+                    bx_hi1=55.0,
+                ),
                 "adapter": {
                     "type": "relay",
                     "pin_key": "relay_fan_2",  # GP19 (freed), repurposed as humidifier
@@ -909,7 +954,21 @@ DEVICE_CONFIG = {
             "exhaust": {
                 "driven": "surface",
                 "dims": ["temp", "humidity"],
-                "surface": _surface(gain=2.0),  # hot → vent
+                # Venting dumps BOTH heat and moisture, so hot (high-x) and humid
+                # (high-y) each drive it additively — either one alone opens the
+                # exhaust; both open it further. Deadband above dev 60, steeper
+                # above 75 on each axis. The external-effectiveness multiplier
+                # (engine) gates this by whether outside air is actually better.
+                "surface": _surface(
+                    hx_hi1=1.5,
+                    bx_hi1=60.0,
+                    hx_hi2=1.6,
+                    bx_hi2=75.0,
+                    hy_hi1=1.5,
+                    by_hi1=60.0,
+                    hy_hi2=1.6,
+                    by_hi2=75.0,
+                ),
                 "co2_gain": 0.8,  # additive: co2_gain * relu(co2_dev - co2_break)
                 "co2_break": 60.0,
                 "external": True,  # apply external-effectiveness multiplier
@@ -923,7 +982,20 @@ DEVICE_CONFIG = {
             "circulation": {
                 "driven": "surface",
                 "dims": ["temp", "humidity"],
-                "surface": _surface(gain=1.0),
+                # Mix air whenever EITHER dimension drifts off-ideal in EITHER
+                # direction — a symmetric V-shape (bowl) from four hinges,
+                # deadband within dev 40-60 on each axis. Breaks up microclimates
+                # so every other actuator reads a representative sensor.
+                "surface": _surface(
+                    hx_hi1=1.0,
+                    bx_hi1=60.0,
+                    hx_lo1=1.0,
+                    bx_lo1=40.0,
+                    hy_hi1=1.0,
+                    by_hi1=60.0,
+                    hy_lo1=1.0,
+                    by_lo1=40.0,
+                ),
                 "adapter": {
                     "type": "pwm_pair",
                     "center_ch": 0,

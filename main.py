@@ -11,7 +11,8 @@
 # 4. Create centralized BufferManager (SD + fallback)
 # 5. Create EventLogger (system event tracking)
 # 6. Create TempHumidityLogger (SHT31 on shared I2C0)
-# 7. Create relay controllers: FanController × 2, GrowlightController
+# 7. Create case fan + sensor loggers, then the RegulationEngine actuator
+#    stack (heater, cooler, humidifier, exhaust, circulation, growlight)
 # 8. Create LED/button handler and ServiceReminder task
 # 9. Spawn all async tasks and run event loop
 #
@@ -38,19 +39,26 @@ import machine
 import uasyncio as asyncio
 from machine import ADC, UART, WDT, Pin
 
-from config import DEVICE_CONFIG, validate_config
+from config import _REG_DIMENSIONS, _REG_NAMES, DEVICE_CONFIG, validate_config
 from lib import boot_log
 from lib.buffer_manager import BufferManager
 from lib.buzzer import BuzzerController
 from lib.co2_logger import CO2Logger
 from lib.event_logger import EventLogger
-from lib.fan_controllers import AlwaysOnFanController, HeaterFollowerFanController
-from lib.fan_output import Pca9685FanOutput, RelayFanOutput
+from lib.fan_controllers import AlwaysOnFanController
+from lib.fan_output import NullFanOutput, Pca9685FanOutput, RelayFanOutput
 from lib.hardware_factory import HardwareFactory
-from lib.heater import HeaterController
 from lib.led_button import LEDButtonHandler, ServiceReminder
 from lib.oled_display import OLEDDisplay
-from lib.relay import FanController, GrowlightController, RelayController
+from lib.regulation_adapters import (
+    GrowlightAdapter,
+    PwmAdapter,
+    PwmPairAdapter,
+    RelayHysteresisAdapter,
+    TimeProportionAdapter,
+)
+from lib.regulation_engine import RegulationEngine
+from lib.relay import RelayController
 from lib.sht31 import SHT31
 from lib.status_manager import SD_MOUNT_FAILED, SD_MOUNTED, SD_NO_CARD, StatusManager
 from lib.temp_humidity_logger import TempHumidityLogger
@@ -451,42 +459,10 @@ async def main():
 
     wdt.feed()  # Feed after TempHumidityLogger init
 
-    # Step 6b: Create heater controller (active-HIGH MOSFET, day/night
-    # thermostat). Constructed before the fan loop so heater_follower
-    # fans can take a reference to it.
-    light_config = DEVICE_CONFIG.get("growlight", {})
-    heater_config = DEVICE_CONFIG.get("heater", {})
-    dawn_h = light_config.get("dawn_hour", 7)
-    dawn_m = light_config.get("dawn_minute", 0)
-    sunset_h = light_config.get("sunset_hour", 19)
-    sunset_m = light_config.get("sunset_minute", 0)
-    day_offset_min = heater_config.get("day_offset_min", 0)
-    night_offset_min = heater_config.get("night_offset_min", 0)
-    day_total_min = dawn_h * 60 + dawn_m + day_offset_min
-    night_total_min = sunset_h * 60 + sunset_m + night_offset_min
-    heater = HeaterController(
-        pin=DEVICE_CONFIG["pins"]["heater_mosfet"],
-        time_provider=time_provider,
-        th_logger=th_logger,
-        logger=logger,
-        day_min_temp=heater_config.get("day_min_temp", 22.0),
-        night_min_temp=heater_config.get("night_min_temp", 16.0),
-        temp_hysteresis=heater_config.get("temp_hysteresis", 0.5),
-        day_start_hour=(day_total_min // 60) % 24,
-        day_start_minute=day_total_min % 60,
-        night_start_hour=(night_total_min // 60) % 24,
-        night_start_minute=night_total_min % 60,
-        max_stale_reads=heater_config.get("max_stale_reads", 3),
-        poll_interval_s=heater_config.get("poll_interval_s", 30),
-        name="Heater",
-    )
-    logger.info("MAIN", "Heater controller initialized")
-
     # Step 7: Create fan controllers from the role-keyed fans dict.
-    # Iterates DEVICE_CONFIG["fans"], skips entries with enabled=False,
-    # and dispatches output (relay vs pca9685) and policy (mode) per
-    # entry. pca9685 entries are skipped with a warning when the chip
-    # is not present (current PCB until next-rev hardware lands).
+    # Only always_on policies live here (the case fan) — every regulated
+    # fan (exhaust, circulation, heater follower) is a RegulationEngine
+    # actuator built in Step 7d and must not be claimed twice.
     fans = []
     pca9685 = hardware.get_pca9685()
     for role, fan_cfg in DEVICE_CONFIG.get("fans", {}).items():
@@ -494,13 +470,20 @@ async def main():
             logger.debug("MAIN", "fan disabled in config; skipping", role=role)
             continue
 
+        mode = fan_cfg["mode"]
+        if mode != "always_on":
+            logger.warning(
+                "MAIN",
+                f"Fan {role!r} mode={mode!r} has no policy class; skipping",
+            )
+            continue
+
         output_type = fan_cfg["output"]
-        fan_output = None
         if output_type == "relay":
             pin = DEVICE_CONFIG["pins"][fan_cfg["relay_pin_key"]]
             relay = RelayController(pin=pin, invert=True, name=role, logger=logger)
             fan_output = RelayFanOutput(relay)
-        elif output_type == "pca9685":
+        else:  # pca9685
             if pca9685 is None:
                 logger.warning(
                     "MAIN",
@@ -514,46 +497,14 @@ async def main():
                 default_duty_pct=fan_cfg.get("default_duty_pct", 100),
             )
 
-        mode = fan_cfg["mode"]
-        if mode == "thermostat_schedule":
-            fan = FanController(
-                output=fan_output,
-                time_provider=time_provider,
-                th_logger=th_logger,
-                logger=logger,
-                interval_s=fan_cfg["interval_s"],
-                on_time_s=fan_cfg["on_time_s"],
-                max_temp=fan_cfg["max_temp"],
-                temp_hysteresis=fan_cfg["temp_hysteresis"],
-                poll_interval_s=fan_cfg["poll_interval_s"],
-                name=role,
-            )
-            fans.append(fan)
-        elif mode == "always_on":
-            fan = AlwaysOnFanController(
-                output=fan_output,
-                logger=logger,
-                duty_pct=fan_cfg["duty_pct"],
-                refresh_interval_s=fan_cfg["refresh_interval_s"],
-                name=role,
-            )
-            fans.append(fan)
-        elif mode == "heater_follower":
-            fan = HeaterFollowerFanController(
-                output=fan_output,
-                heater=heater,
-                logger=logger,
-                duty_pct=fan_cfg["duty_pct"],
-                post_run_s=fan_cfg["post_run_s"],
-                poll_interval_s=fan_cfg["poll_interval_s"],
-                name=role,
-            )
-            fans.append(fan)
-        else:
-            logger.warning(
-                "MAIN",
-                f"Fan {role!r} mode={mode!r} has no policy class; skipping",
-            )
+        fan = AlwaysOnFanController(
+            output=fan_output,
+            logger=logger,
+            duty_pct=fan_cfg["duty_pct"],
+            refresh_interval_s=fan_cfg["refresh_interval_s"],
+            name=role,
+        )
+        fans.append(fan)
 
     logger.info("MAIN", "Fan controllers initialized")
     wdt.feed()  # Feed after fan controllers
@@ -564,50 +515,9 @@ async def main():
         fan_names=str([f.name for f in fans]),
     )
 
-    # Step 7b: Create grow light controller (relay master + MCP4725 dimming).
-    # Plant mode runs the MCP4725 dimming path; mushroom mode runs the basic
-    # relay-only path. growlight.mode in DEVICE_CONFIG is no longer consulted.
-    grow_dac = None
-    if is_plant_mode:
-        # Plant-mode-only import: keeps the MCP4725 driver bytecode off the
-        # heap entirely in mushroom mode, where the DAC is never constructed.
-        from lib.mcp4725 import MCP4725
-
-        try:
-            grow_dac = MCP4725(
-                i2c=hardware.get_i2c(),
-                address=light_config.get("dac_i2c_address", 0x60),
-            )
-            logger.info("MAIN", f"MCP4725 grow-light DAC at 0x{light_config.get('dac_i2c_address', 0x60):02X}")
-        except Exception as e:
-            logger.warning("MAIN", f"MCP4725 init failed (falling back to relay-only growlight): {e}")
-    else:
-        logger.info("MAIN", "mushroom mode — growlight runs relay-only, MCP4725 init skipped")
-    growlight = GrowlightController(
-        pin=DEVICE_CONFIG["pins"]["relay_growlight"],
-        time_provider=time_provider,
-        logger=logger,
-        dawn_hour=light_config.get("dawn_hour", 7),
-        dawn_minute=light_config.get("dawn_minute", 0),
-        sunset_hour=light_config.get("sunset_hour", 19),
-        sunset_minute=light_config.get("sunset_minute", 0),
-        poll_interval_s=light_config.get("poll_interval_s", 60),
-        dac=grow_dac,
-        default_level_pct=light_config.get("default_level_pct", 80),
-        max_level_pct=light_config.get("max_level_pct", 91),
-        min_level_pct=light_config.get("min_level_pct", 0),
-        name="Growlight",
-    )
-    logger.debug(
-        "MAIN",
-        "Step 7b growlight",
-        dawn=f"{light_config.get('dawn_hour', 7):02d}:{light_config.get('dawn_minute', 0):02d}",
-        sunset=f"{light_config.get('sunset_hour', 19):02d}:{light_config.get('sunset_minute', 0):02d}",
-        poll_s=light_config.get("poll_interval_s", 60),
-    )
-
-    # Step 7b3: Create CO2 logger (UART0 SenseAir-style sensor) and wire its
-    # override flag into the configured fan so high-ppm triggers ventilation.
+    # Step 7b3: Create CO2 logger (UART0 SenseAir-style sensor). Its cached
+    # last_ppm feeds the regulation engine's CO2 dimension; venting is the
+    # engine's job (exhaust surface + additive CO2 term), not an override.
     co2_config = DEVICE_CONFIG.get("co2_logger", {})
     co2_logger_obj = None
     try:
@@ -632,20 +542,6 @@ async def main():
             write_queue=write_queue,
             status_manager=status_manager,
         )
-        # Attach the override hook to the fan whose role matches override_fan.
-        override_role = co2_config.get("override_fan", "exhaust")
-        target_fan = next((f for f in fans if f.name == override_role), None)
-        if target_fan is not None:
-            target_fan.external_override = co2_logger_obj.is_override_active
-            logger.info(
-                "MAIN",
-                f"CO2 override wired to {target_fan.name} (>{co2_config.get('override_ppm_on', 1000)} ppm)",
-            )
-        else:
-            logger.warning(
-                "MAIN",
-                f"CO2 override_fan {override_role!r} not found in enabled fans",
-            )
     except Exception as e:
         logger.warning("MAIN", f"CO2Logger init failed (non-critical): {e}")
         co2_logger_obj = None
@@ -722,6 +618,169 @@ async def main():
             logger.warning("MAIN", f"Buzzer init failed (non-critical): {e}")
             buzzer = None
 
+    # Step 7d: Regulation engine — the unified control pipeline replacing
+    # the per-device fan thermostat/schedule, heater cycle, CO2 override,
+    # and growlight scheduler (docs/prompts/regulation-matrix.md). Every
+    # actuator below is driven ONLY through the engine's adapters; the
+    # always-on case fan above is the single actuator outside the pipeline.
+    reg_cfg = DEVICE_CONFIG["regulation"]
+    regulation_engine = None
+    reg_switches = {}  # raw on/off handles for the OLED debug actions
+    if reg_cfg.get("enabled", False):
+        regulators = reg_cfg["regulators"]
+
+        def _pwm_output(channel, name):
+            """PCA9685 channel output, or an inert stand-in when the chip is absent."""
+            if pca9685 is not None:
+                return Pca9685FanOutput(pca9685, channel=channel, name=name)
+            logger.warning("MAIN", f"PCA9685 unavailable; regulation output {name!r} is inert")
+            return NullFanOutput(name)
+
+        def _relay_switch(pin_key, name, invert=True):
+            return RelayController(pin=DEVICE_CONFIG["pins"][pin_key], invert=invert, name=name, logger=logger)
+
+        # Heater gate is the one active-HIGH switch (GP3 → IRLZ44N, not a relay module).
+        heater_switch = _relay_switch(regulators["heater"]["adapter"]["pin_key"], "heater", invert=False)
+        cooler_relay = _relay_switch(regulators["cooler"]["adapter"]["pin_key"], "cooler")
+        humidifier_relay = _relay_switch(regulators["humidifier"]["adapter"]["pin_key"], "humidifier")
+        growlight_relay = _relay_switch(regulators["growlight"]["adapter"]["pin_key"], "growlight")
+        reg_switches = {
+            "heater": heater_switch,
+            "cooler": cooler_relay,
+            "humidifier": humidifier_relay,
+            "growlight": growlight_relay,
+        }
+
+        gl_cfg = regulators["growlight"]["adapter"]
+        dac_set = None
+        if is_plant_mode and regulators["growlight"]["dimmable"]:
+            # Plant-mode-only import: keeps the MCP4725 driver bytecode off
+            # the heap in mushroom mode, where the DAC is never constructed.
+            from lib.mcp4725 import MCP4725
+
+            try:
+                grow_dac = MCP4725(i2c=hardware.get_i2c(), address=gl_cfg["dac_i2c_address"])
+                dac_max_pct = gl_cfg["dac_max_pct"]
+
+                def dac_set(pct):
+                    if pct > dac_max_pct:
+                        pct = dac_max_pct
+                    grow_dac.write(int(pct * 4095 / 100))
+
+                logger.info("MAIN", f"MCP4725 grow-light DAC at 0x{gl_cfg['dac_i2c_address']:02X}")
+            except Exception as e:
+                logger.warning("MAIN", f"MCP4725 init failed (growlight relay-only): {e}")
+                dac_set = None
+
+        h_cfg = regulators["heater"]["adapter"]
+        c_cfg = regulators["cooler"]["adapter"]
+        hu_cfg = regulators["humidifier"]["adapter"]
+        ci_cfg = regulators["circulation"]["adapter"]
+        adapter_by_name = {
+            "heater": TimeProportionAdapter(
+                RelayFanOutput(heater_switch),
+                h_cfg["window_s"],
+                h_cfg["min_on_s"],
+                h_cfg["min_off_s"],
+                name="heater",
+            ),
+            "heater_follower": PwmAdapter(
+                _pwm_output(regulators["heater_follower"]["adapter"]["pca9685_ch"], "heater_follower"),
+                name="heater_follower",
+            ),
+            "cooler": RelayHysteresisAdapter(
+                RelayFanOutput(cooler_relay),
+                c_cfg["on_above"],
+                c_cfg["off_below"],
+                c_cfg["min_on_s"],
+                c_cfg["min_off_s"],
+                name="cooler",
+            ),
+            "humidifier": RelayHysteresisAdapter(
+                RelayFanOutput(humidifier_relay),
+                hu_cfg["on_above"],
+                hu_cfg["off_below"],
+                hu_cfg["min_on_s"],
+                hu_cfg["min_off_s"],
+                name="humidifier",
+            ),
+            "exhaust": PwmAdapter(
+                _pwm_output(regulators["exhaust"]["adapter"]["pca9685_ch"], "exhaust"),
+                name="exhaust",
+            ),
+            "circulation": PwmPairAdapter(
+                _pwm_output(ci_cfg["center_ch"], "circ_center"),
+                _pwm_output(ci_cfg["wall_ch"], "circ_walls"),
+                ci_cfg["center_scale"],
+                ci_cfg["wall_scale"],
+                name="circulation",
+            ),
+            "growlight": GrowlightAdapter(
+                RelayFanOutput(growlight_relay),
+                gl_cfg["on_above"],
+                gl_cfg["off_below"],
+                gl_cfg["min_on_s"],
+                gl_cfg["min_off_s"],
+                dimmable=regulators["growlight"]["dimmable"],
+                dac_set=dac_set,
+                name="growlight",
+            ),
+        }
+        reg_adapters = [adapter_by_name[n] for n in _REG_NAMES]
+
+        # Optional second SHT31 (external air) gates exhaust effectiveness.
+        external_read = None
+        ext_cfg = reg_cfg["external_sensor"]
+        if ext_cfg["enabled"]:
+            try:
+                ext_sht = SHT31(i2c=hardware.get_i2c(), address=ext_cfg["i2c_address"])
+
+                def external_read():
+                    try:
+                        ext_sht.measure()
+                        return (ext_sht.temperature, ext_sht.humidity)
+                    except Exception:
+                        return None
+
+                logger.info("MAIN", f"External SHT31 at 0x{ext_cfg['i2c_address']:02X} gates exhaust")
+            except Exception as e:
+                logger.warning("MAIN", f"External SHT31 init failed; exhaust gate constant: {e}")
+
+        def _reg_alarm(kind):
+            """Buzzer side effects for emergency/latch transitions (rate-limited by the engine)."""
+            if buzzer is None:
+                return
+            try:
+                if kind == "latch":
+                    asyncio.create_task(buzzer.error())
+                elif kind == "emergency":
+                    asyncio.create_task(buzzer.alert())
+                else:  # release
+                    asyncio.create_task(buzzer.beep())
+            except Exception as exc:
+                logger.warning("MAIN", f"Regulation alarm buzzer failed: {exc}")
+
+        regulation_engine = RegulationEngine(
+            reg_cfg,
+            _REG_NAMES,
+            _REG_DIMENSIONS,
+            reg_adapters,
+            th_logger,
+            co2_logger_obj,
+            time_provider,
+            external_read=external_read,
+            logger=logger,
+            alarm_cb=_reg_alarm,
+        )
+        logger.info(
+            "MAIN",
+            f"Regulation engine ready (profile={reg_cfg['profile']}, tick={reg_cfg['tick_s']}s)",
+        )
+    else:
+        logger.warning("MAIN", "Regulation engine disabled in config — no actuator control active")
+
+    wdt.feed()  # Feed after regulation stack
+
     # Step 8: Create LED/button handler and Service reminder
     #
     # Single menu button (GP9): short press = cycle display menu,
@@ -789,6 +848,13 @@ async def main():
             except Exception as exc:
                 logger.warning("MAIN", f"Debug feedback blink scheduling failed: {exc}")
 
+        # The relays page + debug cycle test drive the raw switch objects;
+        # the engine's adapters re-arbitrate on the next tick transition.
+        oled_fans = list(fans)
+        for key in ("cooler", "humidifier"):
+            if key in reg_switches:
+                oled_fans.append(reg_switches[key])
+
         try:
             oled = OLEDDisplay(
                 i2c=hardware.get_i2c(),
@@ -797,14 +863,15 @@ async def main():
                 buffer_manager=buffer_manager,
                 status_manager=status_manager,
                 reminder=reminder,
-                fans=fans,
-                growlight=growlight,
+                fans=oled_fans,
+                growlight=reg_switches.get("growlight"),
                 sd_remount_cb=_sd_remount_cb,
                 start_time_ms=0,
                 logger=logger,
                 co2_logger=co2_logger_obj,
                 soil_logger=soil_logger_obj,
-                heater=heater,
+                heater=reg_switches.get("heater"),
+                regulation=regulation_engine,
                 feedback_blink_cb=_debug_blink_cb if debug_cfg.get("enabled", True) else None,
                 event_log_path=logger_config.get("logfile", "/sd/logs/system.log"),
                 width=display_config.get("width", 128),
@@ -878,11 +945,12 @@ async def main():
         asyncio.create_task(fan.start_cycle())
         logger.debug("MAIN", "task spawned", task=f"{fan.name}.start_cycle")
 
+    # Spawn the regulation engine tick loop (owns every regulated actuator)
+    if regulation_engine is not None:
+        asyncio.create_task(regulation_engine.run())
+        logger.debug("MAIN", "task spawned", task="regulation_engine.run")
+
     # Spawn other async tasks
-    asyncio.create_task(growlight.start_scheduler())
-    logger.debug("MAIN", "task spawned", task="growlight.start_scheduler")
-    asyncio.create_task(heater.start_cycle())
-    logger.debug("MAIN", "task spawned", task="heater.start_cycle")
     asyncio.create_task(th_logger.log_loop())
     logger.debug("MAIN", "task spawned", task="th_logger.log_loop")
     if co2_logger_obj is not None:

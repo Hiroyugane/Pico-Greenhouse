@@ -710,10 +710,11 @@ DEVICE_CONFIG = {
     # main.py reads this dict and passes plain values into the engine; no
     # lib/ module imports DEVICE_CONFIG.
     #
-    # enabled=False until the actuator wiring swap lands (the engine is not
-    # constructed in main.py yet; the old controllers still own the outputs).
+    # enabled=True since the actuator wiring swap: main.py builds the adapter
+    # stack from this block and the engine owns every regulated actuator.
+    # Setting False leaves only the case fan and sensor loggers running.
     "regulation": {
-        "enabled": False,
+        "enabled": True,
         "tick_s": 30,  # Evaluation cadence (seconds)
         # Active species profile — must exist in profiles below AND its
         # category must match the top-level mode (mushroom↔mushroom, plant↔plant).

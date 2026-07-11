@@ -1837,11 +1837,11 @@ class TestRegulationConfig:
         finally:
             config.DEVICE_CONFIG["regulation"] = original
 
-    def test_regulation_disabled_by_default(self):
-        """Engine ships disabled until the actuator wiring swap lands."""
+    def test_regulation_enabled_by_default(self):
+        """Engine ships enabled — the wiring swap made it the only actuator owner."""
         from config import DEVICE_CONFIG
 
-        assert DEVICE_CONFIG["regulation"]["enabled"] is False
+        assert DEVICE_CONFIG["regulation"]["enabled"] is True
 
     def test_regulation_tick_zero_raises(self):
         """regulation.tick_s <= 0 raises ValueError."""

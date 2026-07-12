@@ -13,8 +13,8 @@ Setup and tests run from the repo root with the project venv (`.venv/`) active:
 ```powershell
 pip install -r requirements.txt              # pytest, pytest-asyncio, ruff, pre-commit
 pytest tests/                                # full suite (asyncio_mode=auto)
-pytest tests/test_relay.py                   # single file
-pytest tests/test_relay.py::TestFanController::test_thermostat_on -v
+pytest tests/test_regulation_engine.py       # single file
+pytest tests/test_regulation_engine.py::TestReactions::test_hot_raises_exhaust -v
 pytest tests/ --cov=lib --cov=config --cov-report=term-missing   # coverage; gate is fail_under=88
 ruff check . --fix                           # lint+autofix (config in pyproject.toml)
 ruff format .                                # format
@@ -36,7 +36,7 @@ On-device (via Thonny on the Pico): run [rtc_set_time.py](prototypes/rtc_set_tim
 
 **Relays are inverted.** All relay GPIOs are active-low (HIGH=off, LOW=on). [lib/relay.py](lib/relay.py) `RelayController(invert=True, ...)` handles this; downstream code uses `on()`/`off()` semantically. Don't write raw `pin.value(1)` for "on".
 
-**Fan thermostat reads from `TempHumidityLogger`.** `FanController` does not own a sensor — it reads `th_logger.last_temperature` cached on the logger. A fan running in tests therefore needs a `mock_th_logger` (or the real one) wired in, even if you only care about the schedule path.
+**One engine owns every regulated actuator.** The [RegulationEngine](lib/regulation_engine.py) (5-stage pipeline: normalize → 2D hinge surfaces → band classify → arbitrate → actuator adapters; spec in [docs/prompts/regulation-matrix.md](docs/prompts/regulation-matrix.md)) drives heater, heater-follower fan, cooler (GP18 relay), humidifier (GP19 relay), exhaust, circulation pair, and growlight. It never reads sensors directly — it consumes `th_logger.last_temperature/.last_humidity` and `co2_logger.last_ppm` caches every `regulation.tick_s`. The per-tick path is allocation-free (frozen `array('f')` params, preallocated buffers) — don't add dict/list/f-string churn to `tick()`. The only actuator outside the pipeline is the always-on case fan. Device quirks (hysteresis, compressor min-cycle, heater time-proportioning) live ONLY in [lib/regulation_adapters.py](lib/regulation_adapters.py), never in surfaces. Golden-vector CSVs under [tests/golden/](tests/golden/) pin the surface math — a deliberate surface retune must regenerate them via [prototypes/plot_regulation_surfaces.py](prototypes/plot_regulation_surfaces.py).
 
 **Configuration is one dict, validated at boot.** [config.py](config.py) `DEVICE_CONFIG` holds every pin / interval / threshold; `validate_config()` runs at startup and is the only check. New config keys must be added to both the dict and the validator, and to [tests/test_config.py](tests/test_config.py).
 

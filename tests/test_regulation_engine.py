@@ -162,6 +162,54 @@ class TestState:
         assert "latched" in state and "band" in state
         assert len(state["deviations"]) == 3
 
+    def test_get_state_exposes_tick_timing(self):
+        engine, adapters, names = _engine(temp=24.0, minutes=720)
+        state = engine.get_state()
+        # Present and integer even before run() has measured anything.
+        assert isinstance(state["tick_us"], int)
+        assert isinstance(state["tick_max_us"], int)
+        assert state["tick_us"] == 0 and state["tick_max_us"] == 0
+
+
+class TestTickTiming:
+    async def test_run_records_tick_duration(self):
+        import uasyncio as asyncio
+
+        engine, adapters, names = _engine(temp=24.0, minutes=720, tick_s=0.001)
+
+        # Deterministic microsecond clock: +100 us per read. run() reads start
+        # then end per tick, so tick 1 spans 100->200 us (duration 100).
+        ticks = {"v": 0}
+
+        def fake_us():
+            ticks["v"] += 100
+            return ticks["v"]
+
+        engine._ticks_us = fake_us
+
+        counter = {"n": 0}
+        real_tick = engine.tick
+
+        def counting(now_s=None):
+            counter["n"] += 1
+            if counter["n"] >= 2:
+                raise asyncio.CancelledError
+            real_tick(now_s)
+
+        engine.tick = counting
+        with pytest.raises(asyncio.CancelledError):
+            await engine.run()
+
+        assert engine._last_tick_us == 100
+        assert engine._max_tick_us == 100
+        assert engine.get_state()["tick_us"] == 100
+
+    def test_reset_tick_peak(self):
+        engine, adapters, names = _engine(temp=24.0, minutes=720)
+        engine._max_tick_us = 4200
+        engine.reset_tick_peak()
+        assert engine._max_tick_us == 0
+
 
 class TestRunLoop:
     async def test_run_ticks_then_cancellable(self):

@@ -71,6 +71,19 @@ class RegulationEngine:
         self._clock = clock or time.time
         self._tick_s = float(reg_cfg["tick_s"])
 
+        # Microsecond monotonic for per-tick duration (health metrics). Prefer
+        # the MicroPython ticks_us/ticks_diff pair (wrap-safe on device); fall
+        # back to perf_counter on host/CPython where ticks_us is absent. Bound
+        # once here so run() does no per-tick attribute lookups or branching.
+        if hasattr(time, "ticks_us") and hasattr(time, "ticks_diff"):
+            self._ticks_us = time.ticks_us
+            self._ticks_diff = time.ticks_diff
+        else:
+            self._ticks_us = lambda: int(time.perf_counter() * 1000000)
+            self._ticks_diff = lambda a, b: a - b
+        self._last_tick_us = 0
+        self._max_tick_us = 0
+
         n = len(reg_names)
         regulators = reg_cfg["regulators"]
 
@@ -239,7 +252,13 @@ class RegulationEngine:
         """uasyncio task: tick forever, await-friendly (never long-blocks)."""
         while True:
             try:
+                start = self._ticks_us()
                 self.tick()
+                # Record how long the tick took so the health loop can prove
+                # the allocation-free path stays far under tick_s (WDT budget).
+                self._last_tick_us = self._ticks_diff(self._ticks_us(), start)
+                if self._last_tick_us > self._max_tick_us:
+                    self._max_tick_us = self._last_tick_us
             except Exception as exc:  # keep the loop alive; a stalled tick must not brick the WDT
                 self._event("error", "regulation tick error: {}".format(exc))
             await asyncio.sleep(self._tick_s)
@@ -257,4 +276,10 @@ class RegulationEngine:
             "deviations": list(self._dev),
             "severities": list(self._sev),
             "commanded": {name: self._out[i] for i, name in enumerate(self._reg_names)},
+            "tick_us": self._last_tick_us,
+            "tick_max_us": self._max_tick_us,
         }
+
+    def reset_tick_peak(self):
+        """Re-arm the tick-duration high-water mark (per-interval peak)."""
+        self._max_tick_us = 0

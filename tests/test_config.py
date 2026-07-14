@@ -1471,13 +1471,43 @@ class TestValidateConfig:
 
 
 class TestDiagnosticsConfig:
-    """Tests for the diagnostics.mem_trend_log toggle."""
+    """Tests for the diagnostics.mem_trend_log / metrics_log toggles."""
 
     def test_mem_trend_log_is_bool(self):
         """diagnostics.mem_trend_log defaults to a boolean."""
         from config import DEVICE_CONFIG
 
         assert isinstance(DEVICE_CONFIG["diagnostics"]["mem_trend_log"], bool)
+
+    def test_metrics_log_is_bool_and_on_by_default(self):
+        """diagnostics.metrics_log defaults to True (on by default)."""
+        from config import DEVICE_CONFIG
+
+        assert DEVICE_CONFIG["diagnostics"]["metrics_log"] is True
+
+    def test_metrics_log_non_bool_raises(self):
+        """diagnostics.metrics_log with non-bool raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["diagnostics"]["metrics_log"]
+        config.DEVICE_CONFIG["diagnostics"]["metrics_log"] = "yes"
+        try:
+            with pytest.raises(ValueError, match="metrics_log"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["diagnostics"]["metrics_log"] = original
+
+    def test_missing_metrics_log_raises(self):
+        """Missing diagnostics.metrics_log raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["diagnostics"]["metrics_log"]
+        del config.DEVICE_CONFIG["diagnostics"]["metrics_log"]
+        try:
+            with pytest.raises(ValueError, match="Missing config key"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["diagnostics"]["metrics_log"] = original
 
     def test_mem_trend_log_non_bool_raises(self):
         """diagnostics.mem_trend_log with non-bool raises ValueError."""

@@ -431,8 +431,15 @@ DEVICE_CONFIG = {
     # enabling event_logger.debug_to_file, so a headless greenhouse records
     # the slow climb toward mem_warning_pct for offline diagnosis. Default
     # off — it adds one INFO line every health_check_interval_s.
+    # metrics_log: when True, the health loop appends one row per cycle to a
+    # daily metrics CSV on the SD card (RAM free/alloc/used%, regulation
+    # tick-timing, buffer/write-queue/task depth, and the engine's severity /
+    # band / latch / commanded actuator vector). Charts like the th/co2/soil
+    # logs so a soak run can prove the regulation engine runs smoothly. On by
+    # default — it adds one ~200-byte SD append every health_check_interval_s.
     "diagnostics": {
         "mem_trend_log": False,
+        "metrics_log": True,
     },
     # Memory management (MicroPython gc tuning)
     #
@@ -1349,7 +1356,7 @@ def validate_config():
             "monitor_interval_s",
         ],
         "buzzer": ["enabled", "default_freq", "default_duty_pct"],
-        "diagnostics": ["mem_trend_log"],
+        "diagnostics": ["mem_trend_log", "metrics_log"],
         "memory": ["gc_threshold_b"],
         "buffer_manager": ["sd_mount_point", "fallback_path", "max_buffer_entries", "max_fallback_size_kb"],
         "event_logger": [
@@ -1519,6 +1526,9 @@ def validate_config():
 
     if not isinstance(DEVICE_CONFIG["diagnostics"]["mem_trend_log"], bool):
         raise ValueError("diagnostics.mem_trend_log must be a bool")
+
+    if not isinstance(DEVICE_CONFIG["diagnostics"]["metrics_log"], bool):
+        raise ValueError("diagnostics.metrics_log must be a bool")
 
     gc_threshold = DEVICE_CONFIG["memory"]["gc_threshold_b"]
     if not isinstance(gc_threshold, int) or gc_threshold == 0 or gc_threshold < -1:

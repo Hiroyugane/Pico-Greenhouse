@@ -49,6 +49,7 @@ from lib.fan_controllers import AlwaysOnFanController
 from lib.fan_output import NullFanOutput, Pca9685FanOutput, RelayFanOutput
 from lib.hardware_factory import HardwareFactory
 from lib.led_button import LEDButtonHandler, ServiceReminder
+from lib.metrics_logger import MetricsLogger
 from lib.oled_display import OLEDDisplay
 from lib.regulation_adapters import (
     GrowlightAdapter,
@@ -587,6 +588,23 @@ async def main():
     else:
         logger.info("MAIN", "mushroom mode — SoilLogger not constructed")
 
+    # Health-metrics CSV writer. No async loop of its own — the health loop
+    # calls write_row() each cycle. On by default (diagnostics.metrics_log);
+    # init failure is non-critical (metrics are diagnostic, not control).
+    metrics_logger = None
+    if diagnostics_config.get("metrics_log", True):
+        try:
+            metrics_logger = MetricsLogger(
+                time_provider=time_provider,
+                buffer_manager=buffer_manager,
+                sensor_root=DEVICE_CONFIG["paths"]["sensor_root"],
+                write_queue=write_queue,
+                logger=logger,
+            )
+        except Exception as e:
+            logger.warning("MAIN", f"MetricsLogger init failed (non-critical): {e}")
+            metrics_logger = None
+
     wdt.feed()  # Feed before buzzer (startup melody takes time)
 
     # Step 7c: Create buzzer controller
@@ -1071,6 +1089,46 @@ async def main():
                 f"reclaimed_b={reclaimed} used_pct={used_pct:.1f} "
                 f"tasks={task_count} buffered={buffered} queue={write_queue.get_queue_size()}",
             )
+
+        # Health-metrics CSV row (on by default). Reuses the numbers this loop
+        # already computed; regulation columns come from the engine's snapshot
+        # and stay blank when the engine is disabled. Best-effort — write_row
+        # never raises into the loop.
+        if metrics_logger is not None:
+            row = {
+                "mem_free_b": load_snapshot.get("mem_free_b"),
+                "mem_alloc_b": load_snapshot.get("mem_alloc_b"),
+                "mem_used_pct": load_snapshot.get("mem_used_pct"),
+                "tasks": load_snapshot.get("task_count"),
+                "queue_depth": write_queue.get_queue_size(),
+                "buffered": buffered,
+                "sd_fallback_writes": metrics["writes_to_fallback"],
+                "write_failures": metrics["write_failures"],
+            }
+            if regulation_engine is not None:
+                try:
+                    st = regulation_engine.get_state()
+                    cmd = st["commanded"]
+                    dev = st["deviations"]
+                    row["tick_us"] = st["tick_us"]
+                    row["tick_max_us"] = st["tick_max_us"]
+                    row["global_severity"] = st["global_severity"]
+                    row["band"] = st["band"]
+                    row["latched"] = st["latched"]
+                    row["emergency"] = st["emergency"]
+                    row["dev_t"] = dev[0]
+                    row["dev_h"] = dev[1]
+                    row["dev_c"] = dev[2]
+                    row["cmd_heater"] = cmd.get("heater")
+                    row["cmd_follower"] = cmd.get("heater_follower")
+                    row["cmd_cooler"] = cmd.get("cooler")
+                    row["cmd_humidifier"] = cmd.get("humidifier")
+                    row["cmd_exhaust"] = cmd.get("exhaust")
+                    row["cmd_circulation"] = cmd.get("circulation")
+                    row["cmd_growlight"] = cmd.get("growlight")
+                except Exception as e:
+                    logger.debug("MAIN", f"metrics reg-state read failed: {e}")
+            metrics_logger.write_row(row)
 
         # Hot-swap recovery, now card-detect aware (Adafruit 4682 DET).
         # When DET reports the slot empty we skip refresh_sd() entirely —

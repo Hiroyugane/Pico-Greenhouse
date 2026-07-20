@@ -110,6 +110,36 @@ class TestRecovery:
         monkeypatch.setattr(g, "Pin", MagicMock(side_effect=RuntimeError("no gpio")))
         assert guard.recover() is False
 
+    # Every forwarded method must recover-and-retry on OSError.
+    _METHODS = [
+        ("writeto", (0x3C, b"x"), None),
+        ("readfrom", (0x44, 6), b"\x00" * 6),
+        ("writeto_mem", (0x40, 0x06, b"\xff"), None),
+        ("readfrom_mem", (0x68, 0x00, 2), b"\x01\x02"),
+        ("writevto", (0x3C, [b"\x40", b"d"]), None),
+        ("scan", (), [0x3C]),
+    ]
+
+    @pytest.mark.parametrize("method,args,retval", _METHODS)
+    def test_method_recovers_and_retries(self, monkeypatch, method, args, retval):
+        bad = MagicMock()
+        getattr(bad, method).side_effect = OSError(110)
+        good = MagicMock()
+        getattr(good, method).return_value = retval
+        guard = _guard(monkeypatch, MagicMock(side_effect=[bad, good]))
+        assert getattr(guard, method)(*args) == retval
+        assert guard.recoveries == 1
+        getattr(good, method).assert_called_once_with(*args)
+
+    @pytest.mark.parametrize("method,args,retval", _METHODS)
+    def test_method_reraises_when_recovery_disabled(self, monkeypatch, method, args, retval):
+        bad = MagicMock()
+        getattr(bad, method).side_effect = OSError(110)
+        guard = _guard(monkeypatch, MagicMock(return_value=bad), recover_on_error=False)
+        with pytest.raises(OSError):
+            getattr(guard, method)(*args)
+        assert guard.recoveries == 0
+
 
 class TestBuild:
     def test_use_soft_false_builds_hardware_i2c(self, monkeypatch):

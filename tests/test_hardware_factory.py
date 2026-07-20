@@ -490,28 +490,33 @@ class TestHardwareFactoryI2C:
     """Tests for I2C bus initialization."""
 
     def test_init_i2c_failure_logs_error(self):
-        """_init_i2c() returns False and records error when I2C raises."""
+        """_init_i2c() returns False and records error when the guard raises."""
         from lib.hardware_factory import HardwareFactory
 
         factory = HardwareFactory()
 
-        with patch("lib.hardware_factory.I2C", side_effect=OSError("I2C bus fail")):
+        with patch("lib.hardware_factory.RecoverableI2C", side_effect=OSError("I2C bus fail")):
             result = factory._init_i2c()
         assert result is False
         assert factory.i2c1 is None
         assert any("I2C1 init failed" in e for e in factory.errors)
 
-    def test_init_i2c_success(self):
-        """_init_i2c() returns True and stores i2c1 instance."""
+    def test_init_i2c_success_builds_guard(self):
+        """_init_i2c() returns True and stores a RecoverableI2C built from config."""
         from lib.hardware_factory import HardwareFactory
 
         factory = HardwareFactory()
-        mock_i2c = Mock()
+        mock_guard = Mock()
 
-        with patch("lib.hardware_factory.I2C", return_value=mock_i2c):
+        with patch("lib.hardware_factory.RecoverableI2C", return_value=mock_guard) as mock_cls:
             result = factory._init_i2c()
         assert result is True
-        assert factory.i2c1 is mock_i2c
+        assert factory.i2c1 is mock_guard
+        # Guard is built with the shared-bus resilience config, not a raw bus.
+        kwargs = mock_cls.call_args.kwargs
+        assert kwargs["use_soft"] is True
+        assert kwargs["timeout_us"] == 50000
+        assert kwargs["recover_clocks"] == 9
 
     def test_init_rtc_without_i2c_uses_fallback(self):
         """When i2c1 is None, _init_rtc() creates RTC with sda/scl/port fallback."""

@@ -13,10 +13,11 @@ import os
 import sys
 import time
 
-from machine import I2C, SPI, Pin
+from machine import SPI, Pin
 
 from config import DEVICE_CONFIG
 from lib import boot_log, ds3231
+from lib.i2c_guard import RecoverableI2C
 from lib.sd_integration import is_mounted, mount_sd
 
 # Patchable flag: False when running on the Pico, True on host/CPython.
@@ -155,10 +156,27 @@ class HardwareFactory:
             sda = pins.get("rtc_sda", 2)
             scl = pins.get("rtc_scl", 3)
 
-            i2c_freq = self.config.get("system", {}).get("i2c_freq", 100000)
-            self.i2c1 = I2C(i2c_port, sda=Pin(sda), scl=Pin(scl), freq=i2c_freq)
+            sys_cfg = self.config.get("system", {})
+            i2c_freq = sys_cfg.get("i2c_freq", 100000)
+            # RecoverableI2C bounds each transfer (SoftI2C timeout) and unsticks
+            # the bus on ETIMEDOUT so a marginal shared bus can't watchdog-loop
+            # the board (2026-07-19 fault). Drivers see the base I2C API.
+            self.i2c1 = RecoverableI2C(
+                sda=sda,
+                scl=scl,
+                port=i2c_port,
+                freq=i2c_freq,
+                use_soft=sys_cfg.get("i2c_use_soft", True),
+                timeout_us=sys_cfg.get("i2c_timeout_us", 50000),
+                recover_on_error=sys_cfg.get("i2c_recover_on_error", True),
+                recover_clocks=sys_cfg.get("i2c_recover_clocks", 9),
+                debug=self._debug,
+            )
             if self._debug:
-                self._debug(f"I2C1 init: port={i2c_port}, sda={sda}, scl={scl}, freq={i2c_freq}")
+                self._debug(
+                    f"I2C1 init: port={i2c_port}, sda={sda}, scl={scl}, "
+                    f"freq={i2c_freq}, soft={sys_cfg.get('i2c_use_soft', True)}"
+                )
             return True
         except Exception as e:
             self.errors.append(f"I2C1 init failed: {e}")

@@ -480,6 +480,27 @@ class I2C:
         # Test helper: make all I2C ops raise OSError.
         self._error_mode = enabled
 
+    def writevto(self, addr: int, buflist) -> None:
+        # Vector write: concatenate the buffers and delegate to writeto so the
+        # SSD1306 zero-copy framebuffer path (and RecoverableI2C.writevto) work
+        # under the host simulator.
+        if self._error_mode:
+            raise OSError("I2C write error")
+        combined = b"".join(bytes(b) for b in buflist)
+        self.writeto(addr, combined)
+
+    def deinit(self) -> None:
+        # No-op on host; present so RecoverableI2C.recover() can call deinit().
+        pass
+
+
+class SoftI2C(I2C):
+    # Host shim for machine.SoftI2C — same DS3231-aware model as I2C, built
+    # with scl/sda keywords and an accepted-but-ignored microsecond timeout.
+    def __init__(self, *, scl: Optional[Pin] = None, sda: Optional[Pin] = None, freq: int = 100_000, timeout: int = 50_000):
+        super().__init__(0, sda=sda, scl=scl, freq=freq)
+        self.timeout = timeout
+
 
 # ── RTC (Pico internal RTC) ──────────────────────────────────────────────
 

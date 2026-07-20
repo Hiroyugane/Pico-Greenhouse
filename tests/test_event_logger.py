@@ -217,6 +217,104 @@ class TestEventLoggerRotation:
         assert logger._log_size != 0
 
 
+class TestEventLoggerDailyRotation:
+    """Daily-granular, size-triggered rotation with numbered same-day archives + retention."""
+
+    def _mklogs(self, tmp_path):
+        logs = tmp_path / "sd" / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        return logs
+
+    def test_rotation_uses_daily_archive_name(self, time_provider, buffer_manager, tmp_path):
+        """Rotating renames system.log -> system_<YYYY-MM-DD>.log (day-granular)."""
+        from lib.event_logger import EventLogger
+
+        logs = self._mklogs(tmp_path)
+        (logs / "system.log").write_text("x" * 200)
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            logger = EventLogger(time_provider, buffer_manager, logfile="/sd/logs/system.log", max_size=100)
+            logger.check_size()
+        # FAKE_LOCALTIME -> 2026-01-29
+        assert (logs / "system_2026-01-29.log").read_text() == "x" * 200
+        assert not (logs / "system.log").exists()
+        assert logger._log_size == 0
+
+    def test_same_day_second_rotation_is_numbered(self, time_provider, buffer_manager, tmp_path):
+        """A second same-day rotation gets a numbered suffix, never clobbering the first."""
+        from lib.event_logger import EventLogger
+
+        logs = self._mklogs(tmp_path)
+        (logs / "system_2026-01-29.log").write_text("first archive")  # base name already taken
+        (logs / "system.log").write_text("y" * 200)
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            logger = EventLogger(time_provider, buffer_manager, logfile="/sd/logs/system.log", max_size=100)
+            logger.check_size()
+        assert (logs / "system_2026-01-29.1.log").read_text() == "y" * 200
+        assert (logs / "system_2026-01-29.log").read_text() == "first archive"  # untouched
+        assert not (logs / "system.log").exists()
+
+    def test_retention_prunes_old_daily_archives(self, time_provider, buffer_manager, tmp_path):
+        """Only the newest N distinct log-dates are kept; older archives are deleted."""
+        from lib.event_logger import EventLogger
+
+        logs = self._mklogs(tmp_path)
+        for name in (
+            "system_2026-01-10.log",
+            "system_2026-01-11.log",
+            "system_2026-01-12.log",
+            "system_2026-01-12.1.log",  # same-date partner, shares 01-12's fate
+        ):
+            (logs / name).write_text("old")
+        (logs / "system.log").write_text("z" * 200)
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            logger = EventLogger(
+                time_provider,
+                buffer_manager,
+                logfile="/sd/logs/system.log",
+                max_size=100,
+                log_retention_days=2,
+            )
+            logger.check_size()
+        remaining = {p.name for p in logs.iterdir()}
+        # Dates after rotation: 01-10, 01-11, 01-12, 01-29(new). Keep newest 2 => 01-12, 01-29.
+        assert "system_2026-01-29.log" in remaining
+        assert "system_2026-01-12.log" in remaining
+        assert "system_2026-01-12.1.log" in remaining
+        assert "system_2026-01-10.log" not in remaining
+        assert "system_2026-01-11.log" not in remaining
+
+    def test_retention_keeps_all_when_within_window(self, time_provider, buffer_manager, tmp_path):
+        """No pruning when the distinct-date count is within the retention window."""
+        from lib.event_logger import EventLogger
+
+        logs = self._mklogs(tmp_path)
+        (logs / "system_2026-01-05.log").write_text("keep")
+        (logs / "system.log").write_text("z" * 200)
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            logger = EventLogger(
+                time_provider,
+                buffer_manager,
+                logfile="/sd/logs/system.log",
+                max_size=100,
+                log_retention_days=30,
+            )
+            logger.check_size()
+        remaining = {p.name for p in logs.iterdir()}
+        assert "system_2026-01-05.log" in remaining
+        assert "system_2026-01-29.log" in remaining
+
+    def test_rotation_skipped_when_no_free_slot(self, time_provider, buffer_manager, tmp_path):
+        """If every candidate archive name reads as taken, rotation is skipped, not looped."""
+        from lib.event_logger import EventLogger
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            logger = EventLogger(time_provider, buffer_manager, logfile="/sd/logs/system.log", max_size=100)
+            logger._log_size = 200
+            with patch.object(buffer_manager, "get_primary_file_size", return_value=123):
+                logger.check_size()
+        assert logger._log_size == 0
+
+
 class TestEventLoggerStripPrefix:
     """Tests for _strip_sd_prefix static method."""
 

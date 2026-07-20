@@ -389,6 +389,7 @@ async def main():
         debug_enabled=logger_config.get("debug_enabled", False),
         debug_to_file=logger_config.get("debug_to_file", False),
         write_queue=write_queue,
+        log_retention_days=logger_config.get("log_retention_days", 30),
     )
 
     # Update write_queue with logger reference (now available)

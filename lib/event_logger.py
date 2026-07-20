@@ -69,6 +69,7 @@ class EventLogger:
         debug_enabled: bool = False,
         debug_to_file: bool = False,
         write_queue=None,
+        log_retention_days: int = 30,
     ):
         """
         Initialize EventLogger with dependency injection.
@@ -90,6 +91,8 @@ class EventLogger:
             debug_enabled (bool): Enable debug messages to console (default: False)
             debug_to_file (bool): Also write debug messages to SD log (default: False)
             write_queue: Optional WriteQueueManager for async write batching (default: None)
+            log_retention_days (int): Keep archives from the most recent N distinct
+                log-dates; older daily archives are pruned after each rotation (default: 30)
         """
         self.time_provider = time_provider
         self.buffer_manager = buffer_manager
@@ -107,6 +110,7 @@ class EventLogger:
         self._level = LEVEL_NAMES.get(log_level, LOG_INFO)
         self.debug_enabled = debug_enabled
         self.debug_to_file = debug_to_file
+        self.log_retention_days = int(log_retention_days)
 
         self._refresh_log_size()
         print(f"[EventLogger] Initialized: {self.logfile} (level={log_level})")
@@ -309,44 +313,143 @@ class EventLogger:
         """
         Check log file size and rotate if needed.
 
-        When the log exceeds max_size the current file is renamed with a
-        timestamp (e.g. system_2026-02-16_143022.log) and a fresh
-        system.log is started on the next write — similar to Linux logrotate.
+        When the active log exceeds the rotation threshold it is renamed to a
+        **day-granular** archive — ``system_2026-02-16.log`` — and a fresh
+        system.log is started on the next write. Rotation is size-triggered
+        only (never by calendar rollover): several rotations in one day land in
+        that day's file, or ``system_2026-02-16.1.log``, ``.2.log`` … if the
+        base name is already taken (numbered same-day archives). The rename is
+        atomic (os.rename via BufferManager), so rotating even a large file
+        cannot block the async watchdog. After a successful rotation, archives
+        older than the retention window are pruned. See docs/notes/chat-log
+        2026-07-20 for the bootloop this replaced.
         """
         self._refresh_log_size()
 
         rotation_threshold = self.debug_max_size if self.debug_to_file else self.max_size
-        if self._log_size > rotation_threshold:
-            if self.debug_enabled:
-                print(
-                    f"[EventLogger][DEBUG] log rotation triggered"
-                    f" | log_size={self._log_size} threshold={rotation_threshold}"
+        if self._log_size <= rotation_threshold:
+            return
+
+        if self.debug_enabled:
+            print(
+                f"[EventLogger][DEBUG] log rotation triggered"
+                f" | log_size={self._log_size} threshold={rotation_threshold}"
+            )
+        try:
+            # Flush any pending entries so the rotated file is complete
+            self.flush()
+
+            rotated_name = self._next_rotation_name()
+            if rotated_name is None:
+                # Could not find a free daily slot (SD down, or the pathological
+                # cap was hit). Zero the counter so we don't hammer every cycle.
+                self._log_size = 0
+                self.info("EventLogger", "Log rotation skipped: no free daily archive slot")
+                return
+
+            relpath = self._strip_sd_prefix(self.logfile)
+            rotated_relpath = self._strip_sd_prefix(rotated_name)
+
+            renamed = self.buffer_manager.rename(relpath, rotated_relpath)
+
+            if renamed:
+                self._log_size = 0
+                self.info("EventLogger", f"Log rotated -> {rotated_name}")
+                self._prune_old_logs()
+            else:
+                # Reset size so we don't retry every cycle while SD is down.
+                # The threshold will re-trigger naturally once SD recovers and
+                # _refresh_log_size() can read the real file size again.
+                self._log_size = 0
+                self.info("EventLogger", "Log rotation rename failed; will retry next cycle")
+        except Exception as e:
+            print(f"[EventLogger] WARNING: Log rotation failed: {e}")
+
+    # ── Rotation naming / retention helpers ───────────────────────────
+
+    def _rotation_basepath(self) -> str:
+        """Return the logfile path without its '.log' suffix (e.g. '/sd/logs/system')."""
+        if self.logfile.endswith(".log"):
+            return self.logfile[:-4]
+        return self.logfile
+
+    def _daily_archive_name(self, date_str: str, index: int) -> str:
+        """Build a day-granular archive path; index 0 is the base, 1+ are numbered."""
+        base = self._rotation_basepath()
+        if index <= 0:
+            return f"{base}_{date_str}.log"
+        return f"{base}_{date_str}.{index}.log"
+
+    def _next_rotation_name(self):
+        """
+        Return the next free day-granular archive path, or None if none is free.
+
+        Uses the current date (``YYYY-MM-DD``) so all rotations on a given day
+        share one filename; if that file already exists, a numbered suffix is
+        appended so a same-day rotation never clobbers an earlier archive.
+        """
+        ts = self._get_timestamp()
+        date_str = ts.split(" ")[0] if " " in ts else ts  # 'YYYY-MM-DD' (or 'TIME_ERROR')
+        # fixed: cap same-day numbered archives. This bound is far above any real
+        # rotation count in a day; it only stops a runaway probe if the directory
+        # listing is corrupt or every slot somehow reads as taken.
+        for index in range(0, 1000):
+            candidate = self._daily_archive_name(date_str, index)
+            rel = self._strip_sd_prefix(candidate)
+            if self.buffer_manager.get_primary_file_size(rel) is None:
+                return candidate
+        return None
+
+    def _prune_old_logs(self) -> None:
+        """
+        Delete daily archives beyond the retention window (best-effort).
+
+        Keeps archives from the most recent ``log_retention_days`` distinct
+        log-dates (clock-independent — derived from the date embedded in each
+        filename, robust to a wrong RTC) and removes the rest, so /sd/logs can
+        never accumulate an unbounded pile of rotated files.
+        """
+        if not self.log_retention_days or self.log_retention_days <= 0:
+            return
+        try:
+            log_rel = self._strip_sd_prefix(self.logfile)  # 'logs/system.log'
+            if "/" in log_rel:
+                dir_rel, basename = log_rel.rsplit("/", 1)
+            else:
+                dir_rel, basename = "", log_rel
+            stem = basename[:-4] if basename.endswith(".log") else basename  # 'system'
+            prefix = stem + "_"  # 'system_' — excludes the active 'system.log'
+
+            names = self.buffer_manager.list_primary_dir(dir_rel)
+            if not names:
+                return
+
+            by_date = {}
+            for name in names:
+                if not (name.startswith(prefix) and name.endswith(".log")):
+                    continue
+                date_token = name[len(prefix) :].split(".")[0]
+                by_date.setdefault(date_token, []).append(name)
+
+            if len(by_date) <= self.log_retention_days:
+                return
+
+            keep = set(sorted(by_date.keys(), reverse=True)[: self.log_retention_days])
+            removed = 0
+            for date_token, files in by_date.items():
+                if date_token in keep:
+                    continue
+                for name in files:
+                    rel = (dir_rel + "/" + name) if dir_rel else name
+                    if self.buffer_manager.delete_primary_file(rel):
+                        removed += 1
+            if removed:
+                self.info(
+                    "EventLogger",
+                    f"Pruned {removed} old log archive(s) beyond {self.log_retention_days}-day retention",
                 )
-            try:
-                # Flush any pending entries so the rotated file is complete
-                self.flush()
-
-                # Build a filesystem-safe timestamp for the archive name
-                ts = self._get_timestamp().replace(" ", "_").replace(":", "")
-                # e.g. 'system.log' -> 'system_2026-02-16_143022.log'
-                rotated_name = self.logfile.replace(".log", f"_{ts}.log")
-
-                relpath = self._strip_sd_prefix(self.logfile)
-                rotated_relpath = self._strip_sd_prefix(rotated_name)
-
-                renamed = self.buffer_manager.rename(relpath, rotated_relpath)
-
-                if renamed:
-                    self._log_size = 0
-                    self.info("EventLogger", f"Log rotated -> {rotated_name}")
-                else:
-                    # Reset size so we don't retry every cycle while SD is down.
-                    # The threshold will re-trigger naturally once SD recovers and
-                    # _refresh_log_size() can read the real file size again.
-                    self._log_size = 0
-                    self.info("EventLogger", "Log rotation rename failed; will retry next cycle")
-            except Exception as e:
-                print(f"[EventLogger] WARNING: Log rotation failed: {e}")
+        except Exception as e:
+            print(f"[EventLogger] WARNING: log prune failed: {e}")
 
     @staticmethod
     def _strip_sd_prefix(path: str) -> str:

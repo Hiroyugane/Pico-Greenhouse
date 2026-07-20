@@ -385,7 +385,14 @@ class Updater:
             pass
 
     def _maybe_rotate_log(self):
-        """Rename current log to ``<base>_<ts>.log`` once it crosses ``log_max_size``."""
+        """Rotate the log to a day-granular archive once it crosses ``log_max_size``.
+
+        Uses ``<base>_<YYYY-MM-DD>.log`` (numbered ``.1.log``, ``.2.log`` … when
+        the base name is already taken) so several same-day rotations coalesce
+        instead of minting one file per rotation. Matches the EventLogger scheme
+        — see docs/notes/chat-log 2026-07-20 for why per-rotation timestamps were
+        a problem.
+        """
         if self.log_max_size <= 0:
             return
         try:
@@ -394,11 +401,20 @@ class Updater:
             return
         if size < self.log_max_size:
             return
-        ts = _timestamp_iso().replace(":", "").replace(" ", "_")
-        if self.log_path.endswith(".log"):
-            rotated = self.log_path[:-4] + "_" + ts + ".log"
-        else:
-            rotated = self.log_path + "_" + ts
+        date_str = _timestamp_iso().split("T")[0]  # 'YYYY-MM-DD'
+        base = self.log_path[:-4] if self.log_path.endswith(".log") else self.log_path
+        # fixed: cap same-day numbered archives; far above any real daily rotation count.
+        rotated = None
+        for index in range(0, 1000):
+            candidate = "%s_%s.log" % (base, date_str) if index == 0 else "%s_%s.%d.log" % (base, date_str, index)
+            try:
+                os.stat(candidate)  # taken — try the next index
+                continue
+            except OSError:
+                rotated = candidate
+                break
+        if rotated is None:
+            return
         try:
             os.rename(self.log_path, rotated)
         except OSError:

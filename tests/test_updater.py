@@ -229,6 +229,23 @@ class TestUpdaterUnit:
         assert "apply_ok" in log_path.read_text()
         assert "x" * 200 not in log_path.read_text()
 
+    def test_log_rotation_is_day_granular_and_numbered(self, updater_factory, sd_root):
+        """Rotation uses updates_<date>.log; a same-day rotation gets a numbered suffix."""
+        from unittest.mock import patch
+
+        log_path = sd_root / "updates.log"
+        with patch("lib.updater._timestamp_iso", return_value="2026-01-29T14:23:45"):
+            # First rotation -> day-granular base name.
+            log_path.write_text("A" * 200)
+            updater_factory(log_path=str(log_path), log_max_size=100).log("ok", "v1")
+            assert (sd_root / "updates_2026-01-29.log").read_text() == "A" * 200
+
+            # Second same-day rotation -> numbered, first archive untouched.
+            log_path.write_text("B" * 200)
+            updater_factory(log_path=str(log_path), log_max_size=100).log("ok", "v2")
+            assert (sd_root / "updates_2026-01-29.1.log").read_text() == "B" * 200
+            assert (sd_root / "updates_2026-01-29.log").read_text() == "A" * 200
+
     def test_verify_emits_per_file_breadcrumbs(self, updater_factory, sd_root, good_payload, tmp_path):
         from lib import boot_log
 

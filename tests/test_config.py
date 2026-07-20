@@ -1503,6 +1503,37 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["event_logger"]["debug_flush_threshold"] = original
 
+    def test_log_retention_days_present_and_positive(self):
+        """event_logger.log_retention_days is a positive int by default."""
+        from config import DEVICE_CONFIG
+
+        assert isinstance(DEVICE_CONFIG["event_logger"]["log_retention_days"], int)
+        assert DEVICE_CONFIG["event_logger"]["log_retention_days"] > 0
+
+    def test_zero_log_retention_days_raises(self):
+        """event_logger.log_retention_days = 0 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["event_logger"]["log_retention_days"]
+        config.DEVICE_CONFIG["event_logger"]["log_retention_days"] = 0
+        try:
+            with pytest.raises(ValueError, match="log_retention_days"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["event_logger"]["log_retention_days"] = original
+
+    def test_non_int_log_retention_days_raises(self):
+        """event_logger.log_retention_days must be an int, not a float/str."""
+        import config
+
+        original = config.DEVICE_CONFIG["event_logger"]["log_retention_days"]
+        config.DEVICE_CONFIG["event_logger"]["log_retention_days"] = 30.0
+        try:
+            with pytest.raises(ValueError, match="log_retention_days"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["event_logger"]["log_retention_days"] = original
+
     def test_valid_debug_log_level(self):
         """event_logger.log_level='DEBUG' passes validation."""
         import config

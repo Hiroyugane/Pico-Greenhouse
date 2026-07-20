@@ -414,14 +414,23 @@ DEVICE_CONFIG = {
     # Event Logger Configuration
     "event_logger": {
         "logfile": "/sd/logs/system.log",
-        "max_size": 1000000,  # Max log file size (bytes) before rotation
+        # Rotate the active log when it crosses this size. Kept small on purpose:
+        # every rotation is now an atomic os.rename (O(1)), so the active log
+        # stays tiny and rotation never blocks the async watchdog feed. (The old
+        # 1 MB cap let system.log grow for days, then the rotation copy of a ~1 MB
+        # file starved the 8 s WDT -> bootloop; see docs/notes/chat-log 2026-07-20.)
+        "max_size": 131072,  # 128 KB — max active-log size (bytes) before rotation
         "info_flush_threshold": 5,  # Flush after N info-level entries buffered
         "warn_flush_threshold": 1,  # Flush after N warning-level entries (1=immediate, like ERROR)
         "log_level": "INFO",  # Minimum severity: DEBUG, INFO, WARN, ERR
         "debug_enabled": False,  # Enable DEBUG messages to console (hot loops guard on logger.debug_enabled)
         "debug_to_file": False,  # Also write DEBUG entries to SD log (caution: fills card)
         "debug_flush_threshold": 10,  # Flush after N debug entries buffered (when debug_to_file=True)
-        "debug_max_size": 1000000,  # Rotation threshold when debug_to_file=True (lower: debug spam fills log faster)
+        "debug_max_size": 65536,  # 64 KB — rotation threshold when debug_to_file=True (debug spam fills faster)
+        # Retention: keep archives from the most recent N distinct log-dates and
+        # delete older ones after each rotation. Bounds the file count in /sd/logs
+        # so a rotation storm can never accumulate thousands of files again.
+        "log_retention_days": 30,
     },
     # Diagnostics / instrumentation toggles
     #
@@ -1388,6 +1397,7 @@ def validate_config():
             "debug_enabled",
             "debug_to_file",
             "debug_flush_threshold",
+            "log_retention_days",
         ],
         "output_pins": [
             "relay_cooler",
@@ -1524,6 +1534,12 @@ def validate_config():
 
     if DEVICE_CONFIG["event_logger"]["debug_max_size"] <= 0:
         raise ValueError("event_logger.debug_max_size must be > 0")
+
+    if (
+        not isinstance(DEVICE_CONFIG["event_logger"]["log_retention_days"], int)
+        or DEVICE_CONFIG["event_logger"]["log_retention_days"] <= 0
+    ):
+        raise ValueError("event_logger.log_retention_days must be an int > 0")
 
     if DEVICE_CONFIG["event_logger"]["info_flush_threshold"] < 1:
         raise ValueError("event_logger.info_flush_threshold must be >= 1")

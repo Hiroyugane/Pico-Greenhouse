@@ -889,6 +889,20 @@ class BufferManager:
         old_path = self._path_join(self.sd_mount_point, old_relpath)
         new_path = self._path_join(self.sd_mount_point, new_relpath)
 
+        # Fast path: atomic metadata-only rename. This is O(1) and cannot
+        # starve the async watchdog, unlike the chunked copy below — which is
+        # what turned an oversized system.log into a bootloop (copying ~1 MB
+        # under the 8 s WDT never completed). Rotation always targets a
+        # non-existent name, so os.rename does not have to overwrite.
+        try:
+            os.rename(old_path, new_path)
+            self._log_debug("rename via os.rename", old=old_relpath, new=new_relpath)
+            return True
+        except OSError:
+            # Fall back to chunked copy-then-delete for the rare case os.rename
+            # cannot handle (cross-filesystem move, unsupported by the FS driver).
+            pass
+
         _CHUNK = 512
         copy_ok = False
         try:
@@ -944,6 +958,54 @@ class BufferManager:
         except Exception:
             self._log_debug("get_primary_file_size unavailable", relpath=relpath)
             return None
+
+    def list_primary_dir(self, relpath: str = "") -> list:
+        """
+        List filenames in a primary-storage directory (best-effort).
+
+        Args:
+            relpath (str): Relative directory (e.g., 'logs') or '/sd/logs'.
+                Empty string lists the mount root.
+
+        Returns:
+            list: Filenames in the directory, or [] if it is missing/unreadable.
+        """
+        if relpath.startswith("/sd/"):
+            relpath = relpath[4:]
+
+        dir_path = self._path_join(self.sd_mount_point, relpath) if relpath else self.sd_mount_point
+
+        try:
+            names = list(os.listdir(dir_path))
+            self._log_debug("list_primary_dir", relpath=relpath, count=len(names))
+            return names
+        except Exception:
+            self._log_debug("list_primary_dir unavailable", relpath=relpath)
+            return []
+
+    def delete_primary_file(self, relpath: str) -> bool:
+        """
+        Delete a file on primary storage (best-effort).
+
+        Args:
+            relpath (str): Relative path (e.g., 'logs/system_2026-01-01.log')
+                or '/sd/logs/...'.
+
+        Returns:
+            bool: True if the file was removed, False otherwise.
+        """
+        if relpath.startswith("/sd/"):
+            relpath = relpath[4:]
+
+        path = self._path_join(self.sd_mount_point, relpath)
+
+        try:
+            os.remove(path)
+            self._log_debug("delete_primary_file", relpath=relpath)
+            return True
+        except Exception:
+            self._log_debug("delete_primary_file failed", relpath=relpath)
+            return False
 
     def _get_file_size(self, path: str):
         """

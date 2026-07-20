@@ -1,6 +1,7 @@
 # Tests for lib/buffer_manager.py
 # Uses tmp_path for real filesystem I/O isolation
 
+import os
 from unittest.mock import patch
 
 
@@ -369,16 +370,27 @@ class TestBufferManagerRename:
         result = buffer_manager.rename("nonexistent.log", "new.log")
         assert result is False
 
-    def test_rename_chunked_large_file(self, buffer_manager, tmp_path):
-        """rename() preserves full content for files larger than the 512-byte chunk."""
+    def test_rename_prefers_os_rename(self, buffer_manager, tmp_path):
+        """rename() uses the atomic os.rename fast path (no whole-file copy)."""
+        (tmp_path / "sd" / "a.log").write_text("hello")
+        with patch("lib.buffer_manager.os.rename", wraps=os.rename) as mock_rename:
+            assert buffer_manager.rename("a.log", "b.log") is True
+        mock_rename.assert_called_once()
+        assert (tmp_path / "sd" / "b.log").read_text() == "hello"
+        assert not (tmp_path / "sd" / "a.log").exists()
+
+    def test_rename_fallback_chunked_large_file(self, buffer_manager, tmp_path):
+        """When os.rename is unavailable, the chunked copy fallback preserves content."""
         content = "A" * 1500  # three full chunks
         (tmp_path / "sd" / "big.log").write_text(content)
-        assert buffer_manager.rename("big.log", "big_old.log") is True
+        # Force the copy-then-delete fallback by making the fast path fail.
+        with patch("lib.buffer_manager.os.rename", side_effect=OSError("no cross-fs rename")):
+            assert buffer_manager.rename("big.log", "big_old.log") is True
         assert not (tmp_path / "sd" / "big.log").exists()
         assert (tmp_path / "sd" / "big_old.log").read_text() == content
 
     def test_rename_partial_cleanup_on_error(self, buffer_manager, tmp_path):
-        """rename() removes partial destination file if write fails mid-copy."""
+        """rename() removes partial destination file if the fallback write fails mid-copy."""
         content = "B" * 1500
         old_file = tmp_path / "sd" / "error.log"
         new_file = tmp_path / "sd" / "error_new.log"
@@ -405,12 +417,50 @@ class TestBufferManagerRename:
 
         import builtins
 
-        with patch.object(builtins, "open", side_effect=patched_open):
-            result = buffer_manager.rename("error.log", "error_new.log")
+        # Force the copy fallback (os.rename would otherwise succeed atomically).
+        with patch("lib.buffer_manager.os.rename", side_effect=OSError("no cross-fs rename")):
+            with patch.object(builtins, "open", side_effect=patched_open):
+                result = buffer_manager.rename("error.log", "error_new.log")
 
         assert result is False
         assert old_file.exists(), "source file must survive a failed rename"
         assert not new_file.exists(), "partial destination must be cleaned up"
+
+
+class TestBufferManagerDirHelpers:
+    """Tests for list_primary_dir() and delete_primary_file()."""
+
+    def test_list_primary_dir_returns_names(self, buffer_manager, tmp_path):
+        """list_primary_dir() returns filenames in an SD subdirectory."""
+        logs = tmp_path / "sd" / "logs"
+        logs.mkdir(parents=True)
+        (logs / "system.log").write_text("x")
+        (logs / "system_2026-01-01.log").write_text("y")
+        names = buffer_manager.list_primary_dir("logs")
+        assert set(names) == {"system.log", "system_2026-01-01.log"}
+
+    def test_list_primary_dir_missing_returns_empty(self, buffer_manager):
+        """list_primary_dir() returns [] for a directory that does not exist."""
+        assert buffer_manager.list_primary_dir("nope") == []
+
+    def test_list_primary_dir_strips_sd_prefix(self, buffer_manager, tmp_path):
+        """list_primary_dir() accepts a /sd/-prefixed directory path."""
+        logs = tmp_path / "sd" / "logs"
+        logs.mkdir(parents=True)
+        (logs / "a.log").write_text("x")
+        assert buffer_manager.list_primary_dir("/sd/logs") == ["a.log"]
+
+    def test_delete_primary_file_removes(self, buffer_manager, tmp_path):
+        """delete_primary_file() removes an existing file and returns True."""
+        target = tmp_path / "sd" / "logs" / "old.log"
+        target.parent.mkdir(parents=True)
+        target.write_text("x")
+        assert buffer_manager.delete_primary_file("logs/old.log") is True
+        assert not target.exists()
+
+    def test_delete_primary_file_missing_returns_false(self, buffer_manager):
+        """delete_primary_file() returns False when the file is absent."""
+        assert buffer_manager.delete_primary_file("logs/ghost.log") is False
 
 
 class TestBufferManagerUtilities:

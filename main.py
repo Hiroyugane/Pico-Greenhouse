@@ -589,10 +589,11 @@ async def main():
         logger.info("MAIN", "mushroom mode — SoilLogger not constructed")
 
     # Health-metrics CSV writer. No async loop of its own — the health loop
-    # calls write_row() each cycle. On by default (diagnostics.metrics_log);
-    # init failure is non-critical (metrics are diagnostic, not control).
+    # calls write_row() each cycle. Off by default (diagnostics.metrics_log)
+    # for heap headroom; init failure is non-critical (metrics are diagnostic,
+    # not control).
     metrics_logger = None
-    if diagnostics_config.get("metrics_log", True):
+    if diagnostics_config.get("metrics_log", False):
         try:
             metrics_logger = MetricsLogger(
                 time_provider=time_provider,

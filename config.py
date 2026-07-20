@@ -435,11 +435,14 @@ DEVICE_CONFIG = {
     # daily metrics CSV on the SD card (RAM free/alloc/used%, regulation
     # tick-timing, buffer/write-queue/task depth, and the engine's severity /
     # band / latch / commanded actuator vector). Charts like the th/co2/soil
-    # logs so a soak run can prove the regulation engine runs smoothly. On by
-    # default — it adds one ~200-byte SD append every health_check_interval_s.
+    # logs so a soak run can prove the regulation engine runs smoothly.
+    # OFF by default: the ~25-column row and its snapshot dict pushed steady
+    # heap from ~81% to 91.3% (over the 90% mem_error threshold) on the
+    # 2026-07-19 build, leaving no headroom for the I2C error path. Turn on
+    # explicitly for a soak run once heap has margin.
     "diagnostics": {
         "mem_trend_log": False,
-        "metrics_log": True,
+        "metrics_log": False,
     },
     # Memory management (MicroPython gc tuning)
     #
@@ -494,6 +497,11 @@ DEVICE_CONFIG = {
         "startup_banner_s": 2.0,  # How long to show the "Pi Greenhouse / Ready!" banner at init
         "vram_clear_delay_s": 0.05,  # Per-step delay during the triple-clear sequence at init
         "invert_delay_s": 0.1,  # Delay after invert/revert and final clear at init
+        # Consecutive render (I2C) failures before the OLED self-disables at
+        # runtime, so a dead/marginal display can never keep hammering the
+        # shared bus or starve the watchdog (2026-07-19 bootloop guard). The
+        # boot-time `enabled` flag remains the hard off-switch.
+        "max_render_errors": 5,
         # Debug Actions sub-menu (entered from the "debug" menu via long-press).
         # Inside the sub-menu: short press cycles actions, long press executes
         # the highlighted action. Destructive actions (wipe_logs) require a
@@ -538,7 +546,18 @@ DEVICE_CONFIG = {
         "long_press_ms": 3000,  # Long-press threshold for menu action button
         "health_check_interval_s": 60,  # Normal health-check loop interval
         "sd_recovery_interval_s": 10,  # Fast retry interval when SD is unavailable
-        "i2c_freq": 400000,  # I2C bus frequency in Hz (100 kHz standard, 400 kHz fast)
+        # I2C bus frequency (Hz). Dropped 400k->100k after the 2026-07-19
+        # bootloop: at 400 kHz the shared bus's 10k pull-ups give marginal
+        # rise times with 7+ devices, so short transfers passed but the 1 KB
+        # OLED framebuffer render timed out (ETIMEDOUT). 100 kHz restores
+        # margin with the existing pull-ups; raise back to 400000 only once
+        # the pull-ups are reworked (see docs/hardware/next-revision.md).
+        "i2c_freq": 100000,
+        # Shared-I2C fault resilience (RecoverableI2C, lib/i2c_guard.py).
+        "i2c_use_soft": True,  # Use machine.SoftI2C (bounded timeout + recoverable); False = raw hardware I2C
+        "i2c_timeout_us": 50000,  # Per-transfer SoftI2C timeout (us); bounds a stuck-bus block far under watchdog_timeout_ms
+        "i2c_recover_on_error": True,  # On OSError, unstick the bus (pulse SCL) + rebuild + retry once
+        "i2c_recover_clocks": 9,  # SCL pulses to clock a wedged slave out (9 = one byte + ACK)
         "sd_power_up_ms": 1500,  # SD card power-up stabilization delay (ms); cheap cards may need >1s cold
         "sd_mount_retries": 3,  # Number of SD mount attempts at cold boot
         "sd_retry_delay_ms": 1000,  # Delay between SD mount retries (ms)
@@ -1410,6 +1429,7 @@ def validate_config():
             "startup_banner_s",
             "vram_clear_delay_s",
             "invert_delay_s",
+            "max_render_errors",
             "debug",
         ],
         "updater": [
@@ -1444,6 +1464,10 @@ def validate_config():
             "health_check_interval_s",
             "sd_recovery_interval_s",
             "i2c_freq",
+            "i2c_use_soft",
+            "i2c_timeout_us",
+            "i2c_recover_on_error",
+            "i2c_recover_clocks",
             "sd_power_up_ms",
             "sd_mount_retries",
             "sd_retry_delay_ms",
@@ -1589,6 +1613,8 @@ def validate_config():
     for delay_key in ("startup_banner_s", "vram_clear_delay_s", "invert_delay_s"):
         if not isinstance(disp_cfg[delay_key], (int, float)) or disp_cfg[delay_key] < 0:
             raise ValueError(f"display.{delay_key} must be a number >= 0")
+    if not isinstance(disp_cfg["max_render_errors"], int) or disp_cfg["max_render_errors"] < 1:
+        raise ValueError("display.max_render_errors must be an int >= 1")
 
     debug_cfg = disp_cfg["debug"]
     debug_required = (
@@ -1635,6 +1661,15 @@ def validate_config():
     sys_cfg = DEVICE_CONFIG["system"]
     if sys_cfg["i2c_freq"] <= 0:
         raise ValueError("system.i2c_freq must be > 0")
+
+    if not isinstance(sys_cfg["i2c_use_soft"], bool):
+        raise ValueError("system.i2c_use_soft must be a bool")
+    if not isinstance(sys_cfg["i2c_timeout_us"], int) or not (1000 <= sys_cfg["i2c_timeout_us"] <= 1000000):
+        raise ValueError("system.i2c_timeout_us must be an int in 1000..1000000")
+    if not isinstance(sys_cfg["i2c_recover_on_error"], bool):
+        raise ValueError("system.i2c_recover_on_error must be a bool")
+    if not isinstance(sys_cfg["i2c_recover_clocks"], int) or not (8 <= sys_cfg["i2c_recover_clocks"] <= 16):
+        raise ValueError("system.i2c_recover_clocks must be an int in 8..16")
 
     if sys_cfg["button_debounce_ms"] < 0:
         raise ValueError("system.button_debounce_ms must be >= 0")

@@ -1194,6 +1194,25 @@ class TestValidateConfig:
             for k, v in originals.items():
                 config.DEVICE_CONFIG["display"][k] = v
 
+    def test_display_max_render_errors_default_valid(self):
+        """display.max_render_errors defaults to a positive int and validates."""
+        from config import DEVICE_CONFIG, validate_config
+
+        assert DEVICE_CONFIG["display"]["max_render_errors"] == 5
+        assert validate_config() is True
+
+    def test_display_max_render_errors_zero_raises(self):
+        """display.max_render_errors < 1 raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["display"]["max_render_errors"]
+        config.DEVICE_CONFIG["display"]["max_render_errors"] = 0
+        try:
+            with pytest.raises(ValueError, match="max_render_errors"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["display"]["max_render_errors"] = original
+
     def test_negative_blink_after_days_raises(self):
         """Service_reminder.blink_after_days = -1 raises ValueError."""
         import config
@@ -1253,6 +1272,68 @@ class TestValidateConfig:
                 config.validate_config()
         finally:
             config.DEVICE_CONFIG["system"]["i2c_freq"] = original
+
+    def test_i2c_recovery_defaults_present_and_valid(self):
+        """The shared-I2C resilience tunables default to sane values and validate."""
+        from config import DEVICE_CONFIG, validate_config
+
+        sys_cfg = DEVICE_CONFIG["system"]
+        assert sys_cfg["i2c_freq"] == 100000  # dropped from 400k for pull-up margin
+        assert sys_cfg["i2c_use_soft"] is True
+        assert sys_cfg["i2c_timeout_us"] == 50000
+        assert sys_cfg["i2c_recover_on_error"] is True
+        assert sys_cfg["i2c_recover_clocks"] == 9
+        assert validate_config() is True
+
+    def test_i2c_use_soft_non_bool_raises(self):
+        """system.i2c_use_soft must be a bool."""
+        import config
+
+        original = config.DEVICE_CONFIG["system"]["i2c_use_soft"]
+        config.DEVICE_CONFIG["system"]["i2c_use_soft"] = "yes"
+        try:
+            with pytest.raises(ValueError, match="i2c_use_soft"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["system"]["i2c_use_soft"] = original
+
+    def test_i2c_timeout_us_out_of_range_raises(self):
+        """system.i2c_timeout_us below 1000 or above 1000000 raises."""
+        import config
+
+        original = config.DEVICE_CONFIG["system"]["i2c_timeout_us"]
+        try:
+            for bad in (500, 2_000_000):
+                config.DEVICE_CONFIG["system"]["i2c_timeout_us"] = bad
+                with pytest.raises(ValueError, match="i2c_timeout_us"):
+                    config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["system"]["i2c_timeout_us"] = original
+
+    def test_i2c_recover_clocks_out_of_range_raises(self):
+        """system.i2c_recover_clocks outside 8..16 raises."""
+        import config
+
+        original = config.DEVICE_CONFIG["system"]["i2c_recover_clocks"]
+        try:
+            for bad in (7, 17):
+                config.DEVICE_CONFIG["system"]["i2c_recover_clocks"] = bad
+                with pytest.raises(ValueError, match="i2c_recover_clocks"):
+                    config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["system"]["i2c_recover_clocks"] = original
+
+    def test_missing_i2c_recover_key_raises(self):
+        """A missing shared-I2C key raises (required-keys coverage)."""
+        import config
+
+        original = config.DEVICE_CONFIG["system"]["i2c_recover_on_error"]
+        del config.DEVICE_CONFIG["system"]["i2c_recover_on_error"]
+        try:
+            with pytest.raises(ValueError, match="Missing config key"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["system"]["i2c_recover_on_error"] = original
 
     def test_zero_sd_mount_retries_raises(self):
         """system.sd_mount_retries = 0 raises ValueError."""
@@ -1479,11 +1560,11 @@ class TestDiagnosticsConfig:
 
         assert isinstance(DEVICE_CONFIG["diagnostics"]["mem_trend_log"], bool)
 
-    def test_metrics_log_is_bool_and_on_by_default(self):
-        """diagnostics.metrics_log defaults to True (on by default)."""
+    def test_metrics_log_off_by_default(self):
+        """diagnostics.metrics_log defaults to False (heap headroom for the I2C error path)."""
         from config import DEVICE_CONFIG
 
-        assert DEVICE_CONFIG["diagnostics"]["metrics_log"] is True
+        assert DEVICE_CONFIG["diagnostics"]["metrics_log"] is False
 
     def test_metrics_log_non_bool_raises(self):
         """diagnostics.metrics_log with non-bool raises ValueError."""

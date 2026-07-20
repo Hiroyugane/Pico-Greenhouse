@@ -104,6 +104,7 @@ class OLEDDisplay:
         startup_banner_s: float = 2.0,
         vram_clear_delay_s: float = 0.05,
         invert_delay_s: float = 0.1,
+        max_render_errors: int = 5,
         co2_logger=None,
         soil_logger=None,
         heater=None,
@@ -145,6 +146,11 @@ class OLEDDisplay:
         self._startup_banner_s = startup_banner_s
         self._vram_clear_delay_s = vram_clear_delay_s
         self._invert_delay_s = invert_delay_s
+        # Runtime self-disable: after this many consecutive render (I2C)
+        # failures, stop rendering so a dead/marginal display can't keep
+        # hammering the shared bus or starve the watchdog (2026-07-19 guard).
+        self._max_render_errors = max_render_errors
+        self._render_error_count = 0
 
         # Debug sub-menu config + state
         self._debug_confirm_timeout_ms = int(debug_confirm_timeout_s * 1000)
@@ -547,11 +553,24 @@ class OLEDDisplay:
                 self._logger.debug("OLEDDisplay", f"rendering menu={menu}")
             getattr(self, f"_render_{menu}")()
             self._oled.show()
+            self._render_error_count = 0  # a clean render clears the fault streak
         except Exception as e:
             if self._logger:
                 self._logger.error("OLEDDisplay", f"Render error (menu={MENUS[self.current_menu]}): {e}")
             else:
                 print(f"[OLEDDisplay] Render error: {e}")
+            # A marginal/stuck shared I2C bus surfaces here as ETIMEDOUT. After
+            # too many in a row, disable the display so refresh_loop no-ops and
+            # never touches the bus again (no bus I/O on disable — it may be
+            # wedged). The boot-time `enabled` flag is the hard off-switch.
+            self._render_error_count += 1
+            if self._max_render_errors and self._render_error_count >= self._max_render_errors:
+                self.display_on = False
+                if self._logger:
+                    self._logger.warning(
+                        "OLEDDisplay",
+                        f"auto-disabled after {self._render_error_count} consecutive render errors",
+                    )
 
     async def refresh_loop(self) -> None:
         """

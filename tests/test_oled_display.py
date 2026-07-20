@@ -202,6 +202,37 @@ class TestOLEDDisplayRender:
         oled_display._oled.fill = Mock(side_effect=OSError("SSD1306 error"))
         oled_display.render()  # should not raise
 
+    def test_render_errors_auto_disable_after_threshold(self, oled_display):
+        """After max_render_errors consecutive I2C errors, the display self-disables."""
+        oled_display._max_render_errors = 3
+        oled_display._oled.fill = Mock(side_effect=OSError("ETIMEDOUT"))
+        oled_display.render()
+        oled_display.render()
+        assert oled_display.display_on is True  # not yet at the threshold
+        oled_display.render()
+        assert oled_display.display_on is False  # third consecutive error disables
+
+    def test_render_success_resets_error_streak(self, oled_display):
+        """A clean render clears the consecutive-error count so it never disables."""
+        oled_display._max_render_errors = 3
+        oled_display._oled.fill = Mock(side_effect=OSError("ETIMEDOUT"))
+        oled_display.render()  # count -> 1
+        oled_display.render()  # count -> 2
+        oled_display._oled.fill = Mock()  # bus recovered; renders cleanly
+        oled_display.render()  # success -> streak reset
+        assert oled_display._render_error_count == 0
+        assert oled_display.display_on is True
+
+    def test_auto_disabled_render_is_noop(self, oled_display):
+        """Once auto-disabled, render() no longer touches the (possibly wedged) bus."""
+        oled_display._max_render_errors = 1
+        oled_display._oled.fill = Mock(side_effect=OSError("ETIMEDOUT"))
+        oled_display.render()  # single error -> disabled
+        assert oled_display.display_on is False
+        oled_display._oled.show = Mock()
+        oled_display.render()
+        oled_display._oled.show.assert_not_called()
+
     @pytest.mark.parametrize("menu", MENUS)
     def test_all_menus_render_without_exception(self, oled_display, menu):
         """Every menu renderer should complete without raising."""

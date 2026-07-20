@@ -903,6 +903,7 @@ async def main():
                 startup_banner_s=display_config.get("startup_banner_s", 2.0),
                 vram_clear_delay_s=display_config.get("vram_clear_delay_s", 0.05),
                 invert_delay_s=display_config.get("invert_delay_s", 0.1),
+                max_render_errors=display_config.get("max_render_errors", 5),
                 debug_confirm_timeout_s=debug_cfg.get("confirm_timeout_s", 8),
                 debug_status_show_ms=debug_cfg.get("status_show_ms", 3000),
                 debug_test_heater_s=debug_cfg.get("test_heater_s", 5),

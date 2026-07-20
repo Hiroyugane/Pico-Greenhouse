@@ -718,6 +718,16 @@ GND-return diodes) ·
   within spec at the device end after RC settling.
 - Also a candidate suspect for any "MCP4725 doesn't respond" or
   "OLED tears" symptoms seen on the current PCB.
+- **CONFIRMED 2026-07-19 — this predicted fault realized in the field.**
+  A shared-bus `[Errno 110] ETIMEDOUT` on the OLED 1 KB framebuffer render
+  watchdog-looped the board for ~9.5 h (short transfers passed, the long
+  render didn't — exactly the marginal-rise-time signature above). See
+  [chat-log 2026-07-20](../notes/chat-log.md#2026-07-20--ic-etimedout-bootloop--root-cause--firmware-hardening).
+  Firmware now bounds + recovers the bus (`lib/i2c_guard.py`) and dropped it
+  to **100 kHz as an interim mitigation** (`config.py system.i2c_freq`), but
+  this 2.2 kΩ rework is the real fix and is **required before restoring
+  400 kHz**. Acceptance:
+  [hw-test-log I2C.1](../test/hw-test-log.md#i2c1--the-board-survives-a-bad-bus-instead-of-bootlooping).
 
 ### [x] Brownout supervisor on Pico RUN line
 

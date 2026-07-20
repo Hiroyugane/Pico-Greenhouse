@@ -555,7 +555,7 @@ DEVICE_CONFIG = {
         "i2c_freq": 100000,
         # Shared-I2C fault resilience (RecoverableI2C, lib/i2c_guard.py).
         "i2c_use_soft": True,  # Use machine.SoftI2C (bounded timeout + recoverable); False = raw hardware I2C
-        "i2c_timeout_us": 50000,  # Per-transfer SoftI2C timeout (us); bounds a stuck-bus block far under watchdog_timeout_ms
+        "i2c_timeout_us": 50000,  # Per-transfer SoftI2C timeout (us); bounds a stuck-bus block well under the watchdog
         "i2c_recover_on_error": True,  # On OSError, unstick the bus (pulse SCL) + rebuild + retry once
         "i2c_recover_clocks": 9,  # SCL pulses to clock a wedged slave out (9 = one byte + ACK)
         "sd_power_up_ms": 1500,  # SD card power-up stabilization delay (ms); cheap cards may need >1s cold

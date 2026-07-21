@@ -1,0 +1,8 @@
+# Binary artifacts — never run through EOL conversion. core.autocrlf would
+# otherwise rewrite LF bytes inside these files on checkout and corrupt them.
+*.pdf binary
+*.pbix binary
+*.png binary
+*.jpg binary
+*.mpy binary
+*.uf2 binary

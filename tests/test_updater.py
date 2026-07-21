@@ -398,6 +398,20 @@ class TestRunPendingUpdate:
 class TestUpdaterErrorPaths:
     """Cover the failure / fallback branches that boot-time relies on."""
 
+    def test_log_never_raises(self, updater_factory):
+        """log() is the sink the boot hook reports its own failures through.
+
+        It must swallow everything, including a failure while formatting the
+        line itself — otherwise the reporting path becomes the crash path.
+        """
+
+        class _Unrenderable:
+            def __str__(self):
+                raise MemoryError("memory allocation failed")
+
+        u = updater_factory()
+        u.log("error", _Unrenderable(), detail="boom")  # no exception
+
     def test_load_manifest_missing_required_keys(self, updater_factory, sd_root):
         from lib.updater import UpdateError
 
@@ -787,6 +801,71 @@ class TestRunPendingUpdateBranches:
         assert reset_called == [True]
         log_text = (sd_root / "updates.log").read_text()
         assert "apply_ok" in log_text and "finalize warn" in log_text
+
+    def test_escaped_exception_logs_error_and_returns(self, sd_root, good_payload, monkeypatch):
+        """A non-UpdateError escaping verify must still produce a terminal log line.
+
+        Regression guard for the 2026-07-21 silent-OTA fault: a MemoryError out
+        of _hash_file propagated past run_pending_update into main.py's
+        print()-only handler, so /sd/logs/updates.log held `payload detected`
+        and nothing else — indistinguishable from the updater never running.
+        """
+        from lib import updater as upd_mod
+
+        def boom(self, abs_path):
+            raise MemoryError("memory allocation failed")
+
+        monkeypatch.setattr(upd_mod.Updater, "_hash_file", boom)
+        cfg = self._base_cfg(sd_root)
+        reset_called = []
+        monkeypatch.setattr("machine.reset", lambda: reset_called.append(True), raising=False)
+
+        upd_mod.run_pending_update(cfg, self._HW())
+
+        assert reset_called == []
+        log_text = (sd_root / "updates.log").read_text()
+        assert "error" in log_text
+        assert "MemoryError" in log_text
+        assert "2026-05-15.1" in log_text  # version survives into the catch-all line
+        # Payload left in place so the operator can retry after fixing the cause.
+        assert (sd_root / "update" / "manifest.json").exists()
+
+    def test_escaped_exception_before_version_known_logs_error(self, sd_root, good_payload, monkeypatch):
+        """An escape during load_manifest logs `error` with an unknown version."""
+        from lib import updater as upd_mod
+
+        def boom(self):
+            raise MemoryError("memory allocation failed")
+
+        monkeypatch.setattr(upd_mod.Updater, "load_manifest", boom)
+        cfg = self._base_cfg(sd_root)
+        monkeypatch.setattr("machine.reset", lambda: None, raising=False)
+
+        upd_mod.run_pending_update(cfg, self._HW())
+
+        log_text = (sd_root / "updates.log").read_text()
+        assert "error" in log_text and "MemoryError" in log_text
+
+    def test_escaped_exception_signals_failure_feedback(self, sd_root, good_payload, monkeypatch):
+        """The fail jingle plays for an escaped exception, as it does for verify_fail."""
+        from lib import updater as upd_mod
+
+        def boom(self, abs_path):
+            raise RuntimeError("bus wedged")
+
+        monkeypatch.setattr(upd_mod.Updater, "_hash_file", boom)
+        feedback = _RecordingFeedback()
+        monkeypatch.setattr(
+            "lib.updater_feedback.build_from_config",
+            lambda _cfg: feedback,
+            raising=False,
+        )
+        cfg = self._base_cfg(sd_root)
+        monkeypatch.setattr("machine.reset", lambda: None, raising=False)
+
+        upd_mod.run_pending_update(cfg, self._HW())
+
+        assert feedback.failure_calls == 1
 
     def test_missing_config_returns_silently(self, sd_root, monkeypatch):
         from lib import updater as upd_mod

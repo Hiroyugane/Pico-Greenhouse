@@ -273,10 +273,13 @@ async def main():
     try:
         run_pending_update(DEVICE_CONFIG, hardware, wdt)
     except Exception as e:
-        # Updater failures must never block normal boot. The updater
-        # logs its own diagnostics to /sd/logs/updates.log; live code is
-        # left in whatever state the apply loop reached.
-        print(f"[STARTUP] Updater raised (non-fatal): {e}")
+        # Updater failures must never block normal boot. The updater logs its
+        # own diagnostics to /sd/logs/updates.log (including an `error` line
+        # for anything that escapes its internal sequence); live code is left
+        # in whatever state the apply loop reached. Reaching HERE means even
+        # that failed, so tee into /boot.log too — a bare print() is invisible
+        # on a Pico running standalone with no USB serial attached.
+        boot_log.log(f"[STARTUP] Updater raised (non-fatal): {type(e).__name__}: {e}")
     wdt.feed()
 
     # Reclaim the updater bytecode: run_pending_update() runs exactly once at

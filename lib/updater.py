@@ -357,6 +357,16 @@ class Updater:
         os.rename(self.update_dir, dst)
 
     def log(self, status, version, detail=""):
+        # Whole body is best-effort: this is the sink the boot hook relies on
+        # to report its own failures, so it must never become the thing that
+        # raises. Even the line formatting can fail (a MemoryError, or a
+        # version object whose __str__ blows up).
+        try:
+            self._log(status, version, detail)
+        except Exception:
+            pass
+
+    def _log(self, status, version, detail=""):
         ts = _timestamp_iso()
         line = "%s\t%s\t%s\t%s" % (ts, status, version, detail)
         # Mirror to stdout so a Pico on USB serial still sees verify_fail
@@ -500,6 +510,100 @@ class Updater:
 # --- Boot-time entry point -----------------------------------------
 
 
+def _report_unhandled(updater, version, exc):
+    """Log an exception that escaped the update sequence.
+
+    Collects garbage first: the most likely escapee is a MemoryError, and the
+    log line itself has to allocate. Every write is best-effort — the point is
+    that the operator never again sees a payload detected with no follow-up.
+    """
+    try:
+        import gc
+
+        gc.collect()
+    except Exception:
+        pass
+    try:
+        detail = "%s: %s" % (type(exc).__name__, exc)
+    except Exception:
+        detail = "unhandled exception (detail unrenderable)"
+    updater.log("error", version, detail=detail[:240])
+
+
+def _drive_pending_update(updater, signal_failure, version_out):
+    """Run load -> verify -> apply -> finalize for an already-detected payload.
+
+    Returns True when the apply succeeded and the caller should reset the
+    board, False for every handled outcome (verify failure, apply failure,
+    already-applied short-circuit). Handled outcomes log themselves.
+
+    ``version_out`` is a one-element list the caller reads when an *unhandled*
+    exception escapes, so its catch-all log line still names the version.
+    """
+    try:
+        manifest = updater.load_manifest()
+    except UpdateError as e:
+        updater.log("verify_fail", "?", detail="load_manifest: %s" % e)
+        signal_failure()
+        return False
+
+    version = str(manifest.get("version", "?"))
+    version_out[0] = version
+    errors = updater.verify_payload(manifest)
+    if errors:
+        # Keep log line bounded so a long error list can't blow the file.
+        detail = "; ".join(errors)
+        if len(detail) > 240:
+            detail = detail[:237] + "..."
+        updater.log("verify_fail", version, detail=detail)
+        signal_failure()
+        return False
+
+    # Short-circuit: payload content already on flash. Skip the apply (no
+    # flash writes), still finalize so the trigger is consumed, play the
+    # noop jingle, and let the boot continue without a reset.
+    if updater.is_already_applied(manifest):
+        try:
+            updater.finalize(manifest)
+        except Exception as e:
+            updater.log("noop", version, detail="finalize warn: %s" % str(e)[:200])
+        else:
+            updater.log("noop", version, detail="already up to date; files=%d" % len(manifest.get("files", [])))
+        if updater.feedback is not None:
+            try:
+                updater.feedback.already_applied()
+            except Exception:
+                pass
+        return False
+
+    try:
+        updater.apply(manifest)
+    except UpdateError as e:
+        updater.log("apply_fail", version, detail=str(e)[:240])
+        signal_failure()
+        return False
+
+    try:
+        updater.finalize(manifest)
+    except Exception as e:
+        # Apply already succeeded; finalize failure leaves the trigger in
+        # place but the new code is live. Log it and proceed to reset so
+        # the next boot sees applied code; the operator can clean up
+        # /sd/ota/pending manually.
+        updater.log("apply_ok", version, detail="finalize warn: %s" % str(e)[:200])
+    else:
+        updater.log("apply_ok", version, detail="files=%d" % len(manifest.get("files", [])))
+
+    # Apply succeeded — play the success jingle before resetting so the
+    # operator hears confirmation while the Pico reboots into the new code.
+    if updater.feedback is not None:
+        try:
+            updater.feedback.success()
+        except Exception:
+            pass
+    return True
+
+
 def run_pending_update(config, hardware, wdt=None):
     """
     Boot-time hook called from main.py BEFORE EventLogger init.
@@ -511,6 +615,11 @@ def run_pending_update(config, hardware, wdt=None):
     When config["updater_feedback"]["enabled"] is True and a pending payload
     is present, a loading-screen LED chase + buzzer ticks run during verify
     and apply, then a distinct jingle plays for success or failure.
+
+    Once a payload is detected, this function always writes a terminal log
+    line — ``verify_fail`` / ``apply_fail`` / ``apply_ok`` / ``noop``, or
+    ``error`` when an unexpected exception escapes the sequence. A lone
+    ``start`` line with nothing after it is a bug, not a diagnosis.
     """
     upd_cfg = config.get("updater", {}) if isinstance(config, dict) else {}
     if not upd_cfg.get("enabled", False):
@@ -576,66 +685,20 @@ def run_pending_update(config, hardware, wdt=None):
     else:
         updater.log("start", "?", detail="payload detected")
 
+    # Anything that escapes the sequence below used to propagate to main.py's
+    # print()-only handler, which is invisible on a standalone Pico: the trail
+    # stopped dead at "payload detected", no jingle, payload left in place.
+    # Catch it here instead, where the updater's three log sinks still exist.
+    version_out = ["?"]
     try:
-        manifest = updater.load_manifest()
-    except UpdateError as e:
-        updater.log("verify_fail", "?", detail="load_manifest: %s" % e)
-        _signal_failure()
-        return
-
-    version = str(manifest.get("version", "?"))
-    errors = updater.verify_payload(manifest)
-    if errors:
-        # Keep log line bounded so a long error list can't blow the file.
-        detail = "; ".join(errors)
-        if len(detail) > 240:
-            detail = detail[:237] + "..."
-        updater.log("verify_fail", version, detail=detail)
-        _signal_failure()
-        return
-
-    # Short-circuit: payload content already on flash. Skip the apply (no
-    # flash writes), still finalize so the trigger is consumed, play the
-    # noop jingle, and let the boot continue without a reset.
-    if updater.is_already_applied(manifest):
-        try:
-            updater.finalize(manifest)
-        except Exception as e:
-            updater.log("noop", version, detail="finalize warn: %s" % str(e)[:200])
-        else:
-            updater.log("noop", version, detail="already up to date; files=%d" % len(manifest.get("files", [])))
-        if feedback is not None:
-            try:
-                feedback.already_applied()
-            except Exception:
-                pass
-        return
-
-    try:
-        updater.apply(manifest)
-    except UpdateError as e:
-        updater.log("apply_fail", version, detail=str(e)[:240])
-        _signal_failure()
-        return
-
-    try:
-        updater.finalize(manifest)
+        should_reset = _drive_pending_update(updater, _signal_failure, version_out)
     except Exception as e:
-        # Apply already succeeded; finalize failure leaves the trigger in
-        # place but the new code is live. Log it and proceed to reset so
-        # the next boot sees applied code; the operator can clean up
-        # /sd/ota/pending manually.
-        updater.log("apply_ok", version, detail="finalize warn: %s" % str(e)[:200])
-    else:
-        updater.log("apply_ok", version, detail="files=%d" % len(manifest.get("files", [])))
+        _report_unhandled(updater, version_out[0], e)
+        _signal_failure()
+        return
 
-    # Apply succeeded — play the success jingle before resetting so the
-    # operator hears confirmation while the Pico reboots into the new code.
-    if feedback is not None:
-        try:
-            feedback.success()
-        except Exception:
-            pass
+    if not should_reset:
+        return
 
     import machine
 

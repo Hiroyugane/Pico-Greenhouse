@@ -133,10 +133,51 @@ class TestEmergencyLatch:
     def test_latch_enters_and_holds_safe_state(self):
         alarms = []
         engine, adapters, names = _engine(temp=30.0, minutes=720, alarm=alarms.append)
-        engine.tick(now_s=0.0)
+        # latch.enter_ticks (3) consecutive ticks over the edge before it fires.
+        for i in range(3):
+            engine.tick(now_s=float(i))
         assert engine._arb.latched is True
         assert "latch" in alarms
         assert _adapter(adapters, names, "exhaust").value == 100.0  # safe_state
+
+    def test_latch_waits_for_enter_ticks(self):
+        # A transient over the latch edge (shorter than enter_ticks) must not
+        # shut the system down — one bad sensor read or an open door.
+        engine, adapters, names = _engine(temp=30.0, minutes=720)
+        engine.tick(now_s=0.0)
+        engine.tick(now_s=1.0)
+        assert engine._arb.latched is False
+
+    def test_dry_startup_does_not_latch_and_humidifies(self):
+        # Regression (2026-07-21): a tent brought up from ambient reads far
+        # below the humidity at_0 anchor and above the CO2 at_100 anchor, i.e.
+        # severity 50 on both. That is the normal startup point, not an
+        # emergency: before the escalation gate it latched the safe-state
+        # vector on tick 1 with the humidifier forced off, so the deviation
+        # could never recover and no relay ever switched again.
+        engine, adapters, names = _engine(temp=22.6, hum=60.0, co2=1600.0, minutes=720)
+        for i in range(10):
+            engine.tick(now_s=float(i * 30))
+        state = engine.get_state()
+        assert state["deviations"][1] == 0.0  # bone dry
+        assert state["deviations"][2] == 100.0  # stale air
+        assert state["global_severity"] == 50.0
+        assert state["escalation_severity"] == 0.0  # neither direction escalates
+        assert engine._arb.latched is False
+        assert engine._arb.emergency_active is False
+        assert _adapter(adapters, names, "humidifier").active is True
+        assert _adapter(adapters, names, "exhaust").value > 0.0
+
+    def test_hot_latch_leaves_cooler_free_to_run(self):
+        # The latch safe-state pins heat/humidity sources off but leaves the
+        # cooler on its organic command, so the condition that latched can
+        # actually clear.
+        engine, adapters, names = _engine(temp=30.0, minutes=720)
+        for i in range(3):
+            engine.tick(now_s=float(i))
+        assert engine._arb.latched is True
+        assert _adapter(adapters, names, "heater").value == 0.0
+        assert _adapter(adapters, names, "cooler").value > 0.0
 
 
 class TestExternalGate:

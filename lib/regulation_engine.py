@@ -270,6 +270,9 @@ class RegulationEngine:
         return {
             "blend": self._b,
             "global_severity": self._gmax,
+            # Severity restricted to the directions allowed to escalate — this,
+            # not global_severity, is what fires emergency/latch.
+            "escalation_severity": self._arb.escalation_severity,
             "band": self._arb.band_index(self._gmax),
             "latched": self._arb.latched,
             "emergency": self._arb.emergency_active,

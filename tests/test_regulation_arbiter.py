@@ -19,6 +19,8 @@ def _arb(
     release_ticks=3,
     min_s=90.0,
     tick_s=30.0,
+    escalation=None,
+    latch_enter_ticks=1,
 ):
     from lib.regulation_arbiter import RegulationArbiter
 
@@ -36,6 +38,8 @@ def _arb(
         release_ticks,
         min_s,
         tick_s,
+        escalation=escalation,
+        latch_enter_ticks=latch_enter_ticks,
     )
 
 
@@ -168,6 +172,87 @@ class TestLatch:
         _run(arb, [100.0], [45.0, 0.0, 0.0])  # spike resets counter
         out, _ = _run(arb, [100.0], [0.0, 0.0, 0.0])  # calm 1 again — not yet 2 consecutive
         assert arb.latched is True
+
+
+HIGH_ONLY = ((True, False), (True, False), (False, False))
+
+
+class TestEscalationGate:
+    def test_low_side_saturation_does_not_latch(self):
+        # dev 0 on dim 0 = severity 50, but the low direction is gated off.
+        arb = _arb(safe_state=[5.0], escalation=HIGH_ONLY)
+        out, gmax = _run(arb, [100.0], [50.0, 0.0, 0.0], dev=[0.0, 50.0, 50.0])
+        assert gmax == 50.0  # the room really is that far from ideal…
+        assert arb.escalation_severity == 0.0  # …but not in an escalating direction
+        assert arb.latched is False
+        assert arb.emergency_active is False
+        # Organic command, slew-limited at the fast rate (the regulator's own
+        # severity is still 50, so floors/slew keep reacting) — not the safe state.
+        assert out[0] == 40.0
+
+    def test_high_side_saturation_still_latches(self):
+        arb = _arb(safe_state=[5.0], escalation=HIGH_ONLY)
+        out, _ = _run(arb, [100.0], [50.0, 0.0, 0.0], dev=[100.0, 50.0, 50.0])
+        assert arb.escalation_severity == 50.0
+        assert arb.latched is True
+        assert out[0] == 5.0
+
+    def test_fully_gated_dimension_never_escalates(self):
+        # dim 2 (CO2) is gated off in both directions.
+        arb = _arb(escalation=HIGH_ONLY)
+        _run(arb, [0.0], [0.0, 0.0, 50.0], dev=[50.0, 50.0, 100.0])
+        assert arb.escalation_severity == 0.0
+        assert arb.latched is False
+
+    def test_release_gate_ignores_gated_directions(self):
+        # Latched by heat, then the room goes cold and dry (global severity
+        # stays 50). The release gate must look at the escalating severity
+        # only, or the latch could never lift.
+        arb = _arb(
+            safe_state=[5.0], escalation=HIGH_ONLY, release_max=30.0, release_ticks=2, min_s=0.0, tick_s=30.0
+        )
+        _run(arb, [0.0], [50.0, 0.0, 0.0], dev=[100.0, 50.0, 50.0])  # entry (hot)
+        _run(arb, [0.0], [50.0, 50.0, 0.0], dev=[0.0, 0.0, 50.0])  # cold + dry
+        _run(arb, [0.0], [50.0, 50.0, 0.0], dev=[0.0, 0.0, 50.0])
+        assert arb.latched is False
+
+
+class TestLatchEnterTicks:
+    def test_latch_needs_consecutive_ticks(self):
+        arb = _arb(safe_state=[5.0], latch_enter_ticks=3)
+        _run(arb, [100.0], [50.0, 0.0, 0.0])
+        assert arb.latched is False
+        _run(arb, [100.0], [50.0, 0.0, 0.0])
+        assert arb.latched is False
+        _run(arb, [100.0], [50.0, 0.0, 0.0])
+        assert arb.latched is True
+
+    def test_enter_counter_resets_on_a_calm_tick(self):
+        arb = _arb(safe_state=[5.0], latch_enter_ticks=3)
+        _run(arb, [100.0], [50.0, 0.0, 0.0])
+        _run(arb, [100.0], [50.0, 0.0, 0.0])
+        _run(arb, [100.0], [0.0, 0.0, 0.0])  # transient over — counter resets
+        _run(arb, [100.0], [50.0, 0.0, 0.0])
+        _run(arb, [100.0], [50.0, 0.0, 0.0])
+        assert arb.latched is False
+
+
+class TestFreeForcedValues:
+    def test_none_emergency_value_leaves_regulator_free(self):
+        arb = _arb(n=2, emergency=[None, 0.0], slew_fast=[100.0, 100.0])
+        out, _ = _run(arb, [80.0, 80.0], [45.0, 0.0, 0.0], n=2)
+        assert arb.emergency_active is True
+        assert out[0] == 80.0  # free — keeps its organic command
+        assert out[1] == 0.0  # forced
+
+    def test_none_safe_state_leaves_regulator_free(self):
+        arb = _arb(
+            n=2, emergency=[None, None], safe_state=[None, 5.0], slew_fast=[100.0, 100.0]
+        )
+        out, _ = _run(arb, [80.0, 80.0], [50.0, 0.0, 0.0], n=2)
+        assert arb.latched is True
+        assert out[0] == 80.0
+        assert out[1] == 5.0
 
 
 class TestBandIndex:

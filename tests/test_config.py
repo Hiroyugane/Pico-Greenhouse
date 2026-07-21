@@ -1971,6 +1971,107 @@ class TestRegulationConfig:
         finally:
             self._restore(snap)
 
+    def test_regulation_latch_enter_ticks_zero_raises(self):
+        """latch.enter_ticks < 1 raises ValueError."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["latch"]["enter_ticks"] = 0
+        try:
+            with pytest.raises(ValueError, match="enter_ticks"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_regulation_latch_enter_ticks_default_debounces(self):
+        """The shipped latch waits for a sustained condition, not one bad read."""
+        from config import DEVICE_CONFIG
+
+        assert DEVICE_CONFIG["regulation"]["latch"]["enter_ticks"] >= 2
+
+    def test_regulation_escalation_low_side_off_by_default(self):
+        """Being far BELOW ideal is the startup case, never an emergency.
+
+        Regression guard for 2026-07-21: with the low side escalating, a tent
+        brought up from ambient latched the safe-state vector on the first tick
+        and could never recover (the humidifier was forced off).
+        """
+        from config import DEVICE_CONFIG
+
+        esc = DEVICE_CONFIG["regulation"]["escalation"]
+        assert esc["temp"]["low"] is False
+        assert esc["humidity"]["low"] is False
+        assert esc["co2"] == {"high": False, "low": False}
+        assert esc["temp"]["high"] is True
+        assert esc["humidity"]["high"] is True
+
+    def test_regulation_escalation_missing_dimension_raises(self):
+        """escalation must cover exactly the regulation dimensions."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        del config.DEVICE_CONFIG["regulation"]["escalation"]["co2"]
+        try:
+            with pytest.raises(ValueError, match="escalation"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_regulation_escalation_non_bool_side_raises(self):
+        """escalation.<dim>.<side> must be a bool."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["escalation"]["temp"]["high"] = 1
+        try:
+            with pytest.raises(ValueError, match="escalation.temp.high"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_regulation_safe_state_accepts_none(self):
+        """None = 'free': the forced vector leaves that regulator organic."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["regulators"]["exhaust"]["safe_state"] = None
+        try:
+            assert config.validate_config() is True
+        finally:
+            self._restore(snap)
+
+    def test_regulation_safe_state_out_of_range_raises(self):
+        """A non-None safe_state outside 0-100 still raises."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["regulators"]["exhaust"]["safe_state"] = 120.0
+        try:
+            with pytest.raises(ValueError, match="safe_state"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_regulation_safe_state_missing_raises(self):
+        """Omitting safe_state entirely is still an error (None must be explicit)."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        del config.DEVICE_CONFIG["regulation"]["regulators"]["exhaust"]["safe_state"]
+        try:
+            with pytest.raises(ValueError, match="safe_state"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_regulation_cooler_free_in_forced_vectors(self):
+        """The cooler is the corrective actuator for the only escalating side."""
+        from config import DEVICE_CONFIG
+
+        cooler = DEVICE_CONFIG["regulation"]["regulators"]["cooler"]
+        assert cooler["emergency_value"] is None
+        assert cooler["safe_state"] is None
+
     def test_regulation_external_min_factor_out_of_range_raises(self):
         """external_sensor.min_factor outside 0-1 raises ValueError."""
         import config

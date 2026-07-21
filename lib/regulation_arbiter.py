@@ -7,15 +7,41 @@
 #   1. slew-limit the organic output vs the last command,
 #   2. floors        (regulator severity >= minor edge)   — forced,
 #   3. conflicts     (global severity >= conflict edge)    — forced,
-#   4. emergency     (any dim severity >= emergency edge)  — forced,
-#   5. latch         (any dim severity >= latch edge)      — forced + held.
+#   4. emergency     (escalating severity >= emergency edge)  — forced,
+#   5. latch         (escalating severity >= latch edge)      — forced + held.
 #
 # Steps 2-5 write forced values AFTER the slew limiter and are NEVER
 # slew-limited, so a mold-risk cut or a shutdown lands in a single tick. The
 # per-tick path allocates nothing: all vectors are caller-owned or preallocated
 # arrays addressed by index.
+#
+# Steps 4-5 use the ESCALATING severity, not the global one: only deviation
+# directions marked in reg_cfg["escalation"] (by default the hazardous high
+# side — too hot, too wet) may force the emergency/safe-state vectors. Severity
+# saturates at 50 as soon as a reading passes an outer anchor, which a tent
+# being brought up from ambient does routinely; escalating on that shut the
+# system down with the corrective actuators pinned off and no path back. Steps
+# 2-3 keep using the full severity, so being far from ideal still drives floors
+# and conflict rules — it just no longer counts as an emergency.
+#
+# A regulator whose emergency_value / safe_state is None is left "free" in that
+# forced vector: it keeps its arbitrated organic command, so the actuator that
+# resolves the condition can keep working while the latch is held.
 
 from array import array
+
+
+def _forced_vector(values):
+    """Split a forced vector into (float array, hold mask). None entry = free."""
+    vec = array("f", [0.0] * len(values))
+    hold = []
+    for i, v in enumerate(values):
+        if v is None:
+            hold.append(False)
+        else:
+            vec[i] = float(v)
+            hold.append(True)
+    return vec, tuple(hold)
 
 
 class RegulationArbiter:
@@ -35,6 +61,8 @@ class RegulationArbiter:
         latch_release_ticks,
         latch_min_s,
         tick_s,
+        escalation=None,
+        latch_enter_ticks=1,
     ):
         """All list/array inputs are indexed by regulator position.
 
@@ -43,19 +71,25 @@ class RegulationArbiter:
                 its band (empty tuple → band 0).
             band_edges: ascending severity edges; the minor/conflict/emergency/
                 latch thresholds are the last four.
-            slew_normal, slew_fast, floor, emergency, safe_state: per-regulator
-                float sequences.
+            slew_normal, slew_fast, floor: per-regulator float sequences.
+            emergency, safe_state: per-regulator forced values; a None entry
+                leaves that regulator free (organic command) in that vector.
             conflicts: parsed rules — see from_config for the compact shape.
             latch_release_max, latch_release_ticks, latch_min_s: release gate.
             tick_s: seconds per tick (for the latch minimum-time gate).
+            escalation: per-dimension (high, low) bool pairs deciding which
+                deviation directions may fire emergency/latch. None = every
+                direction escalates (the pre-gating behaviour).
+            latch_enter_ticks: consecutive ticks the latch condition must hold
+                before the latch fires.
         """
         self._n = len(reg_dims)
         self._reg_dims = reg_dims
         self._slew_normal = slew_normal
         self._slew_fast = slew_fast
         self._floor = floor
-        self._emergency = emergency
-        self._safe_state = safe_state
+        self._emergency, self._emergency_hold = _forced_vector(emergency)
+        self._safe_state, self._safe_hold = _forced_vector(safe_state)
         self._conflicts = conflicts
         self._edges = tuple(band_edges)
         # Named thresholds derived from the last four edges (config guarantees
@@ -68,6 +102,16 @@ class RegulationArbiter:
         self._latch_release_ticks = latch_release_ticks
         self._latch_min_s = latch_min_s
         self._tick_s = tick_s
+        self._latch_enter_ticks = latch_enter_ticks
+
+        # Per-dimension direction gates, split into two tuples so the hot path
+        # indexes instead of unpacking. None → every direction escalates.
+        if escalation is None:
+            self._esc_high = None
+            self._esc_low = None
+        else:
+            self._esc_high = tuple(bool(pair[0]) for pair in escalation)
+            self._esc_low = tuple(bool(pair[1]) for pair in escalation)
 
         self._last = array("f", [0.0] * self._n)
         self._regsev = array("f", [0.0] * self._n)
@@ -78,7 +122,9 @@ class RegulationArbiter:
         self.just_entered_emergency = False
         self.just_entered_latch = False
         self.just_released_latch = False
+        self.escalation_severity = 0.0
         self._latch_ticks = 0
+        self._enter_counter = 0
         self._release_counter = 0
 
     @classmethod
@@ -97,8 +143,10 @@ class RegulationArbiter:
         slew_normal = array("f", [0.0] * len(reg_names))
         slew_fast = array("f", [0.0] * len(reg_names))
         floor = array("f", [0.0] * len(reg_names))
-        emergency = array("f", [0.0] * len(reg_names))
-        safe_state = array("f", [0.0] * len(reg_names))
+        # Plain lists: a None entry ("free") cannot live in a float array; the
+        # constructor splits them into a float array plus a hold mask.
+        emergency = [0.0] * len(reg_names)
+        safe_state = [0.0] * len(reg_names)
         for i, name in enumerate(reg_names):
             r = regulators[name]
             driven = r["driven"]
@@ -114,8 +162,10 @@ class RegulationArbiter:
             slew_normal[i] = float(r["slew_normal"])
             slew_fast[i] = float(r["slew_fast"])
             floor[i] = float(r["floor"])
-            emergency[i] = float(r["emergency_value"])
-            safe_state[i] = float(r["safe_state"])
+            ev = r["emergency_value"]
+            ss = r["safe_state"]
+            emergency[i] = None if ev is None else float(ev)
+            safe_state[i] = None if ss is None else float(ss)
 
         reg_index = {name: i for i, name in enumerate(reg_names)}
         conflicts = []
@@ -126,6 +176,11 @@ class RegulationArbiter:
             force = tuple((reg_index[n], float(v)) for n, v in rule.get("force", {}).items())
             prefer = tuple((reg_index[n], float(v)) for n, v in rule.get("prefer", {}).items())
             conflicts.append((when, force, prefer))
+
+        esc_cfg = reg_cfg.get("escalation")
+        escalation = None
+        if esc_cfg is not None:
+            escalation = tuple((esc_cfg[d]["high"], esc_cfg[d]["low"]) for d in dim_order)
 
         latch = reg_cfg["latch"]
         return cls(
@@ -141,6 +196,8 @@ class RegulationArbiter:
             int(latch["release_ticks"]),
             float(latch["min_s"]),
             float(tick_s),
+            escalation=escalation,
+            latch_enter_ticks=int(latch.get("enter_ticks", 1)),
         )
 
     def band_index(self, sev):
@@ -178,6 +235,28 @@ class RegulationArbiter:
             if s > gmax:
                 gmax = s
 
+        # Escalating severity: the worst severity among the deviation
+        # directions allowed to escalate. Drives steps 4-5 (and the latch
+        # release gate) so a correctable direction — a tent still being
+        # brought up to spec — never forces a shutdown it cannot undo.
+        esc_high = self._esc_high
+        if esc_high is None:
+            emax = gmax
+        else:
+            esc_low = self._esc_low
+            emax = 0.0
+            for i in range(len(sev)):
+                d = dev[i]
+                if d > 50.0:
+                    allowed = esc_high[i]
+                elif d < 50.0:
+                    allowed = esc_low[i]
+                else:
+                    allowed = False
+                if allowed and sev[i] > emax:
+                    emax = sev[i]
+        self.escalation_severity = emax
+
         # 1. Slew limit (organic output only) + cache regulator severities.
         for i in range(n):
             rs = self._reg_severity(self._reg_dims[i], sev)
@@ -207,30 +286,41 @@ class RegulationArbiter:
                         if out[idx] < val:
                             out[idx] = val
 
-        # 4. Emergency (forced): any dim severity >= emergency edge.
+        # 4. Emergency (forced): any escalating dim severity >= emergency edge.
         self.just_entered_emergency = False
-        if gmax >= self._e_emerg:
+        if emax >= self._e_emerg:
+            hold = self._emergency_hold
             for i in range(n):
-                out[i] = self._emergency[i]
+                if hold[i]:
+                    out[i] = self._emergency[i]
             if not self.emergency_active:
                 self.just_entered_emergency = True
             self.emergency_active = True
         else:
             self.emergency_active = False
 
-        # 5. Latch (forced + held): any dim severity >= latch edge.
+        # 5. Latch (forced + held): any escalating dim severity >= latch edge,
+        # sustained for enter_ticks consecutive ticks.
         self.just_entered_latch = False
         self.just_released_latch = False
-        if not self.latched and gmax >= self._e_latch:
-            self.latched = True
-            self._latch_ticks = 0
-            self._release_counter = 0
-            self.just_entered_latch = True
+        if not self.latched:
+            if emax >= self._e_latch:
+                self._enter_counter += 1
+            else:
+                self._enter_counter = 0
+            if self._enter_counter >= self._latch_enter_ticks:
+                self.latched = True
+                self._latch_ticks = 0
+                self._enter_counter = 0
+                self._release_counter = 0
+                self.just_entered_latch = True
         if self.latched:
+            hold = self._safe_hold
             for i in range(n):
-                out[i] = self._safe_state[i]
+                if hold[i]:
+                    out[i] = self._safe_state[i]
             self._latch_ticks += 1
-            if gmax <= self._latch_release_max:
+            if emax <= self._latch_release_max:
                 self._release_counter += 1
             else:
                 self._release_counter = 0

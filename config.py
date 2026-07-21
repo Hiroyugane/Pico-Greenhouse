@@ -679,10 +679,35 @@ DEVICE_CONFIG = {
             "full_delta_rh": 10.0,
             "min_factor_rh": 0.4,
         },
-        # Latch (severity == 50): hold the safe-state vector until ALL
-        # severities <= release_max for release_ticks consecutive ticks AND
-        # min_s elapsed.
+        # Escalation gating — which deviation DIRECTIONS may escalate to the
+        # forced emergency / latch vectors.
+        #
+        # Severity is |d-50| and therefore saturates at 50 the moment a reading
+        # passes an outer anchor. A freshly set-up tent legitimately starts far
+        # from ideal (dry air, stale CO2), so ungated escalation latched the
+        # system into the safe-state vector on the first tick — with the very
+        # actuators that would fix it (humidifier, heater) forced off, so the
+        # severity could never fall back under release_max. Deadlock; see
+        # docs/notes/chat-log.md 2026-07-21.
+        #
+        # Only the hazardous HIGH side escalates: too hot cooks the culture and
+        # too wet invites bacterial blotch, and both run away without
+        # intervention. Too dry / too cold / any CO2 level are correctable
+        # conditions the surfaces drive toward ideal on their own — that is the
+        # normal startup case, not an emergency. Floors, conflict rules and the
+        # surfaces all still see the full ungated severity.
+        "escalation": {
+            "temp": {"high": True, "low": False},
+            "humidity": {"high": True, "low": False},
+            "co2": {"high": False, "low": False},
+        },
+        # Latch (escalating severity == 50): hold the safe-state vector until
+        # ALL severities <= release_max for release_ticks consecutive ticks AND
+        # min_s elapsed. enter_ticks requires the latch condition to persist
+        # that many consecutive ticks before it fires, so one bad sensor read or
+        # a door-open transient cannot shut the system down.
         "latch": {
+            "enter_ticks": 3,
             "release_max": 30,
             "release_ticks": 3,
             "min_s": 300,
@@ -853,8 +878,15 @@ DEVICE_CONFIG = {
                 "slew_normal": 100.0,
                 "slew_fast": 100.0,
                 "floor": 0.0,
-                "emergency_value": 0.0,
-                "safe_state": 0.0,
+                # None = "free": the forced vectors leave the cooler on its
+                # organic surface output. Escalation only fires on the hot/wet
+                # side, where the cooler is the corrective actuator — pinning it
+                # to 0 there turned the air conditioner OFF during a heat
+                # emergency and left the latch with no way to release. Free
+                # cannot overcool either: the surface commands 0 once the room
+                # is no longer hot.
+                "emergency_value": None,
+                "safe_state": None,
             },
             "humidifier": {
                 "driven": "surface",
@@ -1188,12 +1220,26 @@ def _validate_regulation(reg_cfg, pins_cfg, top_mode):
         if not isinstance(v, (int, float)) or isinstance(v, bool) or not (0 <= v <= 1):
             raise ValueError("regulation.external_sensor.{} must be 0-1".format(key))
 
+    esc = reg_cfg.get("escalation")
+    if not isinstance(esc, dict) or set(esc) != set(_REG_DIMENSIONS):
+        raise ValueError("regulation.escalation must have exactly the keys {}".format(_REG_DIMENSIONS))
+    for dim in _REG_DIMENSIONS:
+        side_cfg = esc[dim]
+        if not isinstance(side_cfg, dict) or set(side_cfg) != {"high", "low"}:
+            raise ValueError("regulation.escalation.{} must have keys high/low".format(dim))
+        for side in ("high", "low"):
+            if not isinstance(side_cfg[side], bool):
+                raise ValueError("regulation.escalation.{}.{} must be a bool".format(dim, side))
+
     latch = reg_cfg.get("latch")
     if not isinstance(latch, dict):
         raise ValueError("regulation.latch must be a dict")
     rmax = latch.get("release_max")
     if not isinstance(rmax, (int, float)) or isinstance(rmax, bool) or not (0 <= rmax <= 50):
         raise ValueError("regulation.latch.release_max must be 0-50")
+    enter_ticks = latch.get("enter_ticks")
+    if not isinstance(enter_ticks, int) or isinstance(enter_ticks, bool) or enter_ticks < 1:
+        raise ValueError("regulation.latch.enter_ticks must be an int >= 1")
     if not isinstance(latch.get("release_ticks"), int) or latch["release_ticks"] < 1:
         raise ValueError("regulation.latch.release_ticks must be an int >= 1")
     if not isinstance(latch.get("min_s"), (int, float)) or latch["min_s"] < 0:
@@ -1239,10 +1285,19 @@ def _validate_regulation(reg_cfg, pins_cfg, top_mode):
             v = rcfg.get(key)
             if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
                 raise ValueError("{}.{} must be > 0".format(rctx, key))
-        for key in ("floor", "emergency_value", "safe_state"):
-            v = rcfg.get(key)
+        v = rcfg.get("floor")
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or not (0 <= v <= 100):
+            raise ValueError("{}.floor must be 0-100".format(rctx))
+        # emergency_value / safe_state accept None = "free" (the forced vector
+        # leaves this regulator on its arbitrated organic output).
+        for key in ("emergency_value", "safe_state"):
+            if key not in rcfg:
+                raise ValueError("Missing config key: {}.{}".format(rctx, key))
+            v = rcfg[key]
+            if v is None:
+                continue
             if not isinstance(v, (int, float)) or isinstance(v, bool) or not (0 <= v <= 100):
-                raise ValueError("{}.{} must be 0-100".format(rctx, key))
+                raise ValueError("{}.{} must be 0-100 or None".format(rctx, key))
         if driven == "surface":
             dims = rcfg.get("dims")
             if not isinstance(dims, list) or len(dims) != 2 or any(d not in _REG_DIMENSIONS for d in dims):

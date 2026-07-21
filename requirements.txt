@@ -5,3 +5,5 @@ pytest-mock>=3.12
 pytest-watch>=4.2
 pre-commit>=3.6
 ruff>=0.4
+# Tooling only (tools/gen_case_legend.py) — never imported by device code.
+reportlab>=4.0

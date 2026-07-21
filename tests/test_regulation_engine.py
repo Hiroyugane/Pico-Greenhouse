@@ -73,7 +73,7 @@ def _adapter(adapters, names, name):
 class TestCalm:
     def test_all_zero_at_night_ideal(self):
         # Night (b=0), everything at the night ideal → every command settles at 0.
-        engine, adapters, names = _engine(temp=23.0, hum=92.0, co2=800.0, minutes=0)
+        engine, adapters, names = _engine(temp=23.0, hum=92.0, co2=600.0, minutes=0)
         engine.tick(now_s=0.0)
         for ad in adapters:
             assert ad.value == 0.0

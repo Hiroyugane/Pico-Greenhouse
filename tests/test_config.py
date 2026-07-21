@@ -2072,6 +2072,16 @@ class TestRegulationConfig:
         assert cooler["emergency_value"] is None
         assert cooler["safe_state"] is None
 
+    def test_regulation_cubensis_co2_is_fruiting_grade(self):
+        """Fruiting needs continuous FAE — anchors well under colonization levels."""
+        from config import DEVICE_CONFIG
+
+        prof = DEVICE_CONFIG["regulation"]["profiles"]["cubensis"]
+        for phase in ("day", "night"):
+            co2 = prof[phase]["co2"]
+            assert co2["at_50"] <= 600.0
+            assert co2["at_100"] <= 1200.0
+
     def test_regulation_external_min_factor_out_of_range_raises(self):
         """external_sensor.min_factor outside 0-1 raises ValueError."""
         import config

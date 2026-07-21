@@ -718,17 +718,24 @@ DEVICE_CONFIG = {
         # Tune these first — they set what "50 = ideal" means per organism.
         "profiles": {
             # --- Mushrooms (fruiting chamber: high RH, low CO2, small day/night swing) ---
+            # cubensis = the FRUITING phase. Fruiting bodies need continuous
+            # fresh-air exchange: much above ~1000 ppm pins abort and stems
+            # stretch, so these anchors sit far below the inoculation /
+            # colonization figures (where several thousand ppm is desirable —
+            # add a separate profile when that phase gets automated). CO2 keeps
+            # the same tight anchors day and night; a fruiting chamber has no
+            # night-time CO2 tolerance the way a plant tent does.
             "cubensis": {
                 "category": "mushroom",
                 "day": {
                     "temp": {"at_0": 16.0, "at_50": 24.0, "at_100": 30.0},
                     "humidity": {"at_0": 75.0, "at_50": 92.0, "at_100": 100.0},
-                    "co2": {"at_0": 400.0, "at_50": 700.0, "at_100": 1400.0},
+                    "co2": {"at_0": 400.0, "at_50": 600.0, "at_100": 1200.0},
                 },
                 "night": {
                     "temp": {"at_0": 15.0, "at_50": 23.0, "at_100": 29.0},
                     "humidity": {"at_0": 75.0, "at_50": 92.0, "at_100": 100.0},
-                    "co2": {"at_0": 400.0, "at_50": 800.0, "at_100": 1600.0},
+                    "co2": {"at_0": 400.0, "at_50": 600.0, "at_100": 1200.0},
                 },
             },
             "oyster": {

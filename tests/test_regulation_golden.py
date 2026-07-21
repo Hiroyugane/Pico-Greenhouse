@@ -144,3 +144,83 @@ class TestScenarioTable:
         hot_inside = _run_scenario(temp=28.5, hum=92.0, co2=700.0)
         gated = _run_scenario(temp=28.5, hum=92.0, co2=700.0, external_read=lambda: (35.0, 50.0))
         assert gated["exhaust"] < hot_inside["exhaust"]
+
+
+class _Switch:
+    """Duck-typed on()/off() relay for driving a real adapter in a test."""
+
+    def __init__(self):
+        self.state = False
+
+    def on(self):
+        self.state = True
+
+    def off(self):
+        self.state = False
+
+
+def _humidifier_relay():
+    """Build the SHIPPED humidifier relay adapter (thresholds straight from config)."""
+    import config
+    from lib.regulation_adapters import RelayHysteresisAdapter
+
+    a = config.DEVICE_CONFIG["regulation"]["regulators"]["humidifier"]["adapter"]
+    switch = _Switch()
+    adapter = RelayHysteresisAdapter(
+        switch, a["on_above"], a["off_below"], a["min_on_s"], a["min_off_s"], name="humidifier"
+    )
+    return adapter, switch
+
+
+def _settle(adapter, cmd, t0):
+    """Apply a command twice, an hour apart, and return the settled time.
+
+    The first apply on a fresh adapter only seeds its min-cycle timestamp, so
+    any transition it wants is deferred; the second is past both dwell guards,
+    leaving hysteresis as the only thing deciding.
+    """
+    adapter.apply(cmd, t0)
+    adapter.apply(cmd, t0 + 3600.0)
+    return t0 + 3600.0
+
+
+def _relay_state_at(rh, temp=24.0, co2=700.0, start_on=False):
+    """Settle the shipped humidifier relay at one (temp, RH) point."""
+    adapter, switch = _humidifier_relay()
+    t = 0.0
+    if start_on:
+        t = _settle(adapter, 100.0, t)
+        assert switch.state is True, "precondition: relay should be on"
+    cmd = _run_scenario(temp=temp, hum=rh, co2=co2)["humidifier"]
+    _settle(adapter, cmd, t + 3600.0)
+    return switch.state
+
+
+class TestHumidifierRelayBand:
+    """The humidifier is a RELAY: the command must actually cross its thresholds.
+
+    Regression (2026-07-21): the operator reported T47 H16 C100 on the OLED —
+    23.5 C, RH 80.4%, 1200 ppm — with the humidifier not running. The surface
+    commanded 48.9 against an on_above of 60, so a chamber 12 RH points below
+    its 92% ideal sat in a dead zone and never misted. Asserting the *command*
+    alone could not catch that; these drive the shipped adapter.
+    """
+
+    def test_reported_dead_zone_now_energizes_relay(self):
+        assert _relay_state_at(rh=80.4, temp=23.5, co2=1200.0) is True
+
+    def test_relay_closes_below_the_calibrated_band(self):
+        # Band is RH 88 (close) .. 91 (open) at the ideal temperature.
+        assert _relay_state_at(rh=87.0) is True
+
+    def test_relay_opens_above_the_calibrated_band(self):
+        assert _relay_state_at(rh=92.0, start_on=True) is False
+
+    def test_relay_holds_inside_the_band(self):
+        # Between the thresholds the relay keeps whatever state it had — that
+        # is the hysteresis, and it must not collapse to a single switch point.
+        assert _relay_state_at(rh=89.5, start_on=True) is True
+        assert _relay_state_at(rh=89.5, start_on=False) is False
+
+    def test_relay_stays_open_at_ideal(self):
+        assert _relay_state_at(rh=92.0) is False

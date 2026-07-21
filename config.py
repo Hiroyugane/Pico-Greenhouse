@@ -898,29 +898,59 @@ DEVICE_CONFIG = {
             "humidifier": {
                 "driven": "surface",
                 "dims": ["humidity", "temp"],
-                # x = RH dev, y = temp dev. Dry (RH dev < 50) → humidify (low-x
-                # hinges, deadband below 40, steeper below 25). Temp couples
-                # additively (ca=0, sa=1, gain): hot → humidify MORE as
-                # evaporative cooling even at ideal RH; cold → humidify LESS
-                # (misting would chill further). A negative high-RH hinge cuts
-                # humidifying once the air is already humid, so the evaporative
-                # bias never adds moisture to a humid room.
+                # x = RH dev, y = temp dev. Temp couples additively (ca=0, sa=1,
+                # gain): hot → humidify MORE as evaporative cooling; cold →
+                # humidify LESS (misting would chill further). A negative
+                # high-RH hinge cuts humidifying once the air is already humid,
+                # so the evaporative bias never adds moisture to a humid room.
+                #
+                # The RH response is one proportional ramp that starts AT ideal
+                # (hx_lo1 from bx_lo1=50), not the deadband + steeper-knee pair
+                # the other regulators use, and it deliberately carries no
+                # deadband of its own. A relay actuator only ever observes two
+                # points on the curve — where the command crosses the adapter's
+                # on_above / off_below — so a surface-level deadband around
+                # ideal just means the relay never closes. The shipped
+                # deadband-below-40 version commanded 48.9 at RH 80.4% against
+                # an ideal of 92%, under an on_above of 60, and left the
+                # humidifier off in a drying tent (docs/notes/chat-log.md
+                # 2026-07-21). The hysteresis band now lives entirely in the
+                # adapter, which is what on_above/off_below are for.
+                #
+                # slope 2.0 = full command at RH 75 (the at_0 anchor), zero at
+                # ideal, so the number on the OLED still reads as "how hard the
+                # humidifier is being asked to work". The adapter thresholds
+                # below are derived from this slope — retune them together.
                 "surface": _surface(
                     ca=0.0,
                     sa=1.0,
                     gain=0.5,
-                    hx_lo1=1.5,
-                    bx_lo1=40.0,
-                    hx_lo2=1.6,
-                    bx_lo2=25.0,
+                    hx_lo1=2.0,
+                    bx_lo1=50.0,
                     hx_hi1=-2.0,
                     bx_hi1=55.0,
                 ),
+                # Hysteresis band, in command units, that puts the relay's
+                # switch points at RH 88% (close) and RH 91% (open) for the
+                # cubensis ideal of 92%. Derived from the surface slope above,
+                # with d(rh) = 50 * (rh - at_0) / (at_50 - at_0):
+                #   on_above  = hx_lo1 * (bx_lo1 - d(rh_close)) = 2 * 11.76
+                #   off_below = hx_lo1 * (bx_lo1 - d(rh_open))  = 2 *  2.94
+                # Re-derive both whenever the slope or the humidity anchors
+                # change — they are one calibration, not two knobs.
+                #
+                # Those RH figures hold at the ideal temperature. The
+                # evaporative-cooling coupling (gain 0.5 on temp dev) shifts
+                # them by about 2 RH points at the edges of the working range —
+                # the relay closes near 86% at 20C and near 90% at 28C. That
+                # bias is intended: a hot chamber mists sooner, a cold one
+                # later. Cut gain toward 0 if the band should be temperature-
+                # independent instead.
                 "adapter": {
                     "type": "relay",
                     "pin_key": "relay_humidifier",  # GP19 (freed fan relay 2)
-                    "on_above": 60.0,
-                    "off_below": 40.0,
+                    "on_above": 23.5,
+                    "off_below": 5.9,
                     "min_on_s": 30,
                     "min_off_s": 30,
                 },

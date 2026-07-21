@@ -2073,14 +2073,39 @@ class TestRegulationConfig:
         assert cooler["safe_state"] is None
 
     def test_regulation_cubensis_co2_is_fruiting_grade(self):
-        """Fruiting needs continuous FAE — anchors well under colonization levels."""
+        """Fruiting needs continuous FAE — the IDEAL stays well under colonization levels."""
         from config import DEVICE_CONFIG
 
         prof = DEVICE_CONFIG["regulation"]["profiles"]["cubensis"]
         for phase in ("day", "night"):
             co2 = prof[phase]["co2"]
             assert co2["at_50"] <= 600.0
-            assert co2["at_100"] <= 1200.0
+
+    def test_regulation_mushroom_co2_envelope_covers_indoor_air(self):
+        """Mushroom CO2 anchors span the real indoor range without saturating.
+
+        Regression (2026-07-21): the 400/1200 envelope reported ordinary room
+        air — 500 ppm on a good day, 1300 on a bad one, ~420 outdoors — as
+        maximum deviation in one direction or the other, pinning global
+        severity at the top band for a condition the room cannot leave.
+        """
+        from config import DEVICE_CONFIG
+        from lib.regulation_normalizer import deviation
+
+        profiles = DEVICE_CONFIG["regulation"]["profiles"]
+        for name, prof in profiles.items():
+            if prof["category"] != "mushroom":
+                continue
+            for phase in ("day", "night"):
+                co2 = prof[phase]["co2"]
+                ctx = "{}.{}".format(name, phase)
+                # Full severity belongs at genuinely stale air, not room air.
+                assert co2["at_100"] == 2000.0, ctx
+                # Fresh air is never a fault for a fruiting body.
+                assert co2["at_0"] == 0.0, ctx
+                for ppm in (400.0, 500.0, 1300.0):
+                    sev = abs(deviation(ppm, **co2) - 50.0)
+                    assert sev < 30.0, "{} at {} ppm: severity {}".format(ctx, ppm, sev)
 
     def test_regulation_external_min_factor_out_of_range_raises(self):
         """external_sensor.min_factor outside 0-1 raises ValueError."""

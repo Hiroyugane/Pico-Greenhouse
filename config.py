@@ -720,22 +720,33 @@ DEVICE_CONFIG = {
             # --- Mushrooms (fruiting chamber: high RH, low CO2, small day/night swing) ---
             # cubensis = the FRUITING phase. Fruiting bodies need continuous
             # fresh-air exchange: much above ~1000 ppm pins abort and stems
-            # stretch, so these anchors sit far below the inoculation /
-            # colonization figures (where several thousand ppm is desirable —
-            # add a separate profile when that phase gets automated). CO2 keeps
-            # the same tight anchors day and night; a fruiting chamber has no
-            # night-time CO2 tolerance the way a plant tent does.
+            # stretch, so at_50 sits far below the inoculation / colonization
+            # figures (where several thousand ppm is desirable — add a separate
+            # profile when that phase gets automated). CO2 keeps the same
+            # at_50 day and night; a fruiting chamber has no night-time CO2
+            # tolerance the way a plant tent does.
+            #
+            # The mushroom CO2 anchors are deliberately WIDE either side of that
+            # ideal, because deviation saturates at the outer anchor and a
+            # saturated dimension pins global severity at 50 — the top band —
+            # for a condition the room cannot leave. Room air here runs 500 ppm
+            # on a good day and 1300 ppm on a bad one, and outdoor air is ~420,
+            # so the old 400/1200 envelope reported the normal indoor range as
+            # maximum deviation in both directions. at_100 = 2000 puts full
+            # severity where a fruiting chamber genuinely is in trouble; at_0 =
+            # 0 means low CO2 never registers as a fault, which is correct —
+            # there is no such thing as too much fresh air for a fruiting body.
             "cubensis": {
                 "category": "mushroom",
                 "day": {
                     "temp": {"at_0": 16.0, "at_50": 24.0, "at_100": 30.0},
                     "humidity": {"at_0": 75.0, "at_50": 92.0, "at_100": 100.0},
-                    "co2": {"at_0": 400.0, "at_50": 600.0, "at_100": 1200.0},
+                    "co2": {"at_0": 0.0, "at_50": 600.0, "at_100": 2000.0},
                 },
                 "night": {
                     "temp": {"at_0": 15.0, "at_50": 23.0, "at_100": 29.0},
                     "humidity": {"at_0": 75.0, "at_50": 92.0, "at_100": 100.0},
-                    "co2": {"at_0": 400.0, "at_50": 600.0, "at_100": 1200.0},
+                    "co2": {"at_0": 0.0, "at_50": 600.0, "at_100": 2000.0},
                 },
             },
             "oyster": {
@@ -743,12 +754,12 @@ DEVICE_CONFIG = {
                 "day": {
                     "temp": {"at_0": 10.0, "at_50": 18.0, "at_100": 26.0},
                     "humidity": {"at_0": 70.0, "at_50": 87.0, "at_100": 98.0},
-                    "co2": {"at_0": 400.0, "at_50": 600.0, "at_100": 1200.0},
+                    "co2": {"at_0": 0.0, "at_50": 600.0, "at_100": 2000.0},
                 },
                 "night": {
                     "temp": {"at_0": 10.0, "at_50": 17.0, "at_100": 25.0},
                     "humidity": {"at_0": 70.0, "at_50": 87.0, "at_100": 98.0},
-                    "co2": {"at_0": 400.0, "at_50": 700.0, "at_100": 1300.0},
+                    "co2": {"at_0": 0.0, "at_50": 700.0, "at_100": 2000.0},
                 },
             },
             "lions_mane": {
@@ -756,12 +767,12 @@ DEVICE_CONFIG = {
                 "day": {
                     "temp": {"at_0": 12.0, "at_50": 20.0, "at_100": 28.0},
                     "humidity": {"at_0": 80.0, "at_50": 92.0, "at_100": 100.0},
-                    "co2": {"at_0": 400.0, "at_50": 700.0, "at_100": 1300.0},
+                    "co2": {"at_0": 0.0, "at_50": 700.0, "at_100": 2000.0},
                 },
                 "night": {
                     "temp": {"at_0": 12.0, "at_50": 19.0, "at_100": 27.0},
                     "humidity": {"at_0": 80.0, "at_50": 92.0, "at_100": 100.0},
-                    "co2": {"at_0": 400.0, "at_50": 800.0, "at_100": 1400.0},
+                    "co2": {"at_0": 0.0, "at_50": 800.0, "at_100": 2000.0},
                 },
             },
             # --- Plants (wider day/night swing, moderate RH, CO2 enrichment tolerated) ---

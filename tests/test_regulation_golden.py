@@ -138,6 +138,20 @@ class TestScenarioTable:
         assert cmd["exhaust"] >= 60.0
         assert cmd["cooler"] >= 100.0
 
+    def test_indoor_co2_leaves_headroom_above_it(self):
+        # 1300 ppm is what a closed room reaches on a bad day; 2200 is a
+        # chamber in real trouble. Under the old 1200 ppm ceiling both
+        # saturated to the same maximum deviation and vented identically, so
+        # the engine had no way to respond harder when it mattered.
+        #
+        # Read at 28 C: the CO2 term can add at most 32 to the exhaust, which
+        # is below its floor of 40, so at an ideal temperature the floor hides
+        # the whole CO2 contribution and both readings would tie at 40.
+        indoor = _run_scenario(temp=28.0, hum=92.0, co2=1300.0)
+        stale = _run_scenario(temp=28.0, hum=92.0, co2=2200.0)
+        assert indoor["exhaust"] > 0.0
+        assert stale["exhaust"] > indoor["exhaust"]
+
     def test_external_hotter_suppresses_exhaust(self):
         # temp 28.5 keeps the exhaust surface above its floor so the external
         # gate's suppression is visible (below the floor both would read 40).

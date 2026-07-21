@@ -155,7 +155,7 @@ class TestEmergencyLatch:
         # emergency: before the escalation gate it latched the safe-state
         # vector on tick 1 with the humidifier forced off, so the deviation
         # could never recover and no relay ever switched again.
-        engine, adapters, names = _engine(temp=22.6, hum=60.0, co2=1600.0, minutes=720)
+        engine, adapters, names = _engine(temp=22.6, hum=60.0, co2=2400.0, minutes=720)
         for i in range(10):
             engine.tick(now_s=float(i * 30))
         state = engine.get_state()

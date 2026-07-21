@@ -493,6 +493,42 @@ class TestOLEDDisplayAdditionalCoverage:
         ]
         assert any(r.startswith("RAM: 25.0%") for r in ram_rows)
 
+    def test_render_relays_lists_channels_with_gpio(self, oled_display):
+        """Each wired mains channel shows its GPIO so the page maps to REL_CON1."""
+        cooler = Mock()
+        cooler.is_on = Mock(return_value=True)
+        oled_display._relays = [("Cool", 18, cooler), ("Spar", 21, None)]
+        oled_display._fans = []
+        oled_display._row = Mock()
+        oled_display._render_relays()
+        oled_display._row.assert_any_call("Cool GP18: ON", 0)
+        oled_display._row.assert_any_call("Spar GP21: --", 1)
+
+    def test_render_relays_marks_pwm_fans_as_pwm(self, oled_display):
+        """A PCA9685 fan is not a mains socket and must never read as one.
+
+        Regression guard: before the 3.5-D migration the case fan sat on a
+        relay pin, and the page kept listing it unlabelled beside the real
+        relays afterwards.
+        """
+        fan = Mock()
+        fan.name = "case"
+        fan.is_on = Mock(return_value=True)
+        fan.duty_pct = 60
+        oled_display._relays = []
+        oled_display._fans = [fan]
+        oled_display._row = Mock()
+        oled_display._render_relays()
+        oled_display._row.assert_any_call("case PWM: 60%", 0)
+
+    def test_render_relays_stops_at_last_drawable_row(self, oled_display):
+        """More channels than rows must not silently draw off-panel."""
+        oled_display._relays = [(f"C{i}", i, None) for i in range(8)]
+        oled_display._fans = []
+        oled_display._row = Mock()
+        oled_display._render_relays()
+        assert oled_display._row.call_count == 5  # rows 0-4
+
     def test_render_system_row0_is_combined_date_time(self, oled_display):
         """Row 0 collapses YYYY-MM-DD HH:MM:SS into 16-char YYYY-MM-DD HH:MM."""
         oled_display._row = Mock()
@@ -684,6 +720,11 @@ def debug_oled(
         status_manager=mock_status_manager,
         reminder=mock_reminder,
         fans=[fan_controller],
+        relays=[
+            ("Cool", 18, Mock()),
+            ("Lite", 20, growlight_controller),
+            ("Spar", 21, None),  # wired channel with no controller
+        ],
         growlight=growlight_controller,
         sd_remount_cb=Mock(),
         start_time_ms=0,
@@ -764,22 +805,25 @@ class TestOLEDDebugMenu:
         assert debug_oled._buffer_manager._buffers == {}
         assert debug_oled._debug_running is False
 
-    async def test_cycle_relays_pulses_each_fan_and_growlight(self, debug_oled):
+    async def test_cycle_relays_pulses_relay_channels_only(self, debug_oled):
+        # PWM fans are not relays: pulsing them here made the click count lie
+        # about how many mains channels exist.
         debug_oled.current_menu = MENUS.index("debug")
         debug_oled.long_press_action()
         debug_oled._debug_action_idx = next(
             i for i, a in enumerate(debug_oled._debug_actions) if a["id"] == "cycle_relays"
         )
         debug_oled._fans[0].turn_on = Mock()
-        debug_oled._fans[0].turn_off = Mock()
         debug_oled._growlight.turn_on = Mock()
         debug_oled._growlight.turn_off = Mock()
+        cooler = debug_oled._relays[0][2]
         debug_oled.long_press_action()  # execute (non-destructive)
         await asyncio.sleep(0.1)
-        debug_oled._fans[0].turn_on.assert_called_once()
-        debug_oled._fans[0].turn_off.assert_called_once()
+        cooler.turn_on.assert_called_once()
+        cooler.turn_off.assert_called_once()
         debug_oled._growlight.turn_on.assert_called_once()
         debug_oled._growlight.turn_off.assert_called_once()
+        debug_oled._fans[0].turn_on.assert_not_called()  # PWM output, not a relay
 
     async def test_test_heater_pulses_heater(self, debug_oled, mock_heater):
         debug_oled.current_menu = MENUS.index("debug")

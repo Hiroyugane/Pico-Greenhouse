@@ -868,12 +868,21 @@ async def main():
             except Exception as exc:
                 logger.warning("MAIN", f"Debug feedback blink scheduling failed: {exc}")
 
-        # The relays page + debug cycle test drive the raw switch objects;
-        # the engine's adapters re-arbitrate on the next tick transition.
-        oled_fans = list(fans)
-        for key in ("cooler", "humidifier"):
-            if key in reg_switches:
-                oled_fans.append(reg_switches[key])
+        # The relays page + debug cycle test drive the raw switch objects; the
+        # engine's adapters re-arbitrate on the next tick transition.
+        #
+        # These are the four wired REL_CON1 channels (connector pins 2-5).
+        # GP18/GP19 were the fan relays before the 3.5-D migration moved the
+        # fans to the PCA9685 and repurposed the pins; GP21 is wired but has no
+        # controller. REL_CON1 pins 6-8 carry no net, so the relay_reserved_2..4
+        # config keys are NOT physical channels and are deliberately absent.
+        # `fans` stays PWM-only — a PCA9685 channel is not a mains socket.
+        oled_relays = [
+            ("Cool", DEVICE_CONFIG["pins"]["relay_cooler"], reg_switches.get("cooler")),
+            ("Humi", DEVICE_CONFIG["pins"]["relay_humidifier"], reg_switches.get("humidifier")),
+            ("Lite", DEVICE_CONFIG["pins"]["relay_growlight"], reg_switches.get("growlight")),
+            ("Spar", DEVICE_CONFIG["pins"]["relay_reserved_1"], None),
+        ]
 
         try:
             oled = OLEDDisplay(
@@ -883,7 +892,8 @@ async def main():
                 buffer_manager=buffer_manager,
                 status_manager=status_manager,
                 reminder=reminder,
-                fans=oled_fans,
+                fans=fans,
+                relays=oled_relays,
                 growlight=reg_switches.get("growlight"),
                 sd_remount_cb=_sd_remount_cb,
                 start_time_ms=0,

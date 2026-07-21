@@ -48,6 +48,9 @@ except ImportError:
 # ── Menu identifiers (ordered) ─────────────────────────────────────────────
 MENUS = ("temp", "humidity", "service", "sd", "alerts", "system", "relays", "reg", "co2", "soil", "debug")
 
+# Highest row index _row() can still draw on a 64 px panel (y = 12 + row*10).
+_MAX_ROW = 4
+
 
 class OLEDDisplay:
     """
@@ -118,6 +121,7 @@ class OLEDDisplay:
         debug_test_growlight_dim_levels_pct=None,
         debug_test_growlight_dim_step_s: float = 1.0,
         debug_test_relay_pulse_s: float = 1.0,
+        relays=None,
     ):
         self._i2c = i2c
         self._time_provider = time_provider
@@ -126,6 +130,9 @@ class OLEDDisplay:
         self._status_manager = status_manager
         self._reminder = reminder
         self._fans = fans or []
+        # Wired mains relay channels as (label, gpio_number, switch|None);
+        # switch is None for a channel that is wired but has no controller.
+        self._relays = list(relays or [])
         self._growlight = growlight
         self._sd_remount_cb = sd_remount_cb
         self._start_time_ms = start_time_ms
@@ -474,28 +481,22 @@ class OLEDDisplay:
         await asyncio.sleep(0)
 
     async def _action_cycle_relays(self) -> None:
-        """Pulse each fan and the growlight ON for ``test_relay_pulse_s``.
+        """Pulse each wired relay channel ON for ``test_relay_pulse_s``.
 
-        Per-relay schedulers will reassert their own state on the next
-        poll, so the test is a visible click + brief activity, not a
-        lasting change.
+        Relay channels only — the PWM fans are not relays and are excluded, so
+        the audible click count matches the number of mains channels. The
+        regulation engine reasserts its own command on the next tick, so the
+        test is a visible click + brief activity, not a lasting change.
         """
-        for fan in self._fans:
+        for _label, _pin, switch in self._relays:
+            if switch is None:
+                continue
             try:
-                fan.turn_on()
+                switch.turn_on()
                 await asyncio.sleep(self._debug_test_relay_pulse_s)
             finally:
                 try:
-                    fan.turn_off()
-                except Exception:
-                    pass
-        if self._growlight is not None:
-            try:
-                self._growlight.turn_on()
-                await asyncio.sleep(self._debug_test_relay_pulse_s)
-            finally:
-                try:
-                    self._growlight.turn_off()
+                    switch.turn_off()
                 except Exception:
                     pass
 
@@ -803,15 +804,31 @@ class OLEDDisplay:
         self._row(f"RAM: {used_pct:.1f}%", 4)
 
     def _render_relays(self) -> None:
+        """The wired 230 V relay channels, then PWM outputs marked as such.
+
+        Only entries in ``relays`` are mains channels on REL_CON1. The fans are
+        PCA9685 PWM outputs and are labelled "PWM" so they can never be read as
+        a mains socket — before the 3.5-D migration the case fan sat on a relay
+        pin, and this page kept listing it next to the real relays afterwards.
+        """
         self._header("RELAYS")
         row = 0
-        for fan in self._fans:
-            state = "ON " if fan.is_on() else "OFF"
-            self._row(f"{fan.name[:7]}: {state}", row)
+        for label, pin, switch in self._relays:
+            if row > _MAX_ROW:
+                return
+            state = "--" if switch is None else ("ON" if switch.is_on() else "OFF")
+            self._row(f"{label} GP{pin}: {state}", row)
             row += 1
-        if self._growlight:
-            state = "ON " if self._growlight.is_on() else "OFF"
-            self._row(f"Light: {state}", row)
+        for fan in self._fans:
+            if row > _MAX_ROW:
+                return
+            duty = getattr(fan, "duty_pct", None)
+            if fan.is_on() and duty is not None:
+                state = f"{duty:.0f}%"
+            else:
+                state = "ON" if fan.is_on() else "OFF"
+            self._row(f"{fan.name[:4]} PWM: {state}", row)
+            row += 1
 
     def _render_reg(self) -> None:
         """Regulation engine state: band + latch, deviations, commanded vector."""

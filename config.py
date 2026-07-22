@@ -1018,11 +1018,19 @@ DEVICE_CONFIG = {
                 "adapter": {"type": "pwm", "pca9685_ch": 4},
                 "slew_normal": 25.0,
                 "slew_fast": 60.0,
-                # Lowered from 40 alongside the CO2 retune above: the floor
-                # guarantees minimum air exchange when temp/RH drift, but at 40
-                # it sat above everything CO2 could command. 25 still forces a
-                # baseline exchange while leaving the CO2 ramp visible.
-                "floor": 25.0,
+                # Lowered from 40 alongside the CO2 retune above, then to 10 on
+                # operator instruction. At 40 the floor sat above everything CO2
+                # could command and hid the whole ramp. At 10 it is a token
+                # trickle rather than a meaningful minimum exchange rate: the
+                # CO2 term, the temp/RH surface and the conflict rules do
+                # essentially all the work, and the floor only guarantees the
+                # fan is not fully stopped while any dimension is off-ideal.
+                #
+                # 10 % may be BELOW the exhaust fan's start-from-rest duty, in
+                # which case the guarantee is nominal — the command is nonzero
+                # but the rotor does not turn. hw-test CO2.2 measures that
+                # threshold; raise this to meet it if the fan will not start.
+                "floor": 10.0,
                 "emergency_value": 100.0,  # vent hard in emergency
                 "safe_state": 100.0,
             },

@@ -110,11 +110,13 @@ class TestReactions:
         # that was not already at ideal temp AND humidity, the exhaust sat
         # pinned at the floor and CO2 from 0 to 2000 ppm changed nothing.
         #
-        # Hold temp/RH off-ideal (so the floor IS active) and vary only CO2:
-        # the command must still rise, and rise past the floor.
-        floor = 25.0  # regulation.regulators.exhaust.floor
-        engine_low, ad_low, names = _engine(temp=27.0, hum=85.0, co2=600.0, minutes=720)
-        engine_high, ad_high, _ = _engine(temp=27.0, hum=85.0, co2=1200.0, minutes=720)
+        # Hold RH off-ideal (so the floor IS active) with temp at the day ideal
+        # and vary only CO2. The exhaust surface only responds to the HIGH side
+        # of each axis, so a dry room leaves it at 0 and the floor is the sole
+        # contributor — which is exactly the case the ceiling used to swallow.
+        floor = 10.0  # regulation.regulators.exhaust.floor
+        engine_low, ad_low, names = _engine(temp=24.0, hum=85.0, co2=600.0, minutes=720)
+        engine_high, ad_high, _ = _engine(temp=24.0, hum=85.0, co2=1200.0, minutes=720)
         # slew_normal caps the per-tick climb, so let both settle.
         for i in range(10):
             engine_low.tick(now_s=float(i * 30))

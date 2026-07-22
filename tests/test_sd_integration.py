@@ -126,9 +126,7 @@ class TestMountSD:
         with patch.object(sd_mod, "_IS_DEVICE", True):
             with _patch_lib_sdcard(mock_sdcard):
                 with patch("os.mount", create=True, side_effect=OSError(19, "ENODEV")):
-                    ok, sd = sd_mod.mount_sd(
-                        Mock(), Mock(), "/sd", debug_callback=captured.append
-                    )
+                    ok, sd = sd_mod.mount_sd(Mock(), Mock(), "/sd", debug_callback=captured.append)
 
         assert ok is False
         assert sd is None
@@ -149,9 +147,7 @@ class TestMountSD:
         with patch.object(sd_mod, "_IS_DEVICE", True):
             with _patch_lib_sdcard(mock_sdcard):
                 with patch("os.mount", create=True, side_effect=OSError(19, "ENODEV")):
-                    ok, sd = sd_mod.mount_sd(
-                        Mock(), Mock(), "/sd", debug_callback=captured.append
-                    )
+                    ok, sd = sd_mod.mount_sd(Mock(), Mock(), "/sd", debug_callback=captured.append)
 
         assert ok is False
         joined = "\n".join(captured)

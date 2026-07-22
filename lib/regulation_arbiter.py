@@ -173,9 +173,7 @@ class RegulationArbiter:
         reg_index = {name: i for i, name in enumerate(reg_names)}
         conflicts = []
         for rule in reg_cfg["conflicts"]:
-            when = tuple(
-                (dim_order.index(dim), op == "above", float(thresh)) for dim, op, thresh in rule["when"]
-            )
+            when = tuple((dim_order.index(dim), op == "above", float(thresh)) for dim, op, thresh in rule["when"])
             force = tuple((reg_index[n], float(v)) for n, v in rule.get("force", {}).items())
             prefer = tuple((reg_index[n], float(v)) for n, v in rule.get("prefer", {}).items())
             conflicts.append((when, force, prefer))

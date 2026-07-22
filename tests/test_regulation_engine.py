@@ -229,9 +229,7 @@ class TestExternalGate:
         # Outside hotter than inside → exhaust effectiveness floored. temp 28.5
         # puts the surface output above the exhaust floor so the external
         # suppression is observable (not masked by the floor).
-        engine_gated, ad_gated, names = _engine(
-            temp=28.5, minutes=720, external_read=lambda: (35.0, 50.0)
-        )
+        engine_gated, ad_gated, names = _engine(temp=28.5, minutes=720, external_read=lambda: (35.0, 50.0))
         engine_open, ad_open, _ = _engine(temp=28.5, minutes=720)
         engine_gated.tick(now_s=0.0)
         engine_open.tick(now_s=0.0)

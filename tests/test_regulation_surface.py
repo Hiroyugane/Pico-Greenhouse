@@ -176,7 +176,6 @@ class TestShippedCouplings:
         as soon as the breakpoint is passed.
         """
         import config
-
         from lib.regulation_surface import evaluate
 
         regs = config.DEVICE_CONFIG["regulation"]["regulators"]

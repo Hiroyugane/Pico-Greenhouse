@@ -208,9 +208,7 @@ class TestEscalationGate:
         # Latched by heat, then the room goes cold and dry (global severity
         # stays 50). The release gate must look at the escalating severity
         # only, or the latch could never lift.
-        arb = _arb(
-            safe_state=[5.0], escalation=HIGH_ONLY, release_max=30.0, release_ticks=2, min_s=0.0, tick_s=30.0
-        )
+        arb = _arb(safe_state=[5.0], escalation=HIGH_ONLY, release_max=30.0, release_ticks=2, min_s=0.0, tick_s=30.0)
         _run(arb, [0.0], [50.0, 0.0, 0.0], dev=[100.0, 50.0, 50.0])  # entry (hot)
         _run(arb, [0.0], [50.0, 50.0, 0.0], dev=[0.0, 0.0, 50.0])  # cold + dry
         _run(arb, [0.0], [50.0, 50.0, 0.0], dev=[0.0, 0.0, 50.0])
@@ -246,9 +244,7 @@ class TestFreeForcedValues:
         assert out[1] == 0.0  # forced
 
     def test_none_safe_state_leaves_regulator_free(self):
-        arb = _arb(
-            n=2, emergency=[None, None], safe_state=[None, 5.0], slew_fast=[100.0, 100.0]
-        )
+        arb = _arb(n=2, emergency=[None, None], safe_state=[None, 5.0], slew_fast=[100.0, 100.0])
         out, _ = _run(arb, [80.0, 80.0], [50.0, 0.0, 0.0], n=2)
         assert arb.latched is True
         assert out[0] == 80.0
@@ -274,9 +270,7 @@ class TestFromConfig:
         n = len(config._REG_NAMES)
         out = array("f", [0.0] * n)
         # Calm: everything ideal → all commands settle at 0 (slew from 0).
-        gmax = arb.arbitrate(
-            array("f", [0.0] * n), array("f", [0.0, 0.0, 0.0]), array("f", [50.0, 50.0, 50.0]), out
-        )
+        gmax = arb.arbitrate(array("f", [0.0] * n), array("f", [0.0, 0.0, 0.0]), array("f", [50.0, 50.0, 50.0]), out)
         assert gmax == 0.0
         assert all(v == 0.0 for v in out)
 

@@ -40,7 +40,7 @@ import uasyncio as asyncio
 from machine import ADC, UART, WDT, Pin
 
 from config import _REG_DIMENSIONS, _REG_NAMES, DEVICE_CONFIG, validate_config
-from lib import boot_log
+from lib import boot_log, version
 from lib.hardware_factory import HardwareFactory
 from lib.updater import run_pending_update
 
@@ -480,6 +480,15 @@ async def main():
 
     reset_label = _describe_reset_cause()
     logger.info("MAIN", f"System startup (reset_cause={reset_label})")
+
+    # Firmware + app identity, once per boot, to both sinks. system.log is the
+    # searchable history; /boot.log is the copy that survives an SD card the
+    # unit cannot write to, which is exactly the situation where you most need
+    # to know what it is running. Mandatory before any reflash: this line is
+    # the only record of the outgoing firmware once the new .uf2 is written.
+    version_line = version.describe()
+    logger.info("MAIN", "version | " + version_line)
+    boot_log.log("[VERSION] " + version_line)
     log_lvl = logger_config.get("log_level", "INFO")
     dbg_on = logger_config.get("debug_enabled", False)
     logger.debug("MAIN", f"log_level={log_lvl}, debug_enabled={dbg_on}")

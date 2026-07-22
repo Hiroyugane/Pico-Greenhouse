@@ -153,6 +153,51 @@ choice; the fix is to change it, not to patch firmware.)
   (single channel, hard-stop check) +
   [hw-test-log "Fan power-path switch" checklist](../test/hw-test-log.md).
 
+**2026-07-22 — netlist confirmation and the bench path.** Read out of
+[`Sheet_1_2026-06-09.net`](EasyEDA-Files/Sheet_1_2026-06-09.net) and the
+[BOM](EasyEDA-Files/BOM_Pico-Greenhouse-PCB_2026-06-09%281%29.csv), the
+built chain per channel is
+`U12 LEDn → 150 Ω (R24–R29) → gate of Q1–Q6 (AO3400A, SOT-23, not IRLZ44N)`,
+`10 kΩ (R30–R35) gate→GND`, `source → GND`, `drain → FAN_x pin 4`. Header
+pin 1 = GND, pin 2 = +12 V, **pin 3 (tach) is unconnected on the PCB**, and
+the flyback D10–D14 are **SS14** (SMA, 1 A / 40 V Schottky) from pin 4 up to
++12 V. PCA9685 V_DD = **+5 V**, so the gate swing is 0–5 V. Channel map
+confirms `config.py` exactly: PWM0→Q4→FAN_GR_C1, PWM1→Q5→FAN_GR_W1,
+PWM2→Q6→FAN_H1, PWM3→Q2→FAN_CHA1, PWM4→Q3→FAN_GR_E1, PWM5→Q1→HPA_SOL1.
+
+Two consequences:
+
+- **The current board can already switch power — by rewiring the plug, not
+  the PCB.** Moving the fan's black lead from header pin 1 to header pin 4
+  puts the fan between +12 V (pin 2) and the existing AO3400A drain, i.e.
+  exactly the intended low-side switch, and D10–D14 land in the correct
+  flyback orientation across the fan with no change. Pin 1 goes unused.
+  This is the **fastest proof of the whole theory: zero new parts**, and it
+  is non-inverting, so it needs `pca9685.invert = False`. Its ceiling is the
+  AO3400A and the SS14 (≈ 1 A) plus the signal-width pin-4 trace — fine for
+  the confirmed ≤ 0.5 A fans, not for "any fan".
+- **For "any fan" the FET, the flyback and the trace all have to grow.**
+  The next-rev per-channel stage stays one FET in the fan's ground return,
+  but sized for a real motor: **IRLZ44N** (TO-220, in stock ×10 — its
+  V_GS(th) ≤ 2 V is comfortably driven by the 5 V PCA9685 swing) or a D-PAK
+  logic-level equivalent, flyback upsized **SS14 → SS34** (3 A / 40 V),
+  and the connector's pin-1 net promoted from signal class to the
+  **power net class** in [pcb-design-rules.md](pcb-design-rules.md) —
+  it now carries full motor current, which the old pin-4 signal trace never
+  did. Keep the 150 Ω gate resistor and 10 kΩ pull-down unchanged.
+- **Bench rig (breadboard, current inventory, no PCB change).** Where the
+  rewire's ≈ 1 A ceiling is not enough to characterise a channel, insert an
+  interposer that reuses the on-board AO3400A as a *pilot* and keeps motor
+  current entirely off the PCB's signal traces. Per channel, from the
+  header's three usable pins only: `2.2 kΩ` pull-up from pin 4 to +12 V,
+  `100 Ω` into an IRLZ44N gate, `10 kΩ` gate→source, IRLZ44N drain = fan
+  return / source = pin 1, `1N5822` (3 A / 40 V, in stock ×20) flyback
+  cathode to +12 V. The pilot then sinks ~5.5 mA instead of the motor
+  current. This stage **inverts**, so it runs with `pca9685.invert = True`
+  (i.e. today's setting) and idles fans full-on until firmware takes over —
+  the safe direction for a tent. Verification per
+  [hw-test-log FAN.PP](../test/hw-test-log.md).
+
 ### [x] HPA mist-solenoid driver — PCA9685 ch5 + IRLZ44N, broken out as a plug-in 12 V valve connector
 
 **Filed:** 2026-05-31 ·

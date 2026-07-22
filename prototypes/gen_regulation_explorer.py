@@ -7,13 +7,22 @@
 # JSON and the browser reproduces stages 2-5 of the pipeline live so the CO2 and
 # time-of-day sliders can move without a regenerate.
 #
-# The split between "precomputed here" and "computed in the page" follows from
-# one fact about the pipeline: surfaces are evaluated in DEVIATION space, which
-# is profile- and time-of-day independent. So the raw surface grid is a constant
-# per regulator and is baked in from lib.regulation_surface.evaluate (never
-# reimplemented); only the axis LABELS, the CO2 additive term, the growlight
-# ToD value, and the conflict/floor/adapter stages depend on the live controls,
-# and those are cheap arithmetic mirrored in JS.
+# The page is also a TUNING tool, not only a viewer: the surface hinge
+# parameters, floors, CO2 gain/break, adapter thresholds, slew rates and band
+# edges are all editable in the browser, the plot recomputes live, and the
+# changed values export as a paste-ready config.py fragment.
+#
+# That means the surface evaluator has to exist in JS too — a grid baked in
+# Python cannot respond to an edited slope. lib/regulation_surface.evaluate is
+# therefore mirrored in evalSurface() below, which is a duplication and is
+# treated as one: the Python-side grid is STILL baked in (as rawBaked, still
+# checked against tests/golden/) and the page asserts on load that its own
+# evaluator reproduces it. A port that drifts shows a banner instead of quietly
+# plotting fiction.
+#
+# Everything else — the axis LABELS, the CO2 additive term, the growlight ToD
+# value, and the conflict/floor/adapter stages — is cheap arithmetic mirrored in
+# JS, because it depends on controls the page owns.
 #
 # Usage:
 #   python prototypes/gen_regulation_explorer.py
@@ -65,7 +74,9 @@ def build_data():
     # transpose the follower's axis labels.
     fallback_dims = list(regulators["heater"]["dims"])
 
-    # Raw surface grids, straight from the shipped evaluator.
+    # Raw surface grids, straight from the shipped evaluator. These stay the
+    # golden-checked reference the page validates its own evaluator against;
+    # once a parameter is edited in the browser the plot uses the JS grid.
     raw_grids = {}
     for name in config._REG_NAMES:
         r = regulators[name]
@@ -95,7 +106,7 @@ def build_data():
         # forced).
         if driven == "surface":
             band_dims = list(r["dims"])
-            if name == "exhaust" and "co2" not in band_dims:
+            if "co2_gain" in r and "co2" not in band_dims:
                 band_dims.append("co2")
         elif driven == "follower":
             band_dims = ["temp", "humidity"]
@@ -112,15 +123,19 @@ def build_data():
             "floor": float(r["floor"]),
             "emergencyValue": r["emergency_value"],
             "safeState": r["safe_state"],
-            "raw": raw_grids.get(name),
+            "rawBaked": raw_grids.get(name),
         }
+        if driven == "surface":
+            # Full parameter dict (not just the overrides) so the page can
+            # evaluate the surface itself and edit any knob.
+            entry["surface"] = {k: float(v) for k, v in r["surface"].items()}
         if driven == "follower":
             entry["followerGain"] = f_gain
             entry["followerFloor"] = f_floor
         if driven == "tod":
             entry["lightLevelDay"] = float(r["light_level_day"])
             entry["dimmable"] = bool(r["dimmable"])
-        if name == "exhaust":
+        if "co2_gain" in r:
             entry["co2Gain"] = float(r["co2_gain"])
             entry["co2Break"] = float(r["co2_break"])
             entry["external"] = bool(r["external"])
@@ -154,11 +169,17 @@ def build_data():
             for name, p in reg_cfg["profiles"].items()
         },
         "activeProfile": reg_cfg["profile"],
-        # The arbiter derives its four named thresholds from the last four edges.
-        "edgeMinor": band_edges[-4],
-        "edgeConflict": band_edges[-3],
-        "edgeEmergency": band_edges[-2],
-        "edgeLatch": band_edges[-1],
+        # The arbiter derives its four named thresholds from the last four
+        # edges, so the page recomputes them whenever the edges are edited.
+        "bandEdges": band_edges,
+        # Neutral surface defaults + editor metadata (name, range), straight
+        # from config._SURFACE_PARAMS so the page's ranges cannot drift from the
+        # validator's.
+        "surfaceDefaults": {name: float(default) for name, _lo, _hi, default in config._SURFACE_PARAMS},
+        "surfaceMeta": [
+            {"name": name, "lo": float(lo), "hi": float(hi), "def": float(default)}
+            for name, lo, hi, default in config._SURFACE_PARAMS
+        ],
         "escalation": {d: dict(reg_cfg["escalation"][d]) for d in dim_order},
         "latch": dict(reg_cfg["latch"]),
         "conflicts": conflicts,
@@ -188,6 +209,7 @@ def check_goldens(data, tolerance=GOLDEN_TOLERANCE):
         if entry["driven"] != "surface":
             continue
         path = GOLDEN_DIR / "regulation_{}.csv".format(name)
+        raw = entry["rawBaked"]
         if not path.exists():
             # tests/golden/ is covered by a blanket *.csv rule in .gitignore, so
             # a fresh clone has none of these files. Say how to get them rather
@@ -198,7 +220,6 @@ def check_goldens(data, tolerance=GOLDEN_TOLERANCE):
                 "    python prototypes/plot_regulation_surfaces.py\n"
                 "or skip this check with --no-golden-check.".format(name, path)
             )
-        raw = entry["raw"]
         with open(path, encoding="utf-8") as fh:
             header = fh.readline().strip()
             if header != "x,y,out":
@@ -278,8 +299,12 @@ _CSS = """
   --accent: #3987e5;
 }
 * { box-sizing: border-box; }
+/* The page is capped and centred. Without this the flex columns grow to fill a
+   widescreen monitor and the heat map — which is aspect-ratio 1 — grows with
+   them until it is taller than the viewport, at which point zooming out shrinks
+   the labels without ever bringing the whole grid into view. */
 body {
-  margin: 0; padding: 20px 24px 48px;
+  margin: 0 auto; padding: 20px 24px 48px; max-width: 1680px;
   background: var(--page); color: var(--text-primary);
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   font-size: 14px; line-height: 1.5;
@@ -307,8 +332,13 @@ h2 { font-size: 13px; margin: 0 0 8px; font-weight: 600; letter-spacing: .02em; 
   background: var(--surface-1); border: 1px solid var(--border);
   border-radius: 10px; padding: 16px 18px;
 }
-.chartcard { flex: 1 1 560px; min-width: 460px; }
-.side { flex: 0 1 420px; min-width: 330px; display: flex; flex-direction: column; gap: 16px; }
+/* max-width, not just flex-basis: the heat map is square, so any width the card
+   is allowed to reach is also a height it will reach. 780px keeps the grid at
+   about 640px square — large enough to read a 21x21 cell, small enough to sit
+   beside both panels on a wide screen without scrolling. */
+.chartcard { flex: 1 1 560px; min-width: 460px; max-width: 780px; }
+.side { flex: 1 1 400px; min-width: 330px; max-width: 520px; display: flex; flex-direction: column; gap: 16px; }
+.editcol { flex: 1 1 340px; min-width: 320px; max-width: 440px; display: flex; flex-direction: column; gap: 16px; }
 /* The x tick labels are rotated vertical, so the TICK track is the tall one and
    the axis-title track is the short one — not the other way round. */
 .gridwrap { display: grid; grid-template-columns: 22px 86px 1fr; grid-template-rows: 1fr 86px 22px; }
@@ -389,6 +419,52 @@ table.kv tr.sect td { padding-top: 11px; color: var(--muted); font-size: 10.5px;
   padding: 4px 0 4px 9px; margin: 9px 0 0; }
 .empty { color: var(--muted); font-size: 12.5px; padding: 10px 0; }
 code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+
+/* ---- editor ---- */
+.panel h2 .hint { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--muted); }
+.edgroup { margin-top: 10px; }
+.edgroup > .gt { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--muted); margin-bottom: 4px; }
+.edrow { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; align-items: center;
+  margin-bottom: 4px; font-size: 12px; }
+.edrow label { color: var(--text-secondary); }
+/* Scoped to the editor, not to .edrow: the band-edge row lays its inputs out in
+   a plain flex strip rather than the label/value grid. */
+#editor input[type=number] {
+  width: 74px; font: inherit; font-size: 12px; padding: 3px 5px; border-radius: 5px;
+  border: 1px solid var(--baseline); background: var(--page); color: var(--text-primary);
+  font-variant-numeric: tabular-nums; text-align: right;
+}
+#editor input.dirty { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.edges { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 4px; }
+.edges input[type=number] { width: 52px !important; }
+.edrow .base { font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums;
+  min-width: 62px; text-align: right; }
+.edactions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+button {
+  font: inherit; font-size: 12px; padding: 5px 11px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--baseline); background: var(--surface-1); color: var(--text-primary);
+}
+button:hover { border-color: var(--accent); color: var(--accent); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.primary:hover { color: #fff; opacity: .9; }
+button:disabled { opacity: .45; cursor: not-allowed; border-color: var(--baseline); color: var(--muted); }
+.toggle { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-secondary); }
+#exportWrap { margin-top: 12px; }
+#exportWrap textarea {
+  width: 100%; height: 260px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px; line-height: 1.45; padding: 9px; border-radius: 7px;
+  border: 1px solid var(--baseline); background: var(--page); color: var(--text-primary);
+  white-space: pre; overflow: auto; resize: vertical;
+}
+.banner {
+  border-radius: 8px; padding: 9px 12px; margin: 0 0 14px; font-size: 12.5px;
+  border: 1px solid var(--status-critical); color: var(--text-primary);
+  background: color-mix(in srgb, var(--status-critical) 12%, transparent);
+}
+.banner.ok { border-color: var(--status-good); background: color-mix(in srgb, var(--status-good) 10%, transparent); }
+.dirtynote { font-size: 11.5px; color: var(--text-secondary);
+  border-left: 3px solid var(--accent); padding: 4px 0 4px 9px; margin: 10px 0 0; }
 """
 
 
@@ -426,7 +502,12 @@ the command after the surface (or follower / time-of-day driver), the CO&#8322; 
 external-effectiveness multiplier, the floor, the conflict rules, and the device adapter.
 Click a cell to see the raw surface value beside that final duty. Slew limiting, the emergency
 vector and the latch are temporal and cannot be drawn per cell; escalating cells are outlined and
-the forced vectors are listed in the panel. Generated from <code>config.py</code> &mdash; read-only.</p>
+the forced vectors are listed in the panel. Generated from <code>config.py</code>; the tuning
+parameters on the right are <strong>editable</strong> &mdash; the plot recomputes as you change them,
+and <em>Export changes</em> gives you a paste-ready <code>config.py</code> fragment. Nothing here
+writes to the repo.</p>
+
+<div id="selfcheck"></div>
 
 <div class="controls">
   <div class="ctl">
@@ -482,6 +563,35 @@ the forced vectors are listed in the panel. Generated from <code>config.py</code
       <div id="agg"></div>
     </div>
   </div>
+
+  <div class="editcol">
+    <div class="panel">
+      <h2>Tuning <span class="hint" id="edSubtitle"></span></h2>
+      <label class="toggle">
+        <input type="checkbox" id="showAll"> show every surface parameter
+      </label>
+      <div id="editor"></div>
+      <div class="edactions">
+        <button id="btnExport" class="primary">Export changes</button>
+        <button id="btnResetReg">Reset this regulator</button>
+        <button id="btnResetAll">Reset all</button>
+      </div>
+      <div id="dirtySummary"></div>
+      <div id="exportWrap" hidden>
+        <textarea id="exportText" readonly spellcheck="false"></textarea>
+        <div class="edactions">
+          <button id="btnCopy">Copy to clipboard</button>
+          <button id="btnHideExport">Hide</button>
+        </div>
+        <p class="note">Paste over the matching keys in
+          <code>config.py</code>. Surface blocks are emitted as a full
+          <code>_surface(...)</code> call listing every non-default parameter, so
+          they replace the existing call outright. Then regenerate the golden
+          vectors &mdash; <code>python prototypes/plot_regulation_surfaces.py</code>
+          &mdash; or the surface tests will fail.</p>
+      </div>
+    </div>
+  </div>
 </div>
 """
 
@@ -500,8 +610,74 @@ let state = {
   profile: D.activeProfile,
   b: 1.0,
   co2dev: 50,
-  sel: null
+  sel: null,
+  showAll: false
 };
+
+/* ---------- live, editable config ------------------------------------
+   D is the frozen baseline exactly as config.py has it. LIVE is the copy the
+   page edits and plots; every "has this changed?" question compares the two. */
+
+const DEF = D.surfaceDefaults, META = D.surfaceMeta;
+const clone = o => JSON.parse(JSON.stringify(o));
+let LIVE = clone(D.regulators);
+let LIVE_EDGES = D.bandEdges.slice();
+
+// The arbiter names its four thresholds off the LAST four band edges, so these
+// have to be recomputed rather than baked — the edges are editable.
+const eMinor = () => LIVE_EDGES[LIVE_EDGES.length - 4];
+const eConflict = () => LIVE_EDGES[LIVE_EDGES.length - 3];
+const eEmerg = () => LIVE_EDGES[LIVE_EDGES.length - 2];
+const eLatch = () => LIVE_EDGES[LIVE_EDGES.length - 1];
+
+/* ---------- surface evaluator ----------------------------------------
+   A direct port of lib/regulation_surface.evaluate. It exists because a grid
+   baked in Python cannot answer "what if this slope were 3.0?". selfCheck()
+   below proves it still agrees with the baked, golden-checked grids; if this
+   ever drifts from the device code, the page says so instead of lying. */
+
+function boostF(v, hi, lo, base, grad) {
+  if (v > hi) return base + (v - hi) * grad;
+  if (v < lo) return base + (lo - v) * grad;
+  return 1.0;
+}
+
+function evalSurface(p, x, y) {
+  const xc = x - 50.0, yc = y - 50.0;
+  let lin = p.gain * (xc * p.ca + yc * p.sa) + p.offset - p.cross * (xc * p.sa + yc * p.ca);
+  let d;
+  d = x - p.bx_hi1; if (d > 0) lin += p.hx_hi1 * d;
+  d = x - p.bx_hi2; if (d > 0) lin += p.hx_hi2 * d;
+  d = p.bx_lo1 - x; if (d > 0) lin += p.hx_lo1 * d;
+  d = p.bx_lo2 - x; if (d > 0) lin += p.hx_lo2 * d;
+  d = y - p.by_hi1; if (d > 0) lin += p.hy_hi1 * d;
+  d = y - p.by_hi2; if (d > 0) lin += p.hy_hi2 * d;
+  d = p.by_lo1 - y; if (d > 0) lin += p.hy_lo1 * d;
+  d = p.by_lo2 - y; if (d > 0) lin += p.hy_lo2 * d;
+  const bx = boostF(x, p.x_top, p.x_bot, p.boost_base, p.grad);
+  const by = boostF(y, p.y_top, p.y_bot, p.boost_base, p.grad);
+  let raw = lin * p.mult * bx * by;
+  if (raw < p.out_min) raw = p.out_min; else if (raw > p.out_max) raw = p.out_max;
+  return (raw - p.out_min) / (p.out_max - p.out_min) * 100.0;
+}
+
+// grid[xi][yi], same indexing as the Python sampler. Cleared wholesale on any
+// surface edit — the follower's grid is derived from the heater's.
+let gridCache = {};
+
+function surfaceGrid(reg) {
+  if (gridCache[reg]) return gridCache[reg];
+  const R = LIVE[reg];
+  let g = null;
+  if (R.driven === "surface") {
+    g = G.map(x => G.map(y => evalSurface(R.surface, x, y)));
+  } else if (R.driven === "follower") {
+    g = surfaceGrid("heater").map(col =>
+      col.map(v => clamp(v * R.followerGain + R.followerFloor)));
+  }
+  gridCache[reg] = g;
+  return g;
+}
 
 /* ---------- deviation <-> physical ---------------------------------- */
 
@@ -538,7 +714,7 @@ const clamp = v => v < 0 ? 0 : (v > 100 ? 100 : v);
 // Deviations for one cell, keyed by dimension name. The two grid axes are the
 // selected regulator's own dims; CO2 always comes from the slider.
 function cellDevs(reg, xi, yi) {
-  const R = D.regulators[reg];
+  const R = LIVE[reg];
   const devs = { co2: state.co2dev };
   devs[R.dims[0]] = G[xi];
   devs[R.dims[1]] = G[yi];
@@ -558,25 +734,31 @@ function externalMultRange() {
 }
 
 function organicCommand(reg, xi, yi) {
-  const R = D.regulators[reg];
+  const R = LIVE[reg];
   if (R.driven === "tod") return clamp(state.b * R.lightLevelDay);
-  return R.raw[xi][yi];
+  return surfaceGrid(reg)[xi][yi];
 }
 
 function pipeline(reg, xi, yi) {
-  const R = D.regulators[reg];
+  const R = LIVE[reg];
   const devs = cellDevs(reg, xi, yi);
   const raw = organicCommand(reg, xi, yi);
 
-  // Stage 2b — CO2 additive term (exhaust only) then the external multiplier.
+  // Stage 2b — the CO2 additive term, then the external multiplier. Both are
+  // per-regulator: any regulator carrying a co2_gain takes the term (the
+  // exhaust and the circulation pair do), and the external gate applies only
+  // where config says so.
   let co2Term = 0, extMult = 1.0, val = raw;
-  if (reg === "exhaust") {
+  if (R.co2Gain !== undefined) {
     const over = devs.co2 - R.co2Break;
     if (over > 0) co2Term = R.co2Gain * over;
     val = raw + co2Term;
-    extMult = externalMult(reg);
-    val = clamp(val * extMult);
   }
+  if (R.external) {
+    extMult = externalMult(reg);
+    val = val * extMult;
+  }
+  if (R.co2Gain !== undefined || R.external) val = clamp(val);
   const afterCo2 = val;
 
   // Stage 3 — floor, forced when the regulator's own band severity reaches the
@@ -584,7 +766,7 @@ function pipeline(reg, xi, yi) {
   let regSev = 0;
   for (const d of R.bandDims) regSev = Math.max(regSev, severity(devs[d]));
   let floored = val, floorFired = false;
-  if (R.bandDims.length && regSev >= D.edgeMinor && val < R.floor) {
+  if (R.bandDims.length && regSev >= eMinor() && val < R.floor) {
     floored = R.floor; floorFired = true;
   }
 
@@ -596,7 +778,7 @@ function pipeline(reg, xi, yi) {
   // max is already met). Those cells are still marked — the rule IS live there
   // — with the panel spelling out that it changed nothing.
   let out = floored, conflictFired = false, conflictWhy = "", conflictWhen = "";
-  if (gmax >= D.edgeConflict) {
+  if (gmax >= eConflict()) {
     for (const rule of D.conflicts) {
       let ok = true;
       for (const [dim, op, thresh] of rule.when) {
@@ -643,8 +825,8 @@ function pipeline(reg, xi, yi) {
   return {
     raw, co2Term, extMult, afterCo2, floored, floorFired, regSev, gmax,
     command, conflictFired, conflictWhy, conflictWhen, devs,
-    esc, escEmergency: esc >= D.edgeEmergency,
-    escLatch: esc >= D.edgeLatch,
+    esc, escEmergency: esc >= eEmerg(),
+    escLatch: esc >= eLatch(),
     ...ad
   };
 }
@@ -703,22 +885,23 @@ function buildControls() {
   prof.value = state.profile;
   el("rampbar").innerHTML = SEQ.map(c => `<span style="background:${c}"></span>`).join("");
 
-  reg.onchange = () => { state.reg = reg.value; state.sel = null; render(); };
+  reg.onchange = () => { state.reg = reg.value; state.sel = null; render(); renderEditor(); };
   prof.onchange = () => { state.profile = prof.value; render(); };
   el("tod").oninput = e => { state.b = parseFloat(e.target.value); render(); };
   el("co2").oninput = e => { state.co2dev = parseInt(e.target.value, 10); render(); };
 }
 
 function render() {
-  const reg = state.reg, R = D.regulators[reg];
-  const isExhaust = reg === "exhaust";
+  const reg = state.reg, R = LIVE[reg];
+  const takesCo2 = R.co2Gain !== undefined;
 
-  // CO2 slider is only wired to the exhaust — grey it out everywhere else.
+  // The CO2 slider only means something for a regulator carrying the additive
+  // term — grey it out for the rest.
   const cc = el("co2Ctl");
-  cc.classList.toggle("disabled", !isExhaust);
-  el("co2").disabled = !isExhaust;
+  cc.classList.toggle("disabled", !takesCo2);
+  el("co2").disabled = !takesCo2;
   el("co2Out").textContent = "dev " + state.co2dev + " — " + physLabel(state.co2dev, "co2")
-    + (isExhaust ? "" : " — no effect on " + reg);
+    + (takesCo2 ? "" : " — no effect on " + reg);
 
   el("todOut").textContent = "b = " + state.b.toFixed(2) + " — "
     + (state.b >= 1 ? "full day" : state.b <= 0 ? "full night" : "transition");
@@ -771,14 +954,9 @@ function chartNote(R, reg) {
     return "No surface of its own: the command is the heater's organic command × "
       + R.followerGain + " + " + R.followerFloor + ", so the shape follows the heater.";
   }
-  if (reg === "exhaust") {
-    return "PWM duty as commanded (pre-inversion — the PCA9685 invert flag lives in the output "
-      + "driver and does not change this number). The CO₂ slider adds its term on top of this "
-      + "surface.";
-  }
   if (R.adapter.type === "pwm" || R.adapter.type === "pwm_pair") {
-    return "PWM duty as commanded (pre-inversion — the PCA9685 invert flag lives in the output "
-      + "driver and does not change this number).";
+    return "PWM duty as commanded — this is the number handed to the PCA9685 channel."
+      + (R.co2Gain !== undefined ? " The CO₂ slider adds its term on top of this surface." : "");
   }
   if (R.adapter.type === "heater") {
     return "Time-proportioned over a " + R.adapter.window_s + " s window, so the plotted duty is the "
@@ -821,7 +999,7 @@ function renderAgg(reg, R, results) {
 
     <tr class="sect"><td colspan="2">Arbitration (config.py)</td></tr>
     <tr><td>driven</td><td>${R.driven}</td></tr>
-    <tr><td>floor</td><td>${fmt(R.floor)} (forced at severity ≥ ${fmt(D.edgeMinor, 0)})</td></tr>
+    <tr><td>floor</td><td>${fmt(R.floor)} (forced at severity ≥ ${fmt(eMinor(), 0)})</td></tr>
     <tr><td>emergency_value</td><td>${R.emergencyValue === null ? "None — free" : fmt(R.emergencyValue)}</td></tr>
     <tr><td>safe_state</td><td>${R.safeState === null ? "None — free" : fmt(R.safeState)}</td></tr>
     <tr><td>slew_normal / slew_fast</td><td>${fmt(R.slewNormal)} / ${fmt(R.slewFast)} per tick</td></tr>
@@ -847,7 +1025,7 @@ function renderAgg(reg, R, results) {
       + `${R.dimmable ? "(applied)" : "(unused — relay-only mode)"}</td></tr>`;
   }
 
-  if (reg === "exhaust") {
+  if (R.co2Gain !== undefined) {
     const ca = anchors("co2");
     const devDead = R.co2Break;
     // co2_gain of 0 is a legal config value and disables the term entirely.
@@ -855,15 +1033,25 @@ function renderAgg(reg, R, results) {
     const devSat = R.co2Gain > 0 ? Math.min(100, R.co2Break + 100 / R.co2Gain) : null;
     const ppmAt = d => d === null || d > 100
       ? "never within this profile's range" : `dev ${fmt(d)} · ${devToPhys(d, ca).toFixed(0)} ppm`;
-    h += `<tr class="sect"><td colspan="2">CO₂ term (exhaust only)</td></tr>
+    h += `<tr class="sect"><td colspan="2">CO₂ additive term</td></tr>
       <tr><td>co2_gain / co2_break</td><td>${fmt(R.co2Gain, 2)} / ${fmt(R.co2Break)}</td></tr>
       <tr><td>deadband ends</td><td>${ppmAt(devDead)}</td></tr>
       <tr><td>term clears the floor (${fmt(R.floor)})</td><td>${ppmAt(devFloor)}</td></tr>
       <tr><td>term saturates (100)</td><td>${ppmAt(devSat)}</td></tr>
-      <tr><td>external multiplier</td><td>${D.externalSensor.enabled
+      <tr><td>external multiplier</td><td>${!R.external
+        ? "not applied to this regulator"
+        : D.externalSensor.enabled
         ? "enabled — NOT modelled (needs a live outside reading); device range ×"
           + fmt(externalMultRange(), 2) + "–1.00"
         : "sensor disabled — constant 1.0"}</td></tr>`;
+    // The ceiling of the term is gain*(100-break). If that sits under the
+    // floor, the floor forces the command up and CO2 changes nothing anywhere
+    // in the profile's range — the exact bug this repo shipped twice.
+    const ceiling = R.co2Gain * (100 - R.co2Break);
+    if (ceiling <= R.floor) {
+      h += `<tr><td colspan="2"><strong>CO₂ term tops out at ${fmt(ceiling)}, under the floor of
+        ${fmt(R.floor)} — CO₂ cannot move this actuator at any concentration.</strong></td></tr>`;
+    }
   }
   h += `</table>`;
 
@@ -873,12 +1061,13 @@ function renderAgg(reg, R, results) {
     ${Object.keys(D.escalation).filter(d => D.escalation[d].high || D.escalation[d].low)
       .map(d => D.dimLabels[d] + (D.escalation[d].high ? " high" : "") + (D.escalation[d].low ? " low" : ""))
       .join(", ") || "nothing"} — outlined cells are where that gated severity reaches
-    ${fmt(D.edgeEmergency, 0)}.</p>`;
+    ${fmt(eEmerg(), 0)}.</p>`;
   el("agg").innerHTML = h;
 }
 
 function renderDetail(reg, R) {
   if (!state.sel) { el("detail").innerHTML = `<p class="empty">Click a cell in the grid.</p>`; return; }
+  const takesCo2 = R.co2Gain !== undefined;
   const [xi, yi] = state.sel;
   const r = pipeline(reg, xi, yi);
   const dx = R.dims[0], dy = R.dims[1];
@@ -899,21 +1088,23 @@ function renderDetail(reg, R) {
   </table>
   <div class="bars">
     ${bar("raw surface", r.raw, "var(--seq-300)")}
-    ${reg === "exhaust" ? bar("+ CO₂ term", r.afterCo2, "var(--seq-400)") : ""}
+    ${takesCo2 ? bar("+ CO₂ term", r.afterCo2, "var(--seq-400)") : ""}
     ${bar("after floor/conflict", r.command, "var(--seq-500)")}
     ${bar("final duty", r.duty, "var(--accent)")}
   </div>
   <div class="stage"><span class="n">raw surface output</span><span class="v">${fmt(r.raw)}</span></div>`;
 
-  if (reg === "exhaust") {
+  if (takesCo2) {
     h += `<div class="stage"><span class="n">CO₂ term (gain ${fmt(R.co2Gain, 2)} ×
       relu(dev − ${fmt(R.co2Break)}))</span>
       <span class="v">${r.co2Term > 0 ? "+" + fmt(r.co2Term) : "0.0"}</span>
       ${r.co2Term === 0
         ? `<span class="note">inside the CO₂ deadband — the term contributes nothing here</span>`
         : ""}
-      </div>
-      <div class="stage"><span class="n">× external multiplier</span><span class="v">${fmt(r.extMult, 2)}</span>
+      </div>`;
+  }
+  if (R.external) {
+    h += `<div class="stage"><span class="n">× external multiplier</span><span class="v">${fmt(r.extMult, 2)}</span>
       <span class="note">${D.externalSensor.enabled
         ? `external sensor ENABLED in config: the device derives this from a live outside reading and `
           + `could scale the command as low as ×${fmt(externalMultRange(), 2)}. A static plot has no `
@@ -925,7 +1116,7 @@ function renderDetail(reg, R) {
   h += `<div class="stage"><span class="n">after floor${r.floorFired ? " — <strong>floor applied</strong>" : ""}</span>
       <span class="v">${fmt(r.floored)}</span>
       ${r.floorFired
-        ? `<span class="note">severity ${fmt(r.regSev)} ≥ ${fmt(D.edgeMinor, 0)} forced the
+        ? `<span class="note">severity ${fmt(r.regSev)} ≥ ${fmt(eMinor(), 0)} forced the
            command up to the floor of ${fmt(R.floor)}</span>`
         : ""}
     </div>
@@ -967,7 +1158,7 @@ function renderDetail(reg, R) {
   }
   if (r.escEmergency) {
     h += `<p class="warn">This cell would escalate: gated severity ${fmt(r.esc)} ≥
-      ${fmt(D.edgeEmergency, 0)}${r.escLatch ? ` (and ≥ the latch edge ${fmt(D.edgeLatch, 0)})` : ""},
+      ${fmt(eEmerg(), 0)}${r.escLatch ? ` (and ≥ the latch edge ${fmt(eLatch(), 0)})` : ""},
       held for ${D.latch.enter_ticks} ticks. The forced vector would then set this regulator to
       <strong>${R.emergencyValue === null ? "free (keeps its organic command)" : fmt(R.emergencyValue) + " %"}</strong>
       in emergency and <strong>${R.safeState === null ? "free" : fmt(R.safeState) + " %"}</strong> under latch,
@@ -976,8 +1167,285 @@ function renderDetail(reg, R) {
   el("detail").innerHTML = h;
 }
 
+/* ---------- editor ----------------------------------------------------- */
+
+// Hinge pairs are shown as one row because that is how they are tuned: a slope
+// and the deviation it starts from. Everything else is a single number.
+const HINGES = [
+  ["x high hinge 1", "hx_hi1", "bx_hi1"],
+  ["x high hinge 2", "hx_hi2", "bx_hi2"],
+  ["x low hinge 1", "hx_lo1", "bx_lo1"],
+  ["x low hinge 2", "hx_lo2", "bx_lo2"],
+  ["y high hinge 1", "hy_hi1", "by_hi1"],
+  ["y high hinge 2", "hy_hi2", "by_hi2"],
+  ["y low hinge 1", "hy_lo1", "by_lo1"],
+  ["y low hinge 2", "hy_lo2", "by_lo2"],
+];
+const COUPLING = ["ca", "sa", "cross", "gain", "offset"];
+const BOOST = ["x_top", "x_bot", "y_top", "y_bot", "boost_base", "grad"];
+const OUTPUT = ["mult", "out_min", "out_max"];
+const BREAKPOINTS = new Set(HINGES.map(hz => hz[2]));
+
+function stepFor(name) {
+  if (name === "grad") return 0.001;
+  if (BREAKPOINTS.has(name) || BOOST.includes(name) || OUTPUT.includes(name)) return 1;
+  return 0.1;
+}
+
+// A parameter is worth showing when it is doing something — non-default now, or
+// non-default in the shipped config (so a knob you just zeroed does not vanish
+// from under the cursor).
+function inPlay(reg, name) {
+  return LIVE[reg].surface[name] !== DEF[name] || D.regulators[reg].surface[name] !== DEF[name];
+}
+
+function numInput(path, value, base, step) {
+  const dirty = value !== base ? " dirty" : "";
+  return `<input type="number" class="ed${dirty}" data-path="${path}" value="${value}" step="${step}">`;
+}
+
+function edRow(label, cells, baseText) {
+  return `<div class="edrow"><label>${label}</label>${cells}<span class="base">${baseText}</span></div>`;
+}
+
+function renderEditor() {
+  const reg = state.reg, R = LIVE[reg], B = D.regulators[reg];
+  el("edSubtitle").textContent = "— " + reg;
+  let h = "";
+
+  if (R.driven === "surface") {
+    const rows = [];
+    for (const [label, slope, brk] of HINGES) {
+      if (!state.showAll && !inPlay(reg, slope) && !inPlay(reg, brk)) continue;
+      rows.push(edRow(label,
+        numInput("surface." + slope, R.surface[slope], B.surface[slope], stepFor(slope))
+        + numInput("surface." + brk, R.surface[brk], B.surface[brk], stepFor(brk)),
+        "slope / from"));
+    }
+    if (rows.length) h += `<div class="edgroup"><div class="gt">Hinges — slope, breakpoint</div>${rows.join("")}</div>`;
+
+    for (const [title, names] of [["Coupling", COUPLING], ["Boost", BOOST], ["Output", OUTPUT]]) {
+      const rs = names.filter(n => state.showAll || inPlay(reg, n)).map(n =>
+        edRow(n, numInput("surface." + n, R.surface[n], B.surface[n], stepFor(n)) + "<span></span>",
+          fmt(B.surface[n], 3)));
+      if (rs.length) h += `<div class="edgroup"><div class="gt">${title}</div>${rs.join("")}</div>`;
+    }
+  } else {
+    h += `<p class="note">${reg} has no surface: it is driven by
+      ${R.driven === "tod" ? "the time-of-day blend" : "the heater's command"}.</p>`;
+  }
+
+  const arb = [];
+  arb.push(edRow("floor", numInput("floor", R.floor, B.floor, 1) + "<span></span>", fmt(B.floor)));
+  arb.push(edRow("slew_normal", numInput("slewNormal", R.slewNormal, B.slewNormal, 5) + "<span></span>",
+    fmt(B.slewNormal)));
+  arb.push(edRow("slew_fast", numInput("slewFast", R.slewFast, B.slewFast, 5) + "<span></span>",
+    fmt(B.slewFast)));
+  if (R.co2Gain !== undefined) {
+    arb.push(edRow("co2_gain", numInput("co2Gain", R.co2Gain, B.co2Gain, 0.1) + "<span></span>", fmt(B.co2Gain, 2)));
+    arb.push(edRow("co2_break", numInput("co2Break", R.co2Break, B.co2Break, 1) + "<span></span>", fmt(B.co2Break)));
+  }
+  h += `<div class="edgroup"><div class="gt">Arbitration</div>${arb.join("")}</div>`;
+
+  if (R.adapter.on_above !== undefined) {
+    const ad = ["on_above", "off_below"].map(k =>
+      edRow(k, numInput("adapter." + k, R.adapter[k], B.adapter[k], 0.5) + "<span></span>", fmt(B.adapter[k])));
+    h += `<div class="edgroup"><div class="gt">Adapter thresholds</div>${ad.join("")}
+      <p class="note">These are points on the surface above, not independent knobs —
+      move the slope and both switch points move with it.</p></div>`;
+  }
+
+  const edges = LIVE_EDGES.map((v, i) =>
+    numInput("edge." + i, v, D.bandEdges[i], 1)).join("");
+  h += `<div class="edgroup"><div class="gt">Band edges (global)</div>
+    <div class="edges">${edges}</div>
+    <p class="note">The arbiter names its minor / conflict / emergency / latch
+    thresholds off the last four. The last edge must stay 50.</p></div>`;
+
+  el("editor").innerHTML = h;
+  updateDirty();
+}
+
+function applyEdit(path, rawValue) {
+  const v = parseFloat(rawValue);
+  if (!Number.isFinite(v)) return false;
+  const R = LIVE[state.reg];
+  if (path.startsWith("surface.")) { R.surface[path.slice(8)] = v; gridCache = {}; }
+  else if (path.startsWith("adapter.")) R.adapter[path.slice(8)] = v;
+  else if (path.startsWith("edge.")) LIVE_EDGES[parseInt(path.slice(5), 10)] = v;
+  else R[path] = v;
+  return true;
+}
+
+/* ---------- change tracking + export ----------------------------------- */
+
+function regChanges(name) {
+  const R = LIVE[name], B = D.regulators[name], out = [];
+  if (R.surface) {
+    for (const m of META) {
+      if (R.surface[m.name] !== B.surface[m.name]) out.push("surface." + m.name);
+    }
+  }
+  for (const key of ["floor", "slewNormal", "slewFast", "co2Gain", "co2Break"]) {
+    if (R[key] !== undefined && R[key] !== B[key]) out.push(key);
+  }
+  for (const key of ["on_above", "off_below"]) {
+    if (R.adapter[key] !== undefined && R.adapter[key] !== B.adapter[key]) out.push("adapter." + key);
+  }
+  return out;
+}
+
+function edgesChanged() {
+  return LIVE_EDGES.some((v, i) => v !== D.bandEdges[i]);
+}
+
+function updateDirty() {
+  const per = D.regNames.map(n => [n, regChanges(n).length]).filter(e => e[1]);
+  const total = per.reduce((s, e) => s + e[1], 0) + (edgesChanged() ? 1 : 0);
+  el("btnExport").disabled = total === 0;
+  el("dirtySummary").innerHTML = total === 0
+    ? `<p class="note">No changes — every value matches <code>config.py</code>.</p>`
+    : `<p class="dirtynote">${total} changed value${total === 1 ? "" : "s"}:
+       ${per.map(([n, c]) => `${n} (${c})`).join(", ")}${edgesChanged()
+         ? (per.length ? ", " : "") + "band edges" : ""}.</p>`;
+}
+
+// config.py writes floats with a decimal point and ints without; match that so
+// the fragment reads like the file it is going into.
+function pyNum(v) {
+  if (Number.isInteger(v)) return v.toFixed(1);
+  return String(parseFloat(v.toFixed(6)));
+}
+
+function buildExport() {
+  const out = [];
+  if (edgesChanged()) {
+    out.push("# --- regulation ---");
+    out.push('"band_edges": [' + LIVE_EDGES.map(v => String(v)).join(", ") + "],", "");
+  }
+  for (const name of D.regNames) {
+    const R = LIVE[name], B = D.regulators[name];
+    const changed = regChanges(name);
+    if (!changed.length) continue;
+    const lines = [];
+    if (changed.some(c => c.startsWith("surface."))) {
+      // Emit the WHOLE call: _surface() fills unlisted params from the neutral
+      // defaults, so a partial list would silently reset the ones left out.
+      lines.push('"surface": _surface(');
+      for (const m of META) {
+        if (R.surface[m.name] !== DEF[m.name]) lines.push(`    ${m.name}=${pyNum(R.surface[m.name])},`);
+      }
+      lines.push("),");
+    }
+    for (const [key, prop] of [["floor", "floor"], ["slew_normal", "slewNormal"],
+                               ["slew_fast", "slewFast"], ["co2_gain", "co2Gain"],
+                               ["co2_break", "co2Break"]]) {
+      if (changed.includes(prop)) lines.push(`"${key}": ${pyNum(R[prop])},`);
+    }
+    const adKeys = ["on_above", "off_below"].filter(k => changed.includes("adapter." + k));
+    if (adKeys.length) {
+      lines.push('"adapter": {  # merge these two into the existing adapter block');
+      for (const k of adKeys) lines.push(`    "${k}": ${pyNum(R.adapter[k])},`);
+      lines.push("},");
+    }
+    out.push(`# --- regulation.regulators.${name} ---`, ...lines, "");
+  }
+  return out.join("\n").trimEnd();
+}
+
+/* ---------- self-check -------------------------------------------------
+   rawBaked came from lib.regulation_surface.evaluate and was checked against
+   tests/golden/ at generate time. If the JS port above reproduces it, the live
+   plot is trustworthy; if it does not, say so loudly rather than plot fiction.
+   The tolerance is loose enough for the float32 parameter array the device uses
+   and tight enough that a real porting error cannot hide under it. */
+
+const SELFCHECK_TOL = 0.05;
+
+function selfCheck() {
+  let worst = 0, where = "";
+  for (const name of D.regNames) {
+    const B = D.regulators[name];
+    if (B.driven !== "surface" || !B.rawBaked) continue;
+    const g = surfaceGrid(name);
+    for (let i = 0; i < N; i++) {
+      for (let j = 0; j < N; j++) {
+        const d = Math.abs(g[i][j] - B.rawBaked[i][j]);
+        if (d > worst) { worst = d; where = `${name} at x=${G[i]} y=${G[j]}`; }
+      }
+    }
+  }
+  const box = el("selfcheck");
+  if (worst > SELFCHECK_TOL) {
+    box.innerHTML = `<p class="banner"><strong>Surface evaluator mismatch.</strong>
+      This page's JavaScript port of <code>lib/regulation_surface.evaluate</code> disagrees with the
+      golden-checked grid baked in at generate time by up to ${worst.toFixed(4)} (${where}).
+      Everything plotted below is suspect — fix the port in
+      <code>prototypes/gen_regulation_explorer.py</code> before trusting it.</p>`;
+  } else {
+    box.innerHTML = `<p class="banner ok">Surface evaluator agrees with the golden-checked
+      reference grid (largest difference ${worst.toExponential(1)}). Edits below are computed
+      by the same maths the Pico runs.</p>`;
+  }
+}
+
+/* ---------- wiring ------------------------------------------------------ */
+
+el("editor").addEventListener("input", ev => {
+  const t = ev.target;
+  if (!t.dataset || !t.dataset.path) return;
+  if (!applyEdit(t.dataset.path, t.value)) return;
+  render();
+  updateDirty();
+  // Re-mark just this input; re-rendering the whole editor here would steal
+  // focus mid-keystroke.
+  const [scope, key] = [t.dataset.path, null];
+  const B = D.regulators[state.reg];
+  let base;
+  if (scope.startsWith("surface.")) base = B.surface[scope.slice(8)];
+  else if (scope.startsWith("adapter.")) base = B.adapter[scope.slice(8)];
+  else if (scope.startsWith("edge.")) base = D.bandEdges[parseInt(scope.slice(5), 10)];
+  else base = B[scope];
+  t.classList.toggle("dirty", parseFloat(t.value) !== base);
+});
+
+el("showAll").onchange = e => { state.showAll = e.target.checked; renderEditor(); };
+el("btnResetReg").onclick = () => {
+  LIVE[state.reg] = clone(D.regulators[state.reg]);
+  gridCache = {};
+  render(); renderEditor();
+};
+el("btnResetAll").onclick = () => {
+  LIVE = clone(D.regulators);
+  LIVE_EDGES = D.bandEdges.slice();
+  gridCache = {};
+  el("exportWrap").hidden = true;
+  render(); renderEditor();
+};
+el("btnExport").onclick = () => {
+  el("exportText").value = buildExport();
+  el("exportWrap").hidden = false;
+  el("exportText").scrollIntoView({ block: "nearest" });
+};
+el("btnHideExport").onclick = () => { el("exportWrap").hidden = true; };
+el("btnCopy").onclick = async () => {
+  const ta = el("exportText");
+  try {
+    await navigator.clipboard.writeText(ta.value);
+    el("btnCopy").textContent = "Copied";
+  } catch (err) {
+    // file:// pages often have no clipboard permission — fall back to a
+    // selection the user can copy with the keyboard.
+    ta.focus(); ta.select();
+    el("btnCopy").textContent = "Selected — press Ctrl+C";
+  }
+  setTimeout(() => { el("btnCopy").textContent = "Copy to clipboard"; }, 2500);
+};
+
 buildControls();
+selfCheck();
 render();
+renderEditor();
 """
 
 

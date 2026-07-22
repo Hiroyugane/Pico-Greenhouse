@@ -1,342 +1,594 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pi Greenhouse — regulation surface explorer</title>
 <style>
 
+/* ============================================================================
+   Pi Greenhouse — Regulation surface explorer (redesign)
+   Engineer's-instrument aesthetic per the Pi Greenhouse design system:
+   graphite ink on warm datasheet paper (light) / near-black terminal (dark),
+   monospace carries all data, ruled tables over floating cards.
+   No CDN, no webfonts (offline bench file) — system stacks stand in for
+   IBM Plex Sans / IBM Plex Mono / VT323.
+   ============================================================================ */
 :root {
   color-scheme: light;
-  --surface-1: #fcfcfb;
-  --page: #f9f9f7;
-  --text-primary: #0b0b0b;
-  --text-secondary: #52514e;
-  --muted: #898781;
-  --grid-line: #e1e0d9;
-  --baseline: #c3c2b7;
-  --border: rgba(11,11,11,0.10);
-  --seq-100: #cde2fb; --seq-200: #9ec5f4; --seq-300: #6da7ec; --seq-400: #3987e5;
-  --seq-500: #256abf; --seq-600: #184f95; --seq-700: #0d366b;
-  --status-good: #0ca30c;
-  --status-warning: #fab219;
-  --status-serious: #ec835a;
-  --status-critical: #d03b3b;
-  --accent: #2a78d6;
-}
-@media (prefers-color-scheme: dark) {
-  :root:where(:not([data-theme="light"])) {
-    color-scheme: dark;
-    --surface-1: #1a1a19;
-    --page: #0d0d0d;
-    --text-primary: #ffffff;
-    --text-secondary: #c3c2b7;
-    --grid-line: #2c2c2a;
-    --baseline: #383835;
-    --border: rgba(255,255,255,0.10);
-    --accent: #3987e5;
-  }
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Segoe UI Mono", Menlo, Consolas, monospace;
+
+  /* brand */
+  --grow-900:#0c3d22; --grow-700:#135731; --grow-600:#1f8a4c; --grow-500:#25a65b;
+  --grow-400:#4cbf7a; --grow-300:#7ad6a0; --grow-100:#d6f1e0;
+  --bloom-700:#8e1a63; --bloom-500:#db2a8a; --bloom-300:#f06ab2; --bloom-100:#fbd9ec;
+
+  /* status = LEDs = severity */
+  --led-red:#e5484d; --led-amber:#f2a93b; --led-green:#46a758; --led-blue:#3e8fe0;
+
+  /* light surface — warm datasheet paper */
+  --page:#eceee9;
+  --surface:#fbfbf9;
+  --surface-sunken:#f1f2ee;
+  --fg-1:#14181b;
+  --fg-2:#5b6770;
+  --fg-3:#7e8b93;
+  --border:#d9ddd6;
+  --border-strong:#c3ccd1;
+  --grid-line:#e3e6df;
+  --band-fill:#e0ddd3;   /* history-dependent cells — deliberately NON-green */
+  --band-stroke:#b9b6aa;
+  --accent:var(--grow-600);
+
+  --radius-sm:3px; --radius-md:6px; --radius-lg:10px; --radius-pcb:2px;
+  --shadow-sm:0 1px 2px rgba(20,24,27,.06);
+  --shadow-md:0 2px 8px rgba(20,24,27,.08),0 1px 2px rgba(20,24,27,.06);
+  --tracking-caps:0.12em;
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --surface-1: #1a1a19;
-  --page: #0d0d0d;
-  --text-primary: #ffffff;
-  --text-secondary: #c3c2b7;
-  --grid-line: #2c2c2a;
-  --baseline: #383835;
-  --border: rgba(255,255,255,0.10);
-  --accent: #3987e5;
+  /* dark surface — near-black device/terminal glass */
+  --page:#05080a;
+  --surface:#111417;
+  --surface-sunken:#0b0e10;
+  --fg-1:#eef3f2;
+  --fg-2:#9fb0ad;
+  --fg-3:#6c7c7a;
+  --border:#232a2c;
+  --border-strong:#333c3e;
+  --grid-line:#1a2022;
+  --band-fill:#42423a;
+  --band-stroke:#5a5a4e;
+  --led-green:#46a758;
+  --shadow-sm:none;
+  --shadow-md:none;
 }
-* { box-sizing: border-box; }
-/* The page is capped and centred. Without this the flex columns grow to fill a
+* { box-sizing:border-box; }
+html,body { margin:0; }
+/* The page is capped and centred. Without this the grid columns grow to fill a
    widescreen monitor and the heat map — which is aspect-ratio 1 — grows with
-   them until it is taller than the viewport, at which point zooming out shrinks
-   the labels without ever bringing the whole grid into view. */
+   them until it is taller than the viewport. */
 body {
-  margin: 0 auto; padding: 20px 24px 48px; max-width: 1680px;
-  background: var(--page); color: var(--text-primary);
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-  font-size: 14px; line-height: 1.5;
+  margin:0 auto; max-width:1900px;
+  background:var(--page); color:var(--fg-1);
+  font-family:var(--font-sans); font-size:14px; line-height:1.5;
+  padding:22px 26px 56px;
+  -webkit-font-smoothing:antialiased;
 }
-h1 { font-size: 19px; margin: 0 0 2px; font-weight: 600; }
-h2 { font-size: 13px; margin: 0 0 8px; font-weight: 600; letter-spacing: .02em; }
-.sub { color: var(--text-secondary); font-size: 13px; margin: 0 0 18px; max-width: 105ch; }
-.controls {
-  display: flex; flex-wrap: wrap; gap: 18px 26px; align-items: flex-end;
-  background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
-  padding: 14px 18px; margin-bottom: 18px;
+.mono { font-family:var(--font-mono); font-feature-settings:'zero' 1; }
+.eyebrow {
+  font-family:var(--font-mono); font-size:11px; font-weight:600;
+  letter-spacing:var(--tracking-caps); text-transform:uppercase; color:var(--fg-2);
 }
-.ctl { display: flex; flex-direction: column; gap: 5px; }
-.ctl label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
-.ctl select {
-  font: inherit; padding: 5px 8px; border-radius: 6px;
-  border: 1px solid var(--baseline); background: var(--surface-1); color: var(--text-primary);
-}
-.ctl input[type=range] { width: 210px; accent-color: var(--accent); }
-.ctl .readout { font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
-.ctl.disabled { opacity: .45; }
-.ctl.disabled input { cursor: not-allowed; }
-.layout { display: flex; gap: 22px; align-items: flex-start; flex-wrap: wrap; }
-.chartcard, .panel {
-  background: var(--surface-1); border: 1px solid var(--border);
-  border-radius: 10px; padding: 16px 18px;
-}
-/* max-width, not just flex-basis: the heat map is square, so any width the card
-   is allowed to reach is also a height it will reach. 780px keeps the grid at
-   about 640px square — large enough to read a 21x21 cell, small enough to sit
-   beside both panels on a wide screen without scrolling. */
-.chartcard { flex: 1 1 560px; min-width: 460px; max-width: 780px; }
-.side { flex: 1 1 400px; min-width: 330px; max-width: 520px; display: flex; flex-direction: column; gap: 16px; }
-.editcol { flex: 1 1 340px; min-width: 320px; max-width: 440px; display: flex; flex-direction: column; gap: 16px; }
-/* The x tick labels are rotated vertical, so the TICK track is the tall one and
-   the axis-title track is the short one — not the other way round. */
-.gridwrap { display: grid; grid-template-columns: 22px 86px 1fr; grid-template-rows: 1fr 86px 22px; }
-.ylab, .xlab {
-  display: flex; align-items: center; justify-content: center;
-  font-size: 11px; color: var(--text-secondary); text-align: center;
-}
-.ylab { grid-column: 1; grid-row: 1; writing-mode: vertical-rl; transform: rotate(180deg); }
-.yticks { grid-column: 2; grid-row: 1; display: flex; flex-direction: column-reverse; }
-.ytick, .xtick {
-  flex: 1; display: flex; align-items: center; justify-content: flex-end;
-  font-size: 9px; color: var(--muted); font-variant-numeric: tabular-nums;
-  padding-right: 4px; white-space: nowrap;
-}
-.xticks { grid-column: 3; grid-row: 2; display: flex; }
-.xtick { justify-content: flex-start; padding: 4px 0 0; writing-mode: vertical-rl; }
-.xlab { grid-column: 3; grid-row: 3; }
-#heat {
-  grid-column: 3; grid-row: 1;
-  display: grid;
-  grid-template-columns: repeat(21, 1fr); grid-template-rows: repeat(21, 1fr);
-  aspect-ratio: 1; gap: 0; border: 1px solid var(--baseline);
-}
-.cell { position: relative; cursor: pointer; }
-.cell:hover { outline: 2px solid var(--text-primary); outline-offset: -2px; z-index: 3; }
-.cell.sel { outline: 3px solid var(--text-primary); outline-offset: -3px; z-index: 4; }
-.cell.band::after {
-  content: ""; position: absolute; inset: 0;
-  background: repeating-linear-gradient(45deg,
-    rgba(255,255,255,.85) 0 2px, rgba(0,0,0,0) 2px 5px);
-}
-.cell.escalate { box-shadow: inset 0 0 0 1.5px var(--status-critical); z-index: 2; }
-.cell.conflict::before {
-  content: ""; position: absolute; inset: 0;
-  background: repeating-linear-gradient(135deg,
-    var(--status-warning) 0 1.5px, rgba(0,0,0,0) 1.5px 6px);
-}
-.legendrow { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 14px; }
-.ramp { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text-secondary); }
-.rampbar { display: flex; height: 10px; width: 190px; border-radius: 3px; overflow: hidden; }
-.rampbar span { flex: 1; }
-.key { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-secondary); }
-.swatch { width: 15px; height: 15px; border-radius: 3px; border: 1px solid var(--baseline); position: relative; }
-.swatch.band { background: var(--seq-400); }
-.swatch.band::after {
-  content: ""; position: absolute; inset: 0;
-  background: repeating-linear-gradient(45deg, rgba(255,255,255,.85) 0 2px, rgba(0,0,0,0) 2px 5px);
-}
-.swatch.esc { box-shadow: inset 0 0 0 2px var(--status-critical); background: transparent; }
-.swatch.cfl { background: repeating-linear-gradient(135deg, var(--status-warning) 0 2px, transparent 2px 6px); }
-table.kv { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-table.kv td { padding: 3px 0; vertical-align: top; }
-table.kv td:first-child { color: var(--text-secondary); padding-right: 12px; white-space: nowrap; }
-table.kv td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
-table.kv tr.sect td { padding-top: 11px; color: var(--muted); font-size: 10.5px;
-  text-transform: uppercase; letter-spacing: .06em; }
-.tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 6px 0 2px; }
-.tile { border: 1px solid var(--border); border-radius: 8px; padding: 8px 9px; }
-.tile .t { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
-.tile .v { font-size: 19px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.tile .u { font-size: 11px; color: var(--muted); font-weight: 400; }
-.stage { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: center;
-  font-size: 12.5px; padding: 5px 0; border-bottom: 1px solid var(--grid-line); }
-.stage:last-child { border-bottom: none; }
-.stage .n { color: var(--text-secondary); }
-.stage .v { font-variant-numeric: tabular-nums; font-weight: 600; }
-.stage.final { font-size: 15px; }
-.stage.final .v { font-size: 22px; color: var(--accent); }
-.stage .note { grid-column: 1 / -1; font-size: 11px; color: var(--muted); }
-.bars { margin: 10px 0 4px; }
-.barrow { display: grid; grid-template-columns: 74px 1fr 52px; gap: 8px; align-items: center;
-  font-size: 11.5px; margin-bottom: 5px; }
-.bartrack { height: 12px; background: var(--grid-line); border-radius: 3px; overflow: hidden; }
-.barfill { height: 100%; border-radius: 3px; }
-.barval { text-align: right; font-variant-numeric: tabular-nums; }
-.note { font-size: 11.5px; color: var(--muted); }
-.warn { font-size: 11.5px; color: var(--text-secondary); border-left: 3px solid var(--status-warning);
-  padding: 4px 0 4px 9px; margin: 9px 0 0; }
-.empty { color: var(--muted); font-size: 12.5px; padding: 10px 0; }
-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+a { color:var(--grow-600); }
+a:hover { color:var(--grow-700); }
+code { font-family:var(--font-mono); font-size:12px; }
+.note { font-size:11.5px; color:var(--fg-3); line-height:1.5; }
 
-/* ---- editor ---- */
-.panel h2 .hint { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--muted); }
-.edgroup { margin-top: 10px; }
-.edgroup > .gt { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em;
-  color: var(--muted); margin-bottom: 4px; }
-.edrow { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; align-items: center;
-  margin-bottom: 4px; font-size: 12px; }
-.edrow label { color: var(--text-secondary); }
+/* ── header ─────────────────────────────────────────────────────────────── */
+.topbar { display:flex; align-items:flex-start; justify-content:space-between; gap:24px; margin-bottom:18px; }
+.brandline { display:flex; align-items:center; gap:9px; margin-bottom:7px; }
+.brand-dot { width:9px; height:9px; border-radius:50%; background:var(--grow-600);
+  box-shadow:0 0 0 3px rgba(31,138,76,.18); }
+h1 { font-size:26px; font-weight:600; letter-spacing:-0.01em; margin:0 0 4px; }
+.sub { color:var(--fg-2); font-size:13px; margin:0; max-width:100ch; }
+.sub code { font-family:var(--font-mono); font-size:12px; color:var(--fg-1); }
+.themetoggle { display:flex; border:1px solid var(--border-strong); border-radius:var(--radius-md); overflow:hidden;
+  flex:none; }
+.themetoggle button {
+  font-family:var(--font-mono); font-size:11px; letter-spacing:.06em; text-transform:uppercase;
+  padding:7px 12px; border:0; background:var(--surface); color:var(--fg-2); cursor:pointer;
+}
+.themetoggle button + button { border-left:1px solid var(--border); }
+.themetoggle button[aria-pressed="true"] { background:var(--fg-1); color:var(--page); }
+
+/* ── control bar ────────────────────────────────────────────────────────── */
+.controls {
+  display:grid; grid-template-columns:1fr; gap:16px;
+  background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg);
+  padding:16px 18px; margin-bottom:18px; box-shadow:var(--shadow-sm);
+}
+.ctl-label { display:block; margin-bottom:8px; }
+.ctl-row { display:flex; flex-wrap:wrap; gap:20px 34px; align-items:flex-start; }
+.ctl { display:flex; flex-direction:column; }
+.ctl.grow { flex:1 1 240px; min-width:220px; }
+
+/* segmented regulator rail */
+.segrail { display:flex; flex-wrap:wrap; gap:0; border:1px solid var(--border-strong); border-radius:var(--radius-md);
+  overflow:hidden; width:fit-content; max-width:100%; }
+.segrail button {
+  font-family:var(--font-mono); font-size:12.5px; padding:8px 14px; border:0; cursor:pointer;
+  background:var(--surface); color:var(--fg-2); border-left:1px solid var(--border);
+  transition:background var(--dur,120ms) ease, color 120ms ease;
+}
+.segrail button:first-child { border-left:0; }
+.segrail button:hover { background:var(--surface-sunken); color:var(--fg-1); }
+.segrail button[aria-pressed="true"] { background:var(--grow-600); color:#fff; font-weight:600; }
+
+/* profile select */
+select#prof {
+  font-family:var(--font-mono); font-size:13px; padding:8px 30px 8px 11px; color:var(--fg-1);
+  background:var(--surface); border:1px solid var(--border-strong); border-radius:var(--radius-md);
+  appearance:none;
+  background-image:linear-gradient(45deg,transparent 50%,var(--fg-3) 50%),
+    linear-gradient(135deg,var(--fg-3) 50%,transparent 50%);
+  background-position:calc(100% - 15px) 55%, calc(100% - 10px) 55%; background-size:5px 5px,5px 5px;
+    background-repeat:no-repeat;
+  min-width:210px;
+}
+
+/* sliders */
+.slider-head { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:9px; }
+.readout { font-family:var(--font-mono); font-size:12px; color:var(--fg-1); font-variant-numeric:tabular-nums; }
+input[type=range] { -webkit-appearance:none; appearance:none; width:100%; height:4px; border-radius:3px;
+  background:var(--border-strong); outline:none; cursor:pointer; }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:16px; height:16px; border-radius:50%;
+  background:var(--grow-600); border:2px solid var(--surface); box-shadow:var(--shadow-sm); }
+input[type=range]::-moz-range-thumb { width:16px; height:16px; border-radius:50%; background:var(--grow-600);
+  border:2px solid var(--surface); }
+input[type=range]:disabled { cursor:not-allowed; }
+input[type=range]:disabled::-webkit-slider-thumb { background:var(--fg-3); }
+input[type=range]:disabled::-moz-range-thumb { background:var(--fg-3); }
+
+/* CO2 disabled — designed, not just faded */
+.ctl.co2.disabled input[type=range] { background:var(--grid-line); }
+.co2-inert {
+  display:none; margin-top:9px; padding:7px 10px; border-radius:var(--radius-sm);
+  background:var(--surface-sunken); border:1px dashed var(--border-strong);
+  font-family:var(--font-mono); font-size:11.5px; color:var(--fg-2); line-height:1.45;
+}
+.ctl.co2.disabled .co2-inert { display:block; }
+.co2-inert strong { color:var(--fg-1); font-weight:600; }
+
+/* ── layout ─────────────────────────────────────────────────────────────── */
+.layout { display:grid; grid-template-columns:minmax(0,1.5fr) minmax(360px,1fr) minmax(320px,.85fr); gap:20px;
+  align-items:start; }
+@media (max-width:1500px){ .layout { grid-template-columns:minmax(0,1.5fr) minmax(360px,1fr); } }
+@media (max-width:1080px){ .layout { grid-template-columns:1fr; } }
+.card {
+  background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg);
+  box-shadow:var(--shadow-sm);
+}
+.card-h { display:flex; align-items:baseline; justify-content:space-between; gap:14px; padding:15px 18px 0; }
+.card-h h2 { font-size:15px; font-weight:600; margin:0; letter-spacing:-0.005em; }
+.card-h .tag { font-family:var(--font-mono); font-size:11px; color:var(--fg-3); }
+.card-body { padding:12px 18px 18px; }
+.side, .editcol { display:flex; flex-direction:column; gap:20px; min-width:0; }
+.chartnote { font-size:12px; color:var(--fg-2); margin:6px 18px 0; line-height:1.45; }
+
+/* ── heat map ───────────────────────────────────────────────────────────── */
+.gridwrap { display:grid; grid-template-columns:22px 52px minmax(0,1fr); grid-template-rows:minmax(0,1fr) 34px 24px;
+  margin-top:12px; }
+.ylab { grid-column:1; grid-row:1; writing-mode:vertical-rl; transform:rotate(180deg); display:flex;
+  align-items:center; justify-content:center; text-align:center; font-size:11px; color:var(--fg-2); }
+.xlab { grid-column:3; grid-row:3; display:flex; align-items:center; justify-content:center; text-align:center;
+  font-size:11px; color:var(--fg-2); }
+.yticks { grid-column:2; grid-row:1; display:flex; flex-direction:column-reverse; }
+.xticks { grid-column:3; grid-row:2; display:flex; }
+.ytick { flex:1; display:flex; align-items:center; justify-content:flex-end; padding-right:6px;
+  font-family:var(--font-mono); font-size:9px; color:var(--fg-3); font-variant-numeric:tabular-nums; }
+.xtick { flex:1; display:flex; align-items:flex-start; justify-content:center; padding-top:5px;
+  font-family:var(--font-mono); font-size:9px; color:var(--fg-3); font-variant-numeric:tabular-nums; }
+.ytick.maj, .xtick.maj { color:var(--fg-1); font-weight:600; }
+#heat {
+  grid-column:3; grid-row:1; position:relative;
+  display:grid; grid-template-columns:repeat(21,1fr); grid-template-rows:repeat(21,1fr);
+  aspect-ratio:1; gap:1px; background:var(--grid-line);
+  border:1px solid var(--border-strong);
+}
+/* ideal (dev 50) crosshair */
+#heat::before, #heat::after { content:""; position:absolute; background:rgba(20,24,27,.16); z-index:5;
+  pointer-events:none; }
+:root[data-theme="dark"] #heat::before, :root[data-theme="dark"] #heat::after { background:rgba(255,255,255,.16); }
+#heat::before { left:50%; top:0; bottom:0; width:1px; transform:translateX(-.5px); }
+#heat::after { top:50%; left:0; right:0; height:1px; transform:translateY(-.5px); }
+.cell { position:relative; cursor:pointer; }
+.cell:hover { outline:2px solid var(--fg-1); outline-offset:-2px; z-index:8; }
+.cell.sel { outline:3px solid var(--fg-1); outline-offset:-3px; z-index:9; }
+/* history-dependent (relay hysteresis band) — distinct neutral + fine texture */
+.cell.band { background:var(--band-fill) !important;
+  background-image:radial-gradient(var(--band-stroke) 0.7px, transparent 0.8px) !important;
+  background-size:4px 4px !important; }
+/* would-escalate — single clean red inset outline */
+.cell.escalate { box-shadow:inset 0 0 0 1.5px var(--led-red); z-index:6; }
+/* conflict rule — corner wedge (moved out of the fill; no muddy hatch) */
+.cell.conflict::after { content:""; position:absolute; top:0; right:0; border-width:0 7px 7px 0; border-style:solid;
+  border-color:transparent var(--bloom-500) transparent transparent; z-index:7; }
+
+/* hover tooltip */
+#celltip {
+  position:fixed; z-index:50; pointer-events:none; display:none;
+  background:var(--fg-1); color:var(--page); font-family:var(--font-mono); font-size:11px;
+  padding:6px 9px; border-radius:var(--radius-sm); box-shadow:var(--shadow-md); line-height:1.5; white-space:nowrap;
+}
+#celltip b { color:#fff; font-weight:600; }
+:root[data-theme="dark"] #celltip { border:1px solid var(--border-strong); }
+
+/* ── legend ─────────────────────────────────────────────────────────────── */
+.legend { display:flex; flex-wrap:wrap; align-items:center; gap:14px 22px; margin-top:16px; padding-top:14px;
+  border-top:1px solid var(--border); }
+.ramp { display:flex; align-items:center; gap:9px; }
+.ramp .cap { font-family:var(--font-mono); font-size:10.5px; color:var(--fg-2); }
+#rampbar { display:flex; height:11px; width:180px; border-radius:2px; overflow:hidden;
+  border:1px solid var(--border-strong); }
+#rampbar span { flex:1; }
+.keys { display:flex; flex-wrap:wrap; gap:12px 18px; }
+.key { display:flex; align-items:center; gap:7px; font-size:11.5px; color:var(--fg-2); }
+.sw { width:15px; height:15px; border-radius:2px; position:relative; flex:none; border:1px solid var(--border-strong);
+  background:var(--grow-400); }
+.sw.band { background:var(--band-fill); background-image:radial-gradient(var(--band-stroke) .7px,transparent .8px);
+  background-size:4px 4px; }
+.sw.esc { background:var(--grow-300); box-shadow:inset 0 0 0 1.5px var(--led-red); }
+.sw.cfl::after { content:""; position:absolute; top:0; right:0; border-width:0 7px 7px 0; border-style:solid;
+  border-color:transparent var(--bloom-500) transparent transparent; }
+
+/* ── datasheet table ────────────────────────────────────────────────────── */
+table.kv { width:100%; border-collapse:collapse; font-size:12.5px; }
+table.kv td { padding:4px 0; vertical-align:baseline; }
+table.kv td:first-child { color:var(--fg-2); padding-right:14px; }
+table.kv td:last-child { text-align:right; font-family:var(--font-mono); font-variant-numeric:tabular-nums;
+  color:var(--fg-1); white-space:nowrap; }
+table.kv tr.sect td { padding:14px 0 5px; border-bottom:1px solid var(--border); }
+table.kv tr.sect td { font-family:var(--font-mono); font-size:10.5px; letter-spacing:var(--tracking-caps);
+  text-transform:uppercase; color:var(--fg-3); font-weight:600; text-align:left; }
+table.kv tr.sect:first-child td { padding-top:2px; }
+table.kv code { font-family:var(--font-mono); font-size:11.5px; color:var(--fg-1); }
+/* "None — free" — meaningful, must not read as missing */
+.free-tag { display:inline-flex; align-items:center; gap:6px; }
+.free-tag b { font-family:var(--font-mono); font-weight:600; color:var(--grow-600); background:var(--grow-100);
+  border-radius:var(--radius-pcb); padding:1px 6px; font-size:11px; }
+:root[data-theme="dark"] .free-tag b { background:rgba(31,138,76,.18); }
+.free-tag small { color:var(--fg-3); font-size:11px; }
+
+/* KPI tiles */
+.tiles { display:grid; grid-template-columns:repeat(4,1fr); gap:9px; margin-bottom:4px; }
+.tile { border:1px solid var(--border); border-top:3px solid var(--tilecol,var(--grow-600));
+  border-radius:var(--radius-md); padding:9px 11px 10px; background:var(--surface); }
+.tile .t { font-family:var(--font-mono); font-size:10px; text-transform:uppercase; letter-spacing:.05em;
+  color:var(--fg-3); white-space:nowrap; }
+.tile .v { font-family:var(--font-mono); font-size:22px; font-weight:600; color:var(--fg-1);
+  font-variant-numeric:tabular-nums; line-height:1.15; margin-top:3px; }
+.tile .v small { font-size:11px; color:var(--fg-2); font-weight:500; }
+
+/* console-style caveat */
+.console {
+  margin-top:14px; background:var(--surface-sunken); border:1px solid var(--border);
+    border-left:3px solid var(--led-amber);
+  border-radius:var(--radius-sm); padding:9px 11px; font-family:var(--font-mono); font-size:11px; color:var(--fg-2);
+    line-height:1.55;
+}
+.console .lv { color:var(--led-amber); font-weight:600; }
+
+/* ── cell detail ────────────────────────────────────────────────────────── */
+#detail { min-height:520px; }
+.empty { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; min-height:480px;
+  border:1.5px dashed var(--border-strong); border-radius:var(--radius-md); color:var(--fg-3); text-align:center;
+  padding:24px; }
+.empty .em-badge { width:44px; height:44px; border:2px solid var(--border-strong); border-radius:var(--radius-sm);
+  position:relative; }
+.empty .em-badge::before, .empty .em-badge::after { content:""; position:absolute; background:var(--border-strong); }
+.empty .em-badge::before { left:50%; top:6px; bottom:6px; width:1.5px; transform:translateX(-.75px); }
+.empty .em-badge::after { top:50%; left:6px; right:6px; height:1.5px; transform:translateY(-.75px); }
+.empty p { margin:0; font-size:13px; }
+.empty .hint { font-family:var(--font-mono); font-size:11px; color:var(--fg-3); max-width:34ch; }
+
+.coordgrid { display:grid; grid-template-columns:1fr 1fr; gap:1px; background:var(--border);
+  border:1px solid var(--border); border-radius:var(--radius-sm); overflow:hidden; margin-bottom:16px; }
+.coord { background:var(--surface); padding:8px 11px; }
+.coord .t { font-family:var(--font-mono); font-size:9.5px; text-transform:uppercase; letter-spacing:.05em;
+  color:var(--fg-3); }
+.coord .v { font-family:var(--font-mono); font-size:14px; font-weight:600; color:var(--fg-1);
+  font-variant-numeric:tabular-nums; margin-top:2px; }
+.coord .v small { font-size:11px; color:var(--fg-2); font-weight:400; }
+
+/* the headline: raw -> final */
+.headline { display:grid; grid-template-columns:1fr auto 1fr; align-items:center; gap:8px; padding:16px 12px;
+  border-radius:var(--radius-md); background:var(--surface-sunken); border:1px solid var(--border); margin-bottom:6px;
+  }
+.headline.changed { border-color:var(--bloom-500);
+  background:linear-gradient(0deg,var(--bloom-100),var(--surface-sunken)); }
+:root[data-theme="dark"] .headline.changed { background:rgba(219,42,138,.10); }
+.hl-col { text-align:center; }
+.hl-col .t { font-family:var(--font-mono); font-size:10px; text-transform:uppercase; letter-spacing:.06em;
+  color:var(--fg-3); }
+.hl-col .n { font-family:var(--font-mono); font-size:34px; font-weight:600; color:var(--fg-1);
+  font-variant-numeric:tabular-nums; line-height:1.05; }
+.hl-col .n.final { color:var(--grow-600); }
+.hl-col .n small { font-size:15px; color:var(--fg-2); }
+.hl-arrow { font-family:var(--font-mono); font-size:22px; color:var(--fg-3); padding:0 4px; }
+.hl-verdict { text-align:center; font-family:var(--font-mono); font-size:11.5px; margin:8px 0 18px; }
+.hl-verdict.changed { color:var(--bloom-700); }
+:root[data-theme="dark"] .hl-verdict.changed { color:var(--bloom-300); }
+.hl-verdict.same { color:var(--fg-3); }
+.hl-verdict strong { font-weight:600; }
+
+.sub-h { font-family:var(--font-mono); font-size:10.5px; letter-spacing:var(--tracking-caps); text-transform:uppercase;
+  color:var(--fg-3); font-weight:600; margin:20px 0 10px; padding-bottom:5px; border-bottom:1px solid var(--border); }
+
+/* waterfall */
+.waterfall { display:flex; flex-direction:column; gap:0; }
+.wf-row { display:grid; grid-template-columns:118px minmax(0,1fr) 46px; gap:10px; align-items:center; padding:5px 0; }
+.wf-row .wf-name { font-size:11.5px; color:var(--fg-2); line-height:1.25; }
+.wf-row.active .wf-name { color:var(--fg-1); font-weight:600; }
+.wf-track { position:relative; height:15px; background:var(--surface-sunken); border-radius:2px; overflow:hidden; }
+.wf-base { position:absolute; top:0; bottom:0; background:var(--grow-300); opacity:.5; }
+.wf-delta { position:absolute; top:0; bottom:0; }
+.wf-delta.up { background:var(--grow-600); }
+.wf-delta.down { background:var(--bloom-500); }
+.wf-delta.hold { background:var(--border-strong); }
+.wf-val { text-align:right; font-family:var(--font-mono); font-size:12px; font-weight:600; color:var(--fg-1);
+  font-variant-numeric:tabular-nums; }
+.wf-note { grid-column:1 / -1; font-family:var(--font-mono); font-size:10.5px; color:var(--fg-3); line-height:1.45;
+  padding:1px 0 3px 128px; }
+.wf-note b { color:var(--fg-2); }
+.wf-row.final { border-top:1px solid var(--border); margin-top:3px; padding-top:9px; }
+.wf-row.final .wf-name { font-size:12px; font-weight:600; color:var(--fg-1); letter-spacing:.02em; }
+.wf-row.final .wf-val { font-size:16px; color:var(--grow-600); }
+.wf-scale { display:flex; justify-content:space-between; font-family:var(--font-mono); font-size:9px;
+  color:var(--fg-3); padding:2px 46px 0 128px; }
+
+.adnote { margin-top:12px; font-family:var(--font-mono); font-size:11.5px; color:var(--fg-2); line-height:1.5;
+  background:var(--surface-sunken); border-radius:var(--radius-sm); padding:9px 11px; border:1px solid var(--border);
+  }
+.adnote .k { color:var(--fg-3); }
+
+.callout { margin-top:12px; padding:10px 12px; border-radius:var(--radius-sm); font-size:12px; line-height:1.5;
+  border:1px solid; }
+.callout.money { background:var(--bloom-100); border-color:var(--bloom-300); color:var(--bloom-700); }
+:root[data-theme="dark"] .callout.money { background:rgba(219,42,138,.12); color:var(--bloom-300);
+  border-color:var(--bloom-700); }
+.callout.esc { background:rgba(229,72,77,.08); border-color:var(--led-red); color:var(--led-red); }
+.callout strong { font-weight:600; }
+.callout .mono { color:inherit; }
+
+/* mini slice charts */
+.slices { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:8px; }
+@media (max-width:460px){ .slices { grid-template-columns:1fr; } }
+.slice { border:1px solid var(--border); border-radius:var(--radius-sm); padding:8px 9px 6px;
+  background:var(--surface); }
+.slice .st { font-family:var(--font-mono); font-size:10px; color:var(--fg-3); text-transform:uppercase;
+  letter-spacing:.04em; margin-bottom:4px; }
+.slice svg { display:block; width:100%; height:78px; }
+
+/* co2 curve */
+.co2curve { margin-top:6px; }
+.co2curve svg { display:block; width:100%; height:150px; }
+.curve-legend { display:flex; flex-wrap:wrap; gap:10px 16px; margin-top:8px; font-family:var(--font-mono);
+  font-size:10.5px; color:var(--fg-2); }
+.curve-legend .li { display:flex; align-items:center; gap:6px; }
+.curve-legend .dash { width:16px; height:0; border-top:2px dashed currentColor; }
+
+.footnote { margin-top:16px; font-size:11px; color:var(--fg-3); line-height:1.5; }
+
+/* ── self-check banner ──────────────────────────────────────────────────── */
+.banner {
+  border-radius:var(--radius-md); padding:9px 12px; margin:0 0 16px; font-size:12.5px;
+  border:1px solid var(--led-red); background:rgba(229,72,77,.08); color:var(--fg-1);
+}
+.banner.ok { border-color:var(--led-green); background:rgba(70,167,88,.08); }
+
+/* ── tuning editor (not in the design mockup — same token language) ─────── */
+.toggle { display:flex; align-items:center; gap:7px; font-size:12px; color:var(--fg-2); margin-bottom:2px; }
+.toggle input { accent-color:var(--grow-600); }
+.edgroup { margin-top:14px; }
+.edgroup > .gt {
+  font-family:var(--font-mono); font-size:10.5px; letter-spacing:var(--tracking-caps);
+  text-transform:uppercase; color:var(--fg-3); font-weight:600;
+  padding-bottom:5px; border-bottom:1px solid var(--border); margin-bottom:7px;
+}
+.edrow { display:grid; grid-template-columns:1fr auto auto; gap:6px; align-items:center; margin-bottom:4px;
+  font-size:12px; }
+.edrow label { color:var(--fg-2); }
+.edrow .base { font-family:var(--font-mono); font-size:10.5px; color:var(--fg-3); font-variant-numeric:tabular-nums;
+  min-width:62px; text-align:right; }
 /* Scoped to the editor, not to .edrow: the band-edge row lays its inputs out in
    a plain flex strip rather than the label/value grid. */
 #editor input[type=number] {
-  width: 74px; font: inherit; font-size: 12px; padding: 3px 5px; border-radius: 5px;
-  border: 1px solid var(--baseline); background: var(--page); color: var(--text-primary);
-  font-variant-numeric: tabular-nums; text-align: right;
+  width:76px; font-family:var(--font-mono); font-size:12px; padding:4px 6px;
+  border-radius:var(--radius-sm); border:1px solid var(--border-strong);
+  background:var(--surface-sunken); color:var(--fg-1);
+  font-variant-numeric:tabular-nums; text-align:right;
 }
-#editor input.dirty { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
-.edges { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 4px; }
-.edges input[type=number] { width: 52px !important; }
-.edrow .base { font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums;
-  min-width: 62px; text-align: right; }
-.edactions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
-button {
-  font: inherit; font-size: 12px; padding: 5px 11px; border-radius: 6px; cursor: pointer;
-  border: 1px solid var(--baseline); background: var(--surface-1); color: var(--text-primary);
+#editor input.dirty { border-color:var(--grow-600); box-shadow:inset 0 0 0 1px var(--grow-600); }
+.edges { display:flex; gap:4px; flex-wrap:wrap; margin-bottom:4px; }
+.edges input[type=number] { width:54px !important; }
+.edactions { display:flex; gap:8px; flex-wrap:wrap; margin-top:14px; }
+.edactions button {
+  font-family:var(--font-mono); font-size:11.5px; padding:6px 12px; cursor:pointer;
+  border-radius:var(--radius-md); border:1px solid var(--border-strong);
+  background:var(--surface); color:var(--fg-1);
 }
-button:hover { border-color: var(--accent); color: var(--accent); }
-button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-button.primary:hover { color: #fff; opacity: .9; }
-button:disabled { opacity: .45; cursor: not-allowed; border-color: var(--baseline); color: var(--muted); }
-.toggle { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-secondary); }
-#exportWrap { margin-top: 12px; }
+.edactions button:hover { border-color:var(--grow-600); color:var(--grow-600); }
+.edactions button.primary { background:var(--grow-600); border-color:var(--grow-600); color:#fff; }
+.edactions button.primary:hover { opacity:.9; color:#fff; }
+.edactions button:disabled { opacity:.45; cursor:not-allowed; border-color:var(--border-strong); color:var(--fg-3); }
+.dirtynote { font-size:11.5px; color:var(--fg-2); border-left:3px solid var(--grow-600); padding:4px 0 4px 9px;
+  margin:10px 0 0; }
+#exportWrap { margin-top:12px; }
 #exportWrap textarea {
-  width: 100%; height: 260px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11.5px; line-height: 1.45; padding: 9px; border-radius: 7px;
-  border: 1px solid var(--baseline); background: var(--page); color: var(--text-primary);
-  white-space: pre; overflow: auto; resize: vertical;
+  width:100%; height:260px; font-family:var(--font-mono); font-size:11.5px; line-height:1.45;
+  padding:9px; border-radius:var(--radius-md); border:1px solid var(--border-strong);
+  background:var(--surface-sunken); color:var(--fg-1);
+  white-space:pre; overflow:auto; resize:vertical;
 }
-.banner {
-  border-radius: 8px; padding: 9px 12px; margin: 0 0 14px; font-size: 12.5px;
-  border: 1px solid var(--status-critical); color: var(--text-primary);
-  background: color-mix(in srgb, var(--status-critical) 12%, transparent);
-}
-.banner.ok { border-color: var(--status-good); background: color-mix(in srgb, var(--status-good) 10%, transparent); }
-.dirtynote { font-size: 11.5px; color: var(--text-secondary);
-  border-left: 3px solid var(--accent); padding: 4px 0 4px 9px; margin: 10px 0 0; }
 
 </style>
 </head>
 <body>
-<h1>Regulation surface explorer
-<span style="font-weight:400;color:var(--muted);font-size:14px">3.5-D</span></h1>
-<p class="sub">Every cell is coloured by the <strong>final effective actuator output</strong> &mdash;
-the command after the surface (or follower / time-of-day driver), the CO&#8322; additive term, the
-external-effectiveness multiplier, the floor, the conflict rules, and the device adapter.
-Click a cell to see the raw surface value beside that final duty. Slew limiting, the emergency
-vector and the latch are temporal and cannot be drawn per cell; escalating cells are outlined and
-the forced vectors are listed in the panel. Generated from <code>config.py</code>; the tuning
-parameters on the right are <strong>editable</strong> &mdash; the plot recomputes as you change them,
-and <em>Export changes</em> gives you a paste-ready <code>config.py</code> fragment. Nothing here
-writes to the repo.</p>
+<div class="topbar">
+  <div>
+    <div class="brandline"><span class="brand-dot"></span>
+      <span class="eyebrow">Pi Greenhouse · regulation engine</span></div>
+    <h1>Regulation surface explorer</h1>
+    <p class="sub">Each cell is coloured by the <strong>final effective actuator output</strong> &mdash; the command
+    after the surface (or follower / time-of-day driver), the CO&#8322; additive term, the external-effectiveness
+    multiplier, the floor, the conflict rules, and the device adapter. Click a cell to compare the
+    <strong>raw surface value against what the actuator actually does</strong>. Generated from
+    <code>config.py</code>; the tuning parameters on the right are <strong>editable</strong> &mdash; the plot
+    recomputes live, and <em>Export changes</em> gives a paste-ready <code>config.py</code> fragment.
+    Nothing here writes to the repo.</p>
+  </div>
+  <div class="themetoggle" role="group" aria-label="Surface theme">
+    <button id="thLight" aria-pressed="true">Paper</button>
+    <button id="thDark" aria-pressed="false">Terminal</button>
+  </div>
+</div>
 
 <div id="selfcheck"></div>
 
 <div class="controls">
-  <div class="ctl">
-    <label for="reg">Regulator</label>
-    <select id="reg"></select>
+  <div class="ctl-row">
+    <div class="ctl" style="flex:1 1 100%">
+      <span class="eyebrow ctl-label">Regulator</span>
+      <div class="segrail" id="reg" role="group" aria-label="Regulator"></div>
+    </div>
   </div>
-  <div class="ctl">
-    <label for="prof">Species profile</label>
-    <select id="prof"></select>
-  </div>
-  <div class="ctl">
-    <label for="tod">Time of day (blend b)</label>
-    <input type="range" id="tod" min="0" max="1" step="0.05" value="1">
-    <span class="readout" id="todOut"></span>
-  </div>
-  <div class="ctl" id="co2Ctl">
-    <label for="co2">CO&#8322; deviation</label>
-    <input type="range" id="co2" min="0" max="100" step="1" value="50">
-    <span class="readout" id="co2Out"></span>
+  <div class="ctl-row">
+    <div class="ctl">
+      <span class="eyebrow ctl-label">Species profile</span>
+      <select id="prof"></select>
+    </div>
+    <div class="ctl grow">
+      <div class="slider-head"><span class="eyebrow">Time of day (blend b)</span>
+        <span class="readout" id="todOut"></span></div>
+      <input type="range" id="tod" min="0" max="1" step="0.05" value="1">
+    </div>
+    <div class="ctl grow co2" id="co2Ctl">
+      <div class="slider-head"><span class="eyebrow">CO&#8322; deviation</span>
+        <span class="readout" id="co2Out"></span></div>
+      <input type="range" id="co2" min="0" max="100" step="1" value="50">
+      <div class="co2-inert" id="co2Inert"></div>
+    </div>
   </div>
 </div>
 
 <div class="layout">
-  <div class="chartcard">
-    <h2 id="chartTitle"></h2>
-    <p class="note" id="chartNote"></p>
-    <div class="gridwrap">
-      <div class="ylab" id="ylab"></div>
-      <div class="yticks" id="yticks"></div>
-      <div id="heat"></div>
-      <div class="xticks" id="xticks"></div>
-      <div class="xlab" id="xlab"></div>
+  <div class="card">
+    <div class="card-h">
+      <h2 id="chartTitle"></h2>
+      <span class="tag mono" id="gridTag"></span>
     </div>
-    <div class="legendrow">
-      <div class="ramp">
-        <span>0</span>
-        <div class="rampbar" id="rampbar"></div>
-        <span>100 % duty</span>
+    <p class="chartnote" id="chartNote"></p>
+    <div class="card-body">
+      <div class="gridwrap">
+        <div class="ylab" id="ylab"></div>
+        <div class="yticks" id="yticks"></div>
+        <div id="heat"></div>
+        <div class="xticks" id="xticks"></div>
+        <div class="xlab" id="xlab"></div>
       </div>
-      <div class="key"><span class="swatch band"></span> hysteresis band (history-dependent)</div>
-      <div class="key"><span class="swatch esc"></span> would escalate (emergency / latch)</div>
-      <div class="key"><span class="swatch cfl"></span> conflict rule fires</div>
+      <div class="legend">
+        <div class="ramp">
+          <span class="cap">0</span>
+          <div id="rampbar"></div>
+          <span class="cap">100 % duty</span>
+        </div>
+        <div class="keys">
+          <div class="key"><span class="sw band"></span> history-dependent</div>
+          <div class="key"><span class="sw esc"></span> would escalate</div>
+          <div class="key"><span class="sw cfl"></span> conflict rule fires</div>
+        </div>
+      </div>
     </div>
   </div>
 
   <div class="side">
-    <div class="panel">
-      <h2>Cell detail</h2>
-      <div id="detail"><p class="empty">Click a cell in the grid.</p></div>
+    <div class="card">
+      <div class="card-h"><h2>Cell detail</h2><span class="tag mono" id="detailTag"></span></div>
+      <div class="card-body"><div id="detail"></div></div>
     </div>
-    <div class="panel">
-      <h2 id="aggTitle">Regulator</h2>
-      <div id="agg"></div>
+    <div class="card">
+      <div class="card-h"><h2 id="aggTitle">Regulator</h2><span class="tag mono">config.py</span></div>
+      <div class="card-body"><div id="agg"></div></div>
     </div>
   </div>
 
   <div class="editcol">
-    <div class="panel">
-      <h2>Tuning <span class="hint" id="edSubtitle"></span></h2>
-      <label class="toggle">
-        <input type="checkbox" id="showAll"> show every surface parameter
-      </label>
-      <div id="editor"></div>
-      <div class="edactions">
-        <button id="btnExport" class="primary">Export changes</button>
-        <button id="btnResetReg">Reset this regulator</button>
-        <button id="btnResetAll">Reset all</button>
-      </div>
-      <div id="dirtySummary"></div>
-      <div id="exportWrap" hidden>
-        <textarea id="exportText" readonly spellcheck="false"></textarea>
+    <div class="card">
+      <div class="card-h"><h2>Tuning</h2><span class="tag mono" id="edSubtitle"></span></div>
+      <div class="card-body">
+        <label class="toggle">
+          <input type="checkbox" id="showAll"> show every surface parameter
+        </label>
+        <div id="editor"></div>
         <div class="edactions">
-          <button id="btnCopy">Copy to clipboard</button>
-          <button id="btnHideExport">Hide</button>
+          <button id="btnExport" class="primary">Export changes</button>
+          <button id="btnResetReg">Reset this regulator</button>
+          <button id="btnResetAll">Reset all</button>
         </div>
-        <p class="note">Paste over the matching keys in
-          <code>config.py</code>. Surface blocks are emitted as a full
-          <code>_surface(...)</code> call listing every non-default parameter, so
-          they replace the existing call outright. Then regenerate the golden
-          vectors &mdash; <code>python prototypes/plot_regulation_surfaces.py</code>
-          &mdash; or the surface tests will fail.</p>
+        <div id="dirtySummary"></div>
+        <div id="exportWrap" hidden>
+          <textarea id="exportText" readonly spellcheck="false"></textarea>
+          <div class="edactions">
+            <button id="btnCopy">Copy to clipboard</button>
+            <button id="btnHideExport">Hide</button>
+          </div>
+          <p class="note">Paste over the matching keys in
+            <code>config.py</code>. Surface blocks are emitted as a full
+            <code>_surface(...)</code> call listing every non-default parameter, so
+            they replace the existing call outright. Then regenerate the golden
+            vectors &mdash; <code>python prototypes/plot_regulation_surfaces.py</code>
+            &mdash; or the surface tests will fail.</p>
+        </div>
       </div>
     </div>
   </div>
 </div>
+
+<div id="celltip"></div>
+
+<p class="footnote mono">Surface grids are baked from <code>lib/regulation_surface.evaluate</code> at generate time
+and re-evaluated live in-browser by a JS port of the same maths &mdash; the banner above proves the two agree.
+Fonts fall back to the system stack (offline file, no webfonts).</p>
 <script id="regdata" type="application/json">{"grid":[0,5,10,15,20,25,30,35,40,45,50,55,60,65,70,75,80,85,90,95,100],"dimOrder":["temp","humidity","co2"],"dimUnits":{"temp":"\u00b0C","humidity":"%RH","co2":"ppm"},"dimLabels":{"temp":"temperature","humidity":"humidity","co2":"CO\u2082"},"regNames":["heater","heater_follower","cooler","humidifier","exhaust","circulation","growlight"],"regulators":{"heater":{"driven":"surface","dims":["temp","humidity"],"bandDims":["temp","humidity"],"adapter":{"type":"heater","pin_key":"heater_mosfet","window_s":600,"min_on_s":30,"min_off_s":30},"slewNormal":20.0,"slewFast":50.0,"floor":0.0,"emergencyValue":0.0,"safeState":0.0,"rawBaked":[[100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0],[100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0],[100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0],[100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0],[82.5,82.5,82.5,82.5,82.5,82.5,82.5,82.5,82.5,82.5,82.5,82.5,82.5,85.80000015674159,89.10000031348318,92.40000047022477,95.70000062696636,99.00000078370795,100.0,100.0,100.0],[62.5,62.5,62.5,62.5,62.5,62.5,62.5,62.5,62.5,62.5,62.5,62.5,62.5,65.00000011874363,67.50000023748726,70.00000035623088,72.50000047497451,75.00000059371814,77.50000071246177,80.0000008312054,82.50000094994903],[42.5,42.5,42.5,42.5,42.5,42.5,42.5,42.5,42.5,42.5,42.5,42.5,42.5,44.20000008074567,45.900000161491334,47.600000242237,49.30000032298267,51.00000040372834,52.70000048447401,54.40000056521968,56.100000645965345],[30.0,30.0,30.0,30.0,30.0,30.0,30.0,30.0,30.0,30.0,30.0,30.0,30.0,31.20000005699694,32.40000011399388,33.600000170990825,34.800000227987766,36.00000028498471,37.20000034198165,38.40000039897859,39.60000045597553],[17.5,17.5,17.5,17.5,17.5,17.5,17.5,17.5,17.5,17.5,17.5,17.5,17.5,18.200000033248216,18.900000066496432,19.600000099744648,20.300000132992864,21.00000016624108,21.700000199489295,22.40000023273751,23.100000265985727],[5.0,5.0,5.0,5.0,5.0,5.0,5.0,5.0,5.0,5.0,5.0,5.0,5.0,5.20000000949949,5.4000000189989805,5.600000028498471,5.800000037997961,6.000000047497451,6.200000056996942,6.400000066496432,6.600000075995922],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]],"surface":{"ca":1.0,"sa":0.0,"cross":0.0,"gain":0.0,"offset":0.0,"hx_hi1":0.0,"bx_hi1":50.0,"hx_hi2":0.0,"bx_hi2":50.0,"hx_lo1":2.5,"bx_lo1":47.0,"hx_lo2":1.5,"bx_lo2":30.0,"hy_hi1":0.0,"by_hi1":50.0,"hy_hi2":0.0,"by_hi2":50.0,"hy_lo1":0.0,"by_lo1":50.0,"hy_lo2":0.0,"by_lo2":50.0,"x_top":200.0,"x_bot":-100.0,"y_top":60.0,"y_bot":-100.0,"boost_base":1.0,"grad":0.008,"mult":1.0,"out_min":0.0,"out_max":100.0}},"heater_follower":{"driven":"follower","dims":["temp","humidity"],"bandDims":["temp","humidity"],"adapter":{"type":"pwm","pca9685_ch":2},"slewNormal":30.0,"slewFast":60.0,"floor":0.0,"emergencyValue":0.0,"safeState":0.0,"rawBaked":[[80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0],[80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0],[80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0],[80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0],[66.0,66.0,66.0,66.0,66.0,66.0,66.0,66.0,66.0,66.0,66.0,66.0,66.0,68.64000012539327,71.28000025078654,73.92000037617981,76.56000050157309,79.20000062696636,80.0,80.0,80.0],[50.0,50.0,50.0,50.0,50.0,50.0,50.0,50.0,50.0,50.0,50.0,50.0,50.0,52.0000000949949,54.000000189989805,56.00000028498471,58.00000037997961,60.00000047497451,62.000000569969416,64.00000066496432,66.00000075995922],[34.0,34.0,34.0,34.0,34.0,34.0,34.0,34.0,34.0,34.0,34.0,34.0,34.0,35.360000064596534,36.72000012919307,38.0800001937896,39.440000258386135,40.800000322982676,42.16000038757921,43.52000045217574,44.88000051677228],[24.0,24.0,24.0,24.0,24.0,24.0,24.0,24.0,24.0,24.0,24.0,24.0,24.0,24.960000045597553,25.920000091195107,26.88000013679266,27.840000182390213,28.800000227987766,29.76000027358532,30.720000319182873,31.680000364780426],[14.0,14.0,14.0,14.0,14.0,14.0,14.0,14.0,14.0,14.0,14.0,14.0,14.0,14.560000026598573,15.120000053197145,15.680000079795718,16.24000010639429,16.800000132992864,17.360000159591436,17.92000018619001,18.480000212788582],[4.0,4.0,4.0,4.0,4.0,4.0,4.0,4.0,4.0,4.0,4.0,4.0,4.0,4.160000007599592,4.320000015199184,4.480000022798777,4.640000030398369,4.800000037997961,4.960000045597553,5.1200000531971455,5.280000060796738],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]],"followerGain":0.8,"followerFloor":0.0},"cooler":{"driven":"surface","dims":["temp","humidity"],"bandDims":["temp","humidity"],"adapter":{"type":"relay","pin_key":"relay_cooler","on_above":12.0,"off_below":2.5,"min_on_s":120,"min_off_s":300},"slewNormal":100.0,"slewFast":100.0,"floor":0.0,"emergencyValue":null,"safeState":null,"rawBaked":[[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[5.0,5.0,5.0,5.0,5.0,5.0,5.0,5.0,5.0,5.0,5.0,5.0,5.0,5.2499999944120646,5.499999988824129,5.749999983236194,5.999999977648258,6.249999972060323,6.499999966472387,6.749999960884452,6.999999955296516],[17.5,17.5,17.5,17.5,17.5,17.5,17.5,17.5,17.5,17.5,17.5,17.5,17.5,18.374999980442226,19.249999960884452,20.124999941326678,20.999999921768904,21.87499990221113,22.749999882653356,23.62499986309558,24.499999843537807],[30.0,30.0,30.0,30.0,30.0,30.0,30.0,30.0,30.0,30.0,30.0,30.0,30.0,31.499999966472387,32.999999932944775,34.49999989941716,35.99999986588955,37.49999983236194,38.999999798834324,40.49999976530671,41.9999997317791],[42.5,42.5,42.5,42.5,42.5,42.5,42.5,42.5,42.5,42.5,42.5,42.5,42.5,44.62499995250255,46.7499999050051,48.874999857507646,50.9999998100102,53.12499976251275,55.2499997150153,57.37499966751785,59.4999996200204],[62.5,62.5,62.5,62.5,62.5,62.5,62.5,62.5,62.5,62.5,62.5,62.5,62.5,65.6249999301508,68.74999986030161,71.87499979045242,74.99999972060323,78.12499965075403,81.24999958090484,84.37499951105565,87.49999944120646],[82.5,82.5,82.5,82.5,82.5,82.5,82.5,82.5,82.5,82.5,82.5,82.5,82.5,86.62499990779907,90.74999981559813,94.8749997233972,98.99999963119626,100.0,100.0,100.0,100.0],[100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0],[100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0],[100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0],[100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0]],"surface":{"ca":1.0,"sa":0.0,"cross":0.0,"gain":0.0,"offset":0.0,"hx_hi1":2.5,"bx_hi1":53.0,"hx_hi2":1.5,"bx_hi2":70.0,"hx_lo1":0.0,"bx_lo1":50.0,"hx_lo2":0.0,"bx_lo2":50.0,"hy_hi1":0.0,"by_hi1":50.0,"hy_hi2":0.0,"by_hi2":50.0,"hy_lo1":0.0,"by_lo1":50.0,"hy_lo2":0.0,"by_lo2":50.0,"x_top":200.0,"x_bot":-100.0,"y_top":60.0,"y_bot":-100.0,"boost_base":1.0,"grad":0.01,"mult":1.0,"out_min":0.0,"out_max":100.0}},"humidifier":{"driven":"surface","dims":["humidity","temp"],"bandDims":["humidity","temp"],"adapter":{"type":"relay","pin_key":"relay_humidifier","on_above":20.0,"off_below":6.0,"min_on_s":30,"min_off_s":30},"slewNormal":100.0,"slewFast":100.0,"floor":0.0,"emergencyValue":0.0,"safeState":0.0,"rawBaked":[[75.0,77.5,80.0,82.5,85.0,87.5,90.0,92.5,95.0,97.5,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0],[65.0,67.5,70.0,72.5,75.0,77.5,80.0,82.5,85.0,87.5,90.0,92.5,95.0,97.5,100.0,100.0,100.0,100.0,100.0,100.0,100.0],[55.00000000000001,57.49999999999999,60.0,62.5,65.0,67.5,70.0,72.5,75.0,77.5,80.0,82.5,85.0,87.5,90.0,92.5,95.0,97.5,100.0,100.0,100.0],[45.0,47.5,50.0,52.5,55.00000000000001,57.49999999999999,60.0,62.5,65.0,67.5,70.0,72.5,75.0,77.5,80.0,82.5,85.0,87.5,90.0,92.5,95.0],[35.0,37.5,40.0,42.5,45.0,47.5,50.0,52.5,55.00000000000001,57.49999999999999,60.0,62.5,65.0,67.5,70.0,72.5,75.0,77.5,80.0,82.5,85.0],[25.0,27.500000000000004,30.0,32.5,35.0,37.5,40.0,42.5,45.0,47.5,50.0,52.5,55.00000000000001,57.49999999999999,60.0,62.5,65.0,67.5,70.0,72.5,75.0],[15.0,17.5,20.0,22.5,25.0,27.500000000000004,30.0,32.5,35.0,37.5,40.0,42.5,45.0,47.5,50.0,52.5,55.00000000000001,57.49999999999999,60.0,62.5,65.0],[5.0,7.5,10.0,12.5,15.0,17.5,20.0,22.5,25.0,27.500000000000004,30.0,32.5,35.0,37.5,40.0,42.5,45.0,47.5,50.0,52.5,55.00000000000001],[0.0,0.0,0.0,2.5,5.0,7.5,10.0,12.5,15.0,17.5,20.0,22.5,25.0,27.500000000000004,30.0,32.5,35.0,37.5,40.0,42.5,45.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,2.5,5.0,7.5,10.0,12.5,15.0,17.5,20.0,22.5,25.0,27.500000000000004,30.0,32.5,35.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,2.5,5.0,7.5,10.0,12.5,15.0,17.5,20.0,22.5,25.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,2.5,5.0,7.5,10.0,12.5,15.0,17.5,20.0,22.5,25.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,2.5,5.0,7.5,10.0,12.5,15.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,2.5,5.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]],"surface":{"ca":0.0,"sa":1.0,"cross":0.0,"gain":0.5,"offset":0.0,"hx_hi1":-2.0,"bx_hi1":55.0,"hx_hi2":0.0,"bx_hi2":50.0,"hx_lo1":2.0,"bx_lo1":50.0,"hx_lo2":0.0,"bx_lo2":50.0,"hy_hi1":0.0,"by_hi1":50.0,"hy_hi2":0.0,"by_hi2":50.0,"hy_lo1":0.0,"by_lo1":50.0,"hy_lo2":0.0,"by_lo2":50.0,"x_top":200.0,"x_bot":-100.0,"y_top":200.0,"y_bot":-100.0,"boost_base":1.0,"grad":0.0,"mult":1.0,"out_min":0.0,"out_max":100.0}},"exhaust":{"driven":"surface","dims":["temp","humidity"],"bandDims":["temp","humidity","co2"],"adapter":{"type":"pwm","pca9685_ch":4},"slewNormal":25.0,"slewFast":60.0,"floor":5.0,"emergencyValue":100.0,"safeState":100.0,"rawBaked":[[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,7.5,20.0,32.5,45.0,57.49999999999999,77.5,97.5,100.0,100.0,100.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,7.5,20.0,32.5,45.0,57.49999999999999,77.5,97.5,100.0,100.0,100.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,7.5,20.0,32.5,45.0,57.49999999999999,77.5,97.5,100.0,100.0,100.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,7.5,20.0,32.5,45.0,57.49999999999999,77.5,97.5,100.0,100.0,100.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,7.5,20.0,32.5,45.0,57.49999999999999,77.5,97.5,100.0,100.0,100.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,7.5,20.0,32.5,45.0,57.49999999999999,77.5,97.5,100.0,100.0,100.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,7.5,20.0,32.5,45.0,57.49999999999999,77.5,97.5,100.0,100.0,100.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,7.5,20.0,32.5,45.0,57.49999999999999,77.5,97.5,100.0,100.0,100.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,7.5,20.0,32.5,45.0,57.49999999999999,77.5,97.5,100.0,100.0,100.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,7.5,20.0,32.5,45.0,57.49999999999999,77.5,97.5,100.0,100.0,100.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,7.5,20.0,32.5,45.0,57.49999999999999,77.5,97.5,100.0,100.0,100.0],[7.5,7.5,7.5,7.5,7.5,7.5,7.5,7.5,7.5,7.5,7.5,15.0,27.500000000000004,40.0,52.5,65.0,85.0,100.0,100.0,100.0,100.0],[20.0,20.0,20.0,20.0,20.0,20.0,20.0,20.0,20.0,20.0,20.0,27.500000000000004,40.0,52.5,65.0,77.5,97.5,100.0,100.0,100.0,100.0],[32.5,32.5,32.5,32.5,32.5,32.5,32.5,32.5,32.5,32.5,32.5,40.0,52.5,65.0,77.5,90.0,100.0,100.0,100.0,100.0,100.0],[45.0,45.0,45.0,45.0,45.0,45.0,45.0,45.0,45.0,45.0,45.0,52.5,65.0,77.5,90.0,100.0,100.0,100.0,100.0,100.0,100.0],[57.49999999999999,57.49999999999999,57.49999999999999,57.49999999999999,57.49999999999999,57.49999999999999,57.49999999999999,57.49999999999999,57.49999999999999,57.49999999999999,57.49999999999999,65.0,77.5,90.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0],[77.5,77.5,77.5,77.5,77.5,77.5,77.5,77.5,77.5,77.5,77.5,85.0,97.5,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0],[97.5,97.5,97.5,97.5,97.5,97.5,97.5,97.5,97.5,97.5,97.5,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0],[100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0],[100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0],[100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0]],"surface":{"ca":1.0,"sa":0.0,"cross":0.0,"gain":0.0,"offset":0.0,"hx_hi1":2.5,"bx_hi1":52.0,"hx_hi2":1.5,"bx_hi2":75.0,"hx_lo1":0.0,"bx_lo1":50.0,"hx_lo2":0.0,"bx_lo2":50.0,"hy_hi1":2.5,"by_hi1":52.0,"hy_hi2":1.5,"by_hi2":75.0,"hy_lo1":0.0,"by_lo1":50.0,"hy_lo2":0.0,"by_lo2":50.0,"x_top":200.0,"x_bot":-100.0,"y_top":200.0,"y_bot":-100.0,"boost_base":1.0,"grad":0.0,"mult":1.0,"out_min":0.0,"out_max":100.0},"co2Gain":2.5,"co2Break":55.0,"external":true},"circulation":{"driven":"surface","dims":["temp","humidity"],"bandDims":["temp","humidity","co2"],"adapter":{"type":"pwm_pair","center_ch":0,"wall_ch":1,"center_scale":1.0,"wall_scale":0.8},"slewNormal":30.0,"slewFast":60.0,"floor":30.0,"emergencyValue":100.0,"safeState":100.0,"rawBaked":[[100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,98.0,94.0,98.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0],[100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,98.0,88.0,84.0,88.0,98.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0],[100.0,100.0,100.0,100.0,100.0,100.0,100.0,98.0,88.0,78.0,74.0,78.0,88.0,98.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0],[100.0,100.0,100.0,100.0,100.0,100.0,98.0,88.0,78.0,68.0,64.0,68.0,78.0,88.0,98.0,100.0,100.0,100.0,100.0,100.0,100.0],[100.0,100.0,100.0,100.0,100.0,98.0,88.0,78.0,68.0,57.99999999999999,54.0,57.99999999999999,68.0,78.0,88.0,98.0,100.0,100.0,100.0,100.0,100.0],[100.0,100.0,100.0,100.0,98.0,88.0,78.0,68.0,57.99999999999999,48.0,44.0,48.0,57.99999999999999,68.0,78.0,88.0,98.0,100.0,100.0,100.0,100.0],[100.0,100.0,100.0,98.0,88.0,78.0,68.0,57.99999999999999,48.0,38.0,34.0,38.0,48.0,57.99999999999999,68.0,78.0,88.0,98.0,100.0,100.0,100.0],[100.0,100.0,98.0,88.0,78.0,68.0,57.99999999999999,48.0,38.0,28.000000000000004,24.0,28.000000000000004,38.0,48.0,57.99999999999999,68.0,78.0,88.0,98.0,100.0,100.0],[100.0,98.0,88.0,78.0,68.0,57.99999999999999,48.0,38.0,28.000000000000004,18.0,14.000000000000002,18.0,28.000000000000004,38.0,48.0,57.99999999999999,68.0,78.0,88.0,98.0,100.0],[98.0,88.0,78.0,68.0,57.99999999999999,48.0,38.0,28.000000000000004,18.0,8.0,4.0,8.0,18.0,28.000000000000004,38.0,48.0,57.99999999999999,68.0,78.0,88.0,98.0],[94.0,84.0,74.0,64.0,54.0,44.0,34.0,24.0,14.000000000000002,4.0,0.0,4.0,14.000000000000002,24.0,34.0,44.0,54.0,64.0,74.0,84.0,94.0],[98.0,88.0,78.0,68.0,57.99999999999999,48.0,38.0,28.000000000000004,18.0,8.0,4.0,8.0,18.0,28.000000000000004,38.0,48.0,57.99999999999999,68.0,78.0,88.0,98.0],[100.0,98.0,88.0,78.0,68.0,57.99999999999999,48.0,38.0,28.000000000000004,18.0,14.000000000000002,18.0,28.000000000000004,38.0,48.0,57.99999999999999,68.0,78.0,88.0,98.0,100.0],[100.0,100.0,98.0,88.0,78.0,68.0,57.99999999999999,48.0,38.0,28.000000000000004,24.0,28.000000000000004,38.0,48.0,57.99999999999999,68.0,78.0,88.0,98.0,100.0,100.0],[100.0,100.0,100.0,98.0,88.0,78.0,68.0,57.99999999999999,48.0,38.0,34.0,38.0,48.0,57.99999999999999,68.0,78.0,88.0,98.0,100.0,100.0,100.0],[100.0,100.0,100.0,100.0,98.0,88.0,78.0,68.0,57.99999999999999,48.0,44.0,48.0,57.99999999999999,68.0,78.0,88.0,98.0,100.0,100.0,100.0,100.0],[100.0,100.0,100.0,100.0,100.0,98.0,88.0,78.0,68.0,57.99999999999999,54.0,57.99999999999999,68.0,78.0,88.0,98.0,100.0,100.0,100.0,100.0,100.0],[100.0,100.0,100.0,100.0,100.0,100.0,98.0,88.0,78.0,68.0,64.0,68.0,78.0,88.0,98.0,100.0,100.0,100.0,100.0,100.0,100.0],[100.0,100.0,100.0,100.0,100.0,100.0,100.0,98.0,88.0,78.0,74.0,78.0,88.0,98.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0],[100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,98.0,88.0,84.0,88.0,98.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0],[100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,98.0,94.0,98.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0]],"surface":{"ca":1.0,"sa":0.0,"cross":0.0,"gain":0.0,"offset":0.0,"hx_hi1":2.0,"bx_hi1":53.0,"hx_hi2":0.0,"bx_hi2":50.0,"hx_lo1":2.0,"bx_lo1":47.0,"hx_lo2":0.0,"bx_lo2":50.0,"hy_hi1":2.0,"by_hi1":53.0,"hy_hi2":0.0,"by_hi2":50.0,"hy_lo1":2.0,"by_lo1":47.0,"hy_lo2":0.0,"by_lo2":50.0,"x_top":200.0,"x_bot":-100.0,"y_top":200.0,"y_bot":-100.0,"boost_base":1.0,"grad":0.0,"mult":1.0,"out_min":0.0,"out_max":100.0},"co2Gain":2.0,"co2Break":55.0,"external":false},"growlight":{"driven":"tod","dims":["temp","humidity"],"bandDims":[],"adapter":{"type":"growlight","pin_key":"relay_growlight","dac_i2c_address":96,"dac_max_pct":91,"on_above":50.0,"off_below":40.0,"min_on_s":60,"min_off_s":60},"slewNormal":100.0,"slewFast":100.0,"floor":0.0,"emergencyValue":0.0,"safeState":0.0,"rawBaked":null,"lightLevelDay":80.0,"dimmable":false}},"profiles":{"cubensis":{"category":"mushroom","day":{"temp":{"at_0":16.0,"at_50":24.0,"at_100":30.0},"humidity":{"at_0":75.0,"at_50":92.0,"at_100":100.0},"co2":{"at_0":0.0,"at_50":600.0,"at_100":2000.0}},"night":{"temp":{"at_0":15.0,"at_50":23.0,"at_100":29.0},"humidity":{"at_0":75.0,"at_50":92.0,"at_100":100.0},"co2":{"at_0":0.0,"at_50":600.0,"at_100":2000.0}}},"oyster":{"category":"mushroom","day":{"temp":{"at_0":10.0,"at_50":18.0,"at_100":26.0},"humidity":{"at_0":70.0,"at_50":87.0,"at_100":98.0},"co2":{"at_0":0.0,"at_50":600.0,"at_100":2000.0}},"night":{"temp":{"at_0":10.0,"at_50":17.0,"at_100":25.0},"humidity":{"at_0":70.0,"at_50":87.0,"at_100":98.0},"co2":{"at_0":0.0,"at_50":700.0,"at_100":2000.0}}},"lions_mane":{"category":"mushroom","day":{"temp":{"at_0":12.0,"at_50":20.0,"at_100":28.0},"humidity":{"at_0":80.0,"at_50":92.0,"at_100":100.0},"co2":{"at_0":0.0,"at_50":700.0,"at_100":2000.0}},"night":{"temp":{"at_0":12.0,"at_50":19.0,"at_100":27.0},"humidity":{"at_0":80.0,"at_50":92.0,"at_100":100.0},"co2":{"at_0":0.0,"at_50":800.0,"at_100":2000.0}}},"seedling":{"category":"plant","day":{"temp":{"at_0":16.0,"at_50":24.0,"at_100":32.0},"humidity":{"at_0":50.0,"at_50":70.0,"at_100":95.0},"co2":{"at_0":350.0,"at_50":800.0,"at_100":1600.0}},"night":{"temp":{"at_0":14.0,"at_50":20.0,"at_100":28.0},"humidity":{"at_0":50.0,"at_50":70.0,"at_100":95.0},"co2":{"at_0":350.0,"at_50":800.0,"at_100":1600.0}}},"cannabis":{"category":"plant","day":{"temp":{"at_0":18.0,"at_50":26.0,"at_100":32.0},"humidity":{"at_0":35.0,"at_50":55.0,"at_100":75.0},"co2":{"at_0":400.0,"at_50":1000.0,"at_100":1600.0}},"night":{"temp":{"at_0":15.0,"at_50":20.0,"at_100":28.0},"humidity":{"at_0":35.0,"at_50":55.0,"at_100":75.0},"co2":{"at_0":400.0,"at_50":800.0,"at_100":1400.0}}},"bellpepper":{"category":"plant","day":{"temp":{"at_0":16.0,"at_50":24.0,"at_100":32.0},"humidity":{"at_0":45.0,"at_50":65.0,"at_100":85.0},"co2":{"at_0":400.0,"at_50":800.0,"at_100":1500.0}},"night":{"temp":{"at_0":12.0,"at_50":18.0,"at_100":26.0},"humidity":{"at_0":45.0,"at_50":65.0,"at_100":85.0},"co2":{"at_0":400.0,"at_50":800.0,"at_100":1500.0}}}},"activeProfile":"cubensis","bandEdges":[5.0,10.0,20.0,30.0,40.0,50.0],"surfaceDefaults":{"ca":1.0,"sa":0.0,"cross":0.0,"gain":0.0,"offset":0.0,"hx_hi1":0.0,"bx_hi1":50.0,"hx_hi2":0.0,"bx_hi2":50.0,"hx_lo1":0.0,"bx_lo1":50.0,"hx_lo2":0.0,"bx_lo2":50.0,"hy_hi1":0.0,"by_hi1":50.0,"hy_hi2":0.0,"by_hi2":50.0,"hy_lo1":0.0,"by_lo1":50.0,"hy_lo2":0.0,"by_lo2":50.0,"x_top":200.0,"x_bot":-100.0,"y_top":200.0,"y_bot":-100.0,"boost_base":1.0,"grad":0.0,"mult":1.0,"out_min":0.0,"out_max":100.0},"surfaceMeta":[{"name":"ca","lo":-1.0,"hi":1.0,"def":1.0},{"name":"sa","lo":-1.0,"hi":1.0,"def":0.0},{"name":"cross","lo":-100.0,"hi":100.0,"def":0.0},{"name":"gain","lo":-100.0,"hi":100.0,"def":0.0},{"name":"offset","lo":-1000.0,"hi":1000.0,"def":0.0},{"name":"hx_hi1","lo":-100.0,"hi":100.0,"def":0.0},{"name":"bx_hi1","lo":-200.0,"hi":200.0,"def":50.0},{"name":"hx_hi2","lo":-100.0,"hi":100.0,"def":0.0},{"name":"bx_hi2","lo":-200.0,"hi":200.0,"def":50.0},{"name":"hx_lo1","lo":-100.0,"hi":100.0,"def":0.0},{"name":"bx_lo1","lo":-200.0,"hi":200.0,"def":50.0},{"name":"hx_lo2","lo":-100.0,"hi":100.0,"def":0.0},{"name":"bx_lo2","lo":-200.0,"hi":200.0,"def":50.0},{"name":"hy_hi1","lo":-100.0,"hi":100.0,"def":0.0},{"name":"by_hi1","lo":-200.0,"hi":200.0,"def":50.0},{"name":"hy_hi2","lo":-100.0,"hi":100.0,"def":0.0},{"name":"by_hi2","lo":-200.0,"hi":200.0,"def":50.0},{"name":"hy_lo1","lo":-100.0,"hi":100.0,"def":0.0},{"name":"by_lo1","lo":-200.0,"hi":200.0,"def":50.0},{"name":"hy_lo2","lo":-100.0,"hi":100.0,"def":0.0},{"name":"by_lo2","lo":-200.0,"hi":200.0,"def":50.0},{"name":"x_top","lo":-200.0,"hi":200.0,"def":200.0},{"name":"x_bot","lo":-200.0,"hi":200.0,"def":-100.0},{"name":"y_top","lo":-200.0,"hi":200.0,"def":200.0},{"name":"y_bot","lo":-200.0,"hi":200.0,"def":-100.0},{"name":"boost_base","lo":0.0,"hi":100.0,"def":1.0},{"name":"grad","lo":-100.0,"hi":100.0,"def":0.0},{"name":"mult","lo":-100.0,"hi":100.0,"def":1.0},{"name":"out_min","lo":-1000.0,"hi":1000.0,"def":0.0},{"name":"out_max","lo":-1000.0,"hi":1000.0,"def":100.0}],"escalation":{"temp":{"high":true,"low":false},"humidity":{"high":true,"low":false},"co2":{"high":false,"low":false}},"latch":{"enter_ticks":3,"release_max":30,"release_ticks":3,"min_s":300},"conflicts":[{"when":[["humidity","above",30.0],["temp","above",30.0]],"force":{"humidifier":0.0},"prefer":{"exhaust":60.0,"cooler":100.0}}],"tickS":30,"externalSensor":{"enabled":false,"fullDeltaC":3.0,"minFactor":0.2,"fullDeltaRh":10.0,"minFactorRh":0.4}}</script>
 <script>
 
 "use strict";
 const D = JSON.parse(document.getElementById("regdata").textContent);
 const G = D.grid, N = G.length;
-const SEQ = ["#cde2fb","#b7d3f6","#9ec5f4","#86b6ef","#6da7ec","#5598e7","#3987e5",
-             "#2a78d6","#256abf","#1c5cab","#184f95","#104281","#0d366b"];
 
 const el = id => document.getElementById(id);
 const fmt = (v, d) => (v === null || v === undefined) ? "—" : Number(v).toFixed(d === undefined ? 1 : d);
 
+/* ---------- state -----------------------------------------------------
+   Controls persist across regenerations (localStorage) so a tuning session
+   survives a page rebuild; anything stored is validated against the data. */
+
 let state = {
-  reg: "exhaust",
-  profile: D.activeProfile,
-  b: 1.0,
-  co2dev: 50,
+  reg: localStorage.getItem("rse.reg") || "exhaust",
+  profile: localStorage.getItem("rse.profile") || D.activeProfile,
+  b: parseFloat(localStorage.getItem("rse.b") ?? "1"),
+  co2dev: parseInt(localStorage.getItem("rse.co2") ?? "50", 10),
   sel: null,
   showAll: false
 };
+if (!D.regNames.includes(state.reg)) state.reg = "exhaust";
+if (!D.profiles[state.profile]) state.profile = D.activeProfile;
+if (!Number.isFinite(state.b)) state.b = 1.0;
+state.b = Math.min(1, Math.max(0, state.b));
+if (!Number.isFinite(state.co2dev)) state.co2dev = 50;
+state.co2dev = Math.min(100, Math.max(0, state.co2dev));
 
 /* ---------- live, editable config ------------------------------------
    D is the frozen baseline exactly as config.py has it. LIVE is the copy the
@@ -428,6 +680,11 @@ function physLabel(dev, dim) {
 function describeWhen(when) {
   return when.map(([dim, op, thresh]) =>
     `${D.dimLabels[dim]} ≥ ${thresh} ${op} ideal`).join(" and ");
+}
+// Regulators that carry the CO2 additive term — the slider only means
+// something for these (the exhaust and the circulation pair, per config).
+function co2Regs() {
+  return D.regNames.filter(n => LIVE[n].co2Gain !== undefined);
 }
 
 /* ---------- pipeline (mirrors engine + arbiter + adapters) ---------- */
@@ -588,56 +845,112 @@ function adapt(R, command) {
   return { kind: a.type, duty: null, state: "band" };
 }
 
-/* ---------- colour ---------------------------------------------------- */
+/* ---------- colour ----------------------------------------------------
+   Single-hue grow-green sequential ramp, one per theme, validated against
+   both page surfaces in the design pass (see the redesign notes). The fill is
+   interpolated so it reads as continuous, not stepped; history-dependent
+   cells leave the ramp entirely (warm grey + dot texture, via CSS). */
 
-function colourFor(r) {
-  if (r.state === "band") return SEQ[6];
-  if (r.duty === null) return SEQ[0];
-  const i = Math.min(SEQ.length - 1, Math.max(0, Math.round(r.duty / 100 * (SEQ.length - 1))));
-  return SEQ[i];
+const RAMP = {
+  light: ["#cfe4d6","#a6d4b4","#7cc194","#54ad74","#33995a","#22894e","#1a7342","#125c34","#0c3d22"],
+  dark:  ["#0f2a1f","#16452c","#1a6338","#1f8a4c","#2aa860","#48c07c","#77d69e","#a8e8c4","#d9f2e2"],
+};
+function ramp() { return document.documentElement.dataset.theme === "dark" ? RAMP.dark : RAMP.light; }
+function hex2rgb(h) { return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)]; }
+function lerpRamp(t) {
+  const r = ramp(); t = Math.max(0, Math.min(1, t));
+  const x = t * (r.length - 1), i = Math.floor(x), f = x - i;
+  if (i >= r.length - 1) return r[r.length - 1];
+  const a = hex2rgb(r[i]), b = hex2rgb(r[i + 1]);
+  const c = k => Math.round(a[k] + (b[k] - a[k]) * f);
+  return `rgb(${c(0)},${c(1)},${c(2)})`;
+}
+function colourFor(rr) {
+  if (rr.state === "band" || rr.duty === null) return "var(--band-fill)";
+  return lerpRamp(rr.duty / 100);
 }
 
-/* ---------- render ---------------------------------------------------- */
+/* ---------- controls --------------------------------------------------- */
 
 function buildControls() {
   const reg = el("reg");
-  reg.innerHTML = D.regNames.map(n => `<option value="${n}">${n}</option>`).join("");
-  reg.value = state.reg;
+  reg.innerHTML = D.regNames.map(n => `<button type="button" data-reg="${n}">${n}</button>`).join("");
+  reg.querySelectorAll("button").forEach(b => {
+    b.onclick = () => {
+      state.reg = b.dataset.reg; state.sel = null;
+      localStorage.setItem("rse.reg", state.reg);
+      render(); renderEditor();
+    };
+  });
   const prof = el("prof");
   prof.innerHTML = Object.keys(D.profiles)
-    .map(n => `<option value="${n}">${n} (${D.profiles[n].category})</option>`).join("");
+    .map(n => `<option value="${n}">${n} · ${D.profiles[n].category}</option>`).join("");
   prof.value = state.profile;
-  el("rampbar").innerHTML = SEQ.map(c => `<span style="background:${c}"></span>`).join("");
+  prof.onchange = () => { state.profile = prof.value; localStorage.setItem("rse.profile", state.profile); render(); };
+  el("tod").value = state.b;
+  el("tod").oninput = e => { state.b = parseFloat(e.target.value); localStorage.setItem("rse.b", state.b); render(); };
+  el("co2").value = state.co2dev;
+  el("co2").oninput = e => {
+    state.co2dev = parseInt(e.target.value, 10);
+    localStorage.setItem("rse.co2", state.co2dev);
+    render();
+  };
 
-  reg.onchange = () => { state.reg = reg.value; state.sel = null; render(); renderEditor(); };
-  prof.onchange = () => { state.profile = prof.value; render(); };
-  el("tod").oninput = e => { state.b = parseFloat(e.target.value); render(); };
-  el("co2").oninput = e => { state.co2dev = parseInt(e.target.value, 10); render(); };
+  el("gridTag").textContent = `${N} × ${N} · ${N * N} cells`;
+  el("thLight").onclick = () => setTheme("light");
+  el("thDark").onclick = () => setTheme("dark");
+}
+
+function setTheme(t) {
+  document.documentElement.dataset.theme = t;
+  localStorage.setItem("rse.theme", t);
+  el("thLight").setAttribute("aria-pressed", t === "light");
+  el("thDark").setAttribute("aria-pressed", t === "dark");
+  render();  // the ramp is theme-dependent — recolour every cell
+}
+
+/* ---------- render: heat map + axes + legend --------------------------- */
+
+function tipHTML(reg, xi, yi, r) {
+  const R = LIVE[reg], dx = R.dims[0], dy = R.dims[1];
+  return `<b>${D.dimLabels[dx]}</b> dev ${G[xi]} · <b>${D.dimLabels[dy]}</b> dev ${G[yi]}<br>`
+    + `raw <b>${fmt(r.raw)}</b> → final <b>${r.duty === null ? "history-dep." : fmt(r.duty) + "%"}</b>`;
 }
 
 function render() {
   const reg = state.reg, R = LIVE[reg];
   const takesCo2 = R.co2Gain !== undefined;
 
+  el("reg").querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", b.dataset.reg === reg));
+
   // The CO2 slider only means something for a regulator carrying the additive
-  // term — grey it out for the rest.
+  // term — disable it for the rest, with the inert note saying WHY.
   const cc = el("co2Ctl");
   cc.classList.toggle("disabled", !takesCo2);
   el("co2").disabled = !takesCo2;
-  el("co2Out").textContent = "dev " + state.co2dev + " — " + physLabel(state.co2dev, "co2")
-    + (takesCo2 ? "" : " — no effect on " + reg);
+  el("co2Out").textContent = "dev " + state.co2dev + " · " + physLabel(state.co2dev, "co2");
+  el("co2Inert").innerHTML = takesCo2 ? "" :
+    `Inert for <strong>${reg}</strong> — CO&#8322; enters the engine only as the additive term on
+     regulators carrying <strong>co2_gain</strong> (${co2Regs().join(", ")}). No surface takes
+     CO&#8322; as a dimension, so this slider has <strong>no effect</strong> here.`;
 
-  el("todOut").textContent = "b = " + state.b.toFixed(2) + " — "
+  el("todOut").textContent = "b = " + state.b.toFixed(2) + " · "
     + (state.b >= 1 ? "full day" : state.b <= 0 ? "full night" : "transition");
 
-  // Axes.
+  // Axes — deviation number every other tick (majors at 0/50/100 bold); the
+  // physical anchors live in the axis title, exact values in the detail panel.
   const dx = R.dims[0], dy = R.dims[1];
-  el("xlab").textContent = D.dimLabels[dx] + " deviation → (" + D.dimUnits[dx] + ")";
-  el("ylab").textContent = D.dimLabels[dy] + " deviation → (" + D.dimUnits[dy] + ")";
-  el("xticks").innerHTML = G.map(v =>
-    `<div class="xtick">${v} · ${physLabel(v, dx)}</div>`).join("");
-  el("yticks").innerHTML = G.map(v =>
-    `<div class="ytick">${v} · ${physLabel(v, dy)}</div>`).join("");
+  const ax = anchors(dx), ay = anchors(dy);
+  const dp = d => d === "co2" ? 0 : 1;
+  el("xlab").innerHTML = `${D.dimLabels[dx]} deviation → <span class="mono" style="color:var(--fg-3)">`
+    + `${ax.a0.toFixed(dp(dx))} · ${ax.a50.toFixed(dp(dx))} · ${ax.a100.toFixed(dp(dx))} ${D.dimUnits[dx]}</span>`;
+  el("ylab").innerHTML = `${D.dimLabels[dy]} deviation → `
+    + `${ay.a0.toFixed(dp(dy))} · ${ay.a50.toFixed(dp(dy))} · ${ay.a100.toFixed(dp(dy))} ${D.dimUnits[dy]}`;
+  const tickCls = v => (v % 50 === 0) ? " maj" : "";
+  el("xticks").innerHTML = G.map((v, i) =>
+    `<div class="xtick${tickCls(v)}">${i % 2 === 0 ? v : ""}</div>`).join("");
+  el("yticks").innerHTML = G.map((v, i) =>
+    `<div class="ytick${tickCls(v)}">${i % 2 === 0 ? v : ""}</div>`).join("");
 
   el("chartTitle").textContent = reg + " — final effective duty";
   el("chartNote").textContent = chartNote(R, reg);
@@ -657,13 +970,13 @@ function render() {
         + (r.conflictFired ? " conflict" : "")
         + (state.sel && state.sel[0] === xi && state.sel[1] === yi ? " sel" : "");
       c.style.background = colourFor(r);
-      c.title = `${D.dimLabels[dx]} dev ${G[xi]} · ${D.dimLabels[dy]} dev ${G[yi]}\n`
-        + `raw ${fmt(r.raw)} → final ${r.duty === null ? "history-dependent" : fmt(r.duty) + "%"}`;
+      c._tip = tipHTML(reg, xi, yi, r);
       c.onclick = () => { state.sel = [xi, yi]; render(); };
       frag.appendChild(c);
     }
   }
   heat.replaceChildren(frag);
+  el("rampbar").innerHTML = ramp().map(c => `<span style="background:${c}"></span>`).join("");
 
   renderAgg(reg, R, results);
   renderDetail(reg, R);
@@ -672,22 +985,51 @@ function render() {
 function chartNote(R, reg) {
   if (R.driven === "tod") {
     return "No surface: the grow light is driven by the time-of-day blend alone, so the grid is "
-      + "uniform. The axes are drawn only as a frame — move the ToD slider to change the value.";
+      + "uniform. The axes are a frame only — move the ToD slider to change the value.";
   }
   if (R.driven === "follower") {
     return "No surface of its own: the command is the heater's organic command × "
       + R.followerGain + " + " + R.followerFloor + ", so the shape follows the heater.";
   }
   if (R.adapter.type === "pwm" || R.adapter.type === "pwm_pair") {
-    return "PWM duty as commanded — this is the number handed to the PCA9685 channel."
+    return "PWM duty as commanded (pre-inversion — the PCA9685 invert flag lives in the output driver)."
       + (R.co2Gain !== undefined ? " The CO₂ slider adds its term on top of this surface." : "");
   }
   if (R.adapter.type === "heater") {
     return "Time-proportioned over a " + R.adapter.window_s + " s window, so the plotted duty is the "
       + "average — the MOSFET itself is on/off.";
   }
-  return "Relay actuator: the output is binary. Cells above on_above are ON; below off_below "
-    + "are OFF; the hatched band in between — thresholds included — depends on the previous state.";
+  return "Relay actuator: the output is binary. Cells above on_above are ON, below off_below are OFF; "
+    + "the textured band between — thresholds included — depends on the previous state.";
+}
+
+/* hover tooltip via delegation — replaces the native title attribute */
+(function () {
+  const tip = document.getElementById("celltip");
+  document.addEventListener("mouseover", e => {
+    const c = e.target.closest && e.target.closest(".cell");
+    if (c && c._tip) { tip.innerHTML = c._tip; tip.style.display = "block"; }
+  });
+  document.addEventListener("mousemove", e => {
+    if (tip.style.display !== "block") return;
+    let x = e.clientX + 14, y = e.clientY + 16;
+    const w = tip.offsetWidth, h = tip.offsetHeight;
+    if (x + w > innerWidth - 8) x = e.clientX - w - 14;
+    if (y + h > innerHeight - 8) y = e.clientY - h - 16;
+    tip.style.left = x + "px"; tip.style.top = y + "px";
+  });
+  document.addEventListener("mouseout", e => {
+    const c = e.target.closest && e.target.closest(".cell");
+    if (c) tip.style.display = "none";
+  });
+})();
+
+/* ---------- aggregation panel ------------------------------------------ */
+
+// "None — free" is meaningful (the regulator stays under its own control
+// during an emergency) and must not read as a missing value.
+function freeCell(v) {
+  return v === null ? `<span class="free-tag"><b>free</b><small>none — under own control</small></span>` : fmt(v);
 }
 
 function renderAgg(reg, R, results) {
@@ -704,35 +1046,38 @@ function renderAgg(reg, R, results) {
     ? { min: Math.min(...arr), max: Math.max(...arr), mean: arr.reduce((s, v) => s + v, 0) / arr.length }
     : { min: null, max: null, mean: null };
   const sr = stat(raws), sf = stat(det);
+  const tile = (t, v, u, col) => `<div class="tile" style="--tilecol:${col}"><div class="t">${t}</div>`
+    + `<div class="v">${fmt(v)}${u ? `<small> ${u}</small>` : ""}</div></div>`;
 
   let h = `<div class="tiles">
-    <div class="tile"><div class="t">final min</div><div class="v">${fmt(sf.min)}<span class="u">%</span></div></div>
-    <div class="tile"><div class="t">final mean</div><div class="v">${fmt(sf.mean)}<span class="u">%</span></div></div>
-    <div class="tile"><div class="t">final max</div><div class="v">${fmt(sf.max)}<span class="u">%</span></div></div>
-    <div class="tile"><div class="t">cells</div><div class="v">${results.length}</div></div>
+    ${tile("final · min", sf.min, "%", "var(--grow-400)")}
+    ${tile("final · mean", sf.mean, "%", "var(--grow-600)")}
+    ${tile("final · max", sf.max, "%", "var(--grow-900)")}
+    <div class="tile" style="--tilecol:var(--led-blue)"><div class="t">cells</div>
+      <div class="v">${results.length}</div></div>
   </div>
   <table class="kv">
-    <tr class="sect"><td colspan="2">Raw surface (sampled)</td></tr>
+    <tr class="sect"><td colspan="2">Raw surface · sampled</td></tr>
     <tr><td>min / mean / max</td><td>${fmt(sr.min)} / ${fmt(sr.mean)} / ${fmt(sr.max)}</td></tr>`;
 
   if (bandCount) {
-    h += `<tr><td>history-dependent cells</td><td>${bandCount} (excluded from final stats)</td></tr>`;
+    h += `<tr><td>history-dependent cells</td><td>${bandCount} · excluded from final stats</td></tr>`;
   }
-  h += `<tr><td>cells that would escalate</td><td>${escCount} emergency / ${latchCount} latch</td></tr>
-    <tr><td>cells hit by a conflict rule</td><td>${cflCount}</td></tr>
+  h += `<tr><td>would escalate</td><td>${escCount} emergency / ${latchCount} latch</td></tr>
+    <tr><td>hit by a conflict rule</td><td>${cflCount}</td></tr>
 
-    <tr class="sect"><td colspan="2">Arbitration (config.py)</td></tr>
+    <tr class="sect"><td colspan="2">Arbitration · config.py</td></tr>
     <tr><td>driven</td><td>${R.driven}</td></tr>
-    <tr><td>floor</td><td>${fmt(R.floor)} (forced at severity ≥ ${fmt(eMinor(), 0)})</td></tr>
-    <tr><td>emergency_value</td><td>${R.emergencyValue === null ? "None — free" : fmt(R.emergencyValue)}</td></tr>
-    <tr><td>safe_state</td><td>${R.safeState === null ? "None — free" : fmt(R.safeState)}</td></tr>
-    <tr><td>slew_normal / slew_fast</td><td>${fmt(R.slewNormal)} / ${fmt(R.slewFast)} per tick</td></tr>
-    <tr><td>band dims</td><td>${R.bandDims.length ? R.bandDims.join(", ") : "— (band 0)"}</td></tr>
+    <tr><td>floor</td><td>${fmt(R.floor)} · forced at sev ≥ ${fmt(eMinor(), 0)}</td></tr>
+    <tr><td>emergency_value</td><td>${freeCell(R.emergencyValue)}</td></tr>
+    <tr><td>safe_state</td><td>${freeCell(R.safeState)}</td></tr>
+    <tr><td>slew normal / fast</td><td>${fmt(R.slewNormal)} / ${fmt(R.slewFast)} per tick</td></tr>
+    <tr><td>band dims</td><td>${R.bandDims.length ? R.bandDims.join(", ") : "— · band 0"}</td></tr>
 
-    <tr class="sect"><td colspan="2">Adapter — ${a.type}</td></tr>`;
+    <tr class="sect"><td colspan="2">Adapter · ${a.type}</td></tr>`;
 
   if (a.pin_key) h += `<tr><td>pin_key</td><td><code>${a.pin_key}</code></td></tr>`;
-  if (a.pca9685_ch !== undefined) h += `<tr><td>PCA9685 channel</td><td>${a.pca9685_ch}</td></tr>`;
+  if (a.pca9685_ch !== undefined) h += `<tr><td>PCA9685 channel</td><td>ch${a.pca9685_ch}</td></tr>`;
   if (a.center_ch !== undefined) {
     h += `<tr><td>channels</td><td>center ch${a.center_ch} × ${a.center_scale}, `
       + `wall ch${a.wall_ch} × ${a.wall_scale}</td></tr>`;
@@ -742,153 +1087,277 @@ function renderAgg(reg, R, results) {
   }
   if (a.window_s !== undefined) h += `<tr><td>window_s</td><td>${a.window_s} s</td></tr>`;
   if (a.min_on_s !== undefined) {
-    h += `<tr><td>min_on_s / min_off_s</td><td>${a.min_on_s} s / ${a.min_off_s} s</td></tr>`;
+    h += `<tr><td>min_on_s / min_off_s</td><td>${a.min_on_s} / ${a.min_off_s} s</td></tr>`;
   }
   if (a.dac_max_pct !== undefined) {
-    h += `<tr><td>dac_max_pct</td><td>${a.dac_max_pct} % `
-      + `${R.dimmable ? "(applied)" : "(unused — relay-only mode)"}</td></tr>`;
+    h += `<tr><td>dac_max_pct</td><td>${a.dac_max_pct} % · ${R.dimmable ? "applied" : "unused (relay-only)"}</td></tr>`;
   }
+  h += `</table>`;
 
   if (R.co2Gain !== undefined) {
-    const ca = anchors("co2");
-    const devDead = R.co2Break;
-    // co2_gain of 0 is a legal config value and disables the term entirely.
-    const devFloor = R.co2Gain > 0 ? R.co2Break + R.floor / R.co2Gain : null;
-    const devSat = R.co2Gain > 0 ? Math.min(100, R.co2Break + 100 / R.co2Gain) : null;
-    const ppmAt = d => d === null || d > 100
-      ? "never within this profile's range" : `dev ${fmt(d)} · ${devToPhys(d, ca).toFixed(0)} ppm`;
-    h += `<tr class="sect"><td colspan="2">CO₂ additive term</td></tr>
-      <tr><td>co2_gain / co2_break</td><td>${fmt(R.co2Gain, 2)} / ${fmt(R.co2Break)}</td></tr>
-      <tr><td>deadband ends</td><td>${ppmAt(devDead)}</td></tr>
-      <tr><td>term clears the floor (${fmt(R.floor)})</td><td>${ppmAt(devFloor)}</td></tr>
-      <tr><td>term saturates (100)</td><td>${ppmAt(devSat)}</td></tr>
-      <tr><td>external multiplier</td><td>${!R.external
-        ? "not applied to this regulator"
-        : D.externalSensor.enabled
-        ? "enabled — NOT modelled (needs a live outside reading); device range ×"
-          + fmt(externalMultRange(), 2) + "–1.00"
-        : "sensor disabled — constant 1.0"}</td></tr>`;
+    h += `<div class="sub-h" style="margin-top:20px">CO₂ additive term</div>` + co2CurveHTML(R);
     // The ceiling of the term is gain*(100-break). If that sits under the
     // floor, the floor forces the command up and CO2 changes nothing anywhere
     // in the profile's range — the exact bug this repo shipped twice.
     const ceiling = R.co2Gain * (100 - R.co2Break);
     if (ceiling <= R.floor) {
-      h += `<tr><td colspan="2"><strong>CO₂ term tops out at ${fmt(ceiling)}, under the floor of
-        ${fmt(R.floor)} — CO₂ cannot move this actuator at any concentration.</strong></td></tr>`;
+      h += `<div class="callout money"><strong>CO₂ term tops out at ${fmt(ceiling)}, under the floor of
+        ${fmt(R.floor)} — CO₂ cannot move this actuator at any concentration.</strong></div>`;
     }
   }
-  h += `</table>`;
 
-  h += `<p class="warn">Not drawn per cell: slew limiting (${fmt(R.slewNormal)} / ${fmt(R.slewFast)} per
-    ${D.tickS} s tick) needs the previous command, and emergency / latch need
-    ${D.latch.enter_ticks} consecutive ticks past the escalation edge. Escalation is gated to
-    ${Object.keys(D.escalation).filter(d => D.escalation[d].high || D.escalation[d].low)
+  h += `<div class="console"><span class="lv">NOTE</span> Not drawn per cell: slew limiting
+    (${fmt(R.slewNormal)}/${fmt(R.slewFast)} per ${D.tickS} s tick) needs the previous command;
+    emergency / latch need ${D.latch.enter_ticks} consecutive ticks past the escalation edge.
+    Escalation is gated to `
+    + (Object.keys(D.escalation).filter(d => D.escalation[d].high || D.escalation[d].low)
       .map(d => D.dimLabels[d] + (D.escalation[d].high ? " high" : "") + (D.escalation[d].low ? " low" : ""))
-      .join(", ") || "nothing"} — outlined cells are where that gated severity reaches
-    ${fmt(eEmerg(), 0)}.</p>`;
+      .join(", ") || "nothing")
+    + ` — outlined cells are where that gated severity reaches ${fmt(eEmerg(), 0)}.</div>`;
   el("agg").innerHTML = h;
 }
 
+/* CO2 response curve — the additive term vs CO2 deviation, annotated with the
+   deadband end, the point the term clears the floor, saturation, the floor
+   level and the live slider position. Replaces three table rows. */
+function co2CurveHTML(R) {
+  const W = 100, H = 100;
+  const term = dev => { const over = dev - R.co2Break; return over > 0 ? Math.min(100, R.co2Gain * over) : 0; };
+  const ca = anchors("co2");
+  const pts = []; for (let dev = 0; dev <= 100; dev += 2) pts.push([dev, term(dev)]);
+  const sx = dev => (dev / 100) * W;
+  const sy = v => H - (v / 100) * H;
+  const poly = pts.map(p => `${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join(" ");
+  // co2_gain of 0 is a legal config value and disables the term entirely.
+  const devFloor = R.co2Gain > 0 ? R.co2Break + R.floor / R.co2Gain : null;
+  const devSat = R.co2Gain > 0 ? Math.min(100, R.co2Break + 100 / R.co2Gain) : null;
+  const cur = state.co2dev;
+  const vline = (dev, col, dash) => {
+    if (dev === null || dev > 100) return "";
+    const x = sx(dev).toFixed(1);
+    return `<line x1="${x}" y1="0" x2="${x}" y2="${H}" stroke="${col}" stroke-width="1"`
+      + (dash ? ` stroke-dasharray="3 2"` : "") + `/>`;
+  };
+  const ppmAt = d => (d === null || d > 100) ? "—" : `${devToPhys(d, ca).toFixed(0)} ppm`;
+  const fy = (H - (R.floor / 100) * H).toFixed(1);
+  const cx = sx(cur).toFixed(1);
+  return `<div class="co2curve">
+    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+      <line x1="0" y1="${H}" x2="${W}" y2="${H}" stroke="var(--border-strong)" stroke-width="1"/>
+      <line x1="0" y1="${fy}" x2="${W}" y2="${fy}" stroke="var(--led-amber)"
+        stroke-width="1" stroke-dasharray="3 2"/>
+      ${vline(R.co2Break, "var(--fg-3)", true)}
+      ${vline(devFloor, "var(--grow-600)", true)}
+      ${vline(devSat, "var(--bloom-500)", true)}
+      <polyline points="${poly}" fill="none" stroke="var(--grow-600)" stroke-width="2"
+        vector-effect="non-scaling-stroke"/>
+      <line x1="${cx}" y1="0" x2="${cx}" y2="${H}" stroke="var(--fg-1)" stroke-width="1.5"
+        vector-effect="non-scaling-stroke"/>
+    </svg>
+    <div class="curve-legend">
+      <span class="li" style="color:var(--fg-1)"><span
+        style="width:2px;height:12px;background:currentColor;display:inline-block"></span>
+        now: dev ${cur} · ${term(cur).toFixed(1)} term</span>
+      <span class="li" style="color:var(--fg-3)"><span class="dash"></span> deadband ends ${ppmAt(R.co2Break)}</span>
+      <span class="li" style="color:var(--grow-600)"><span class="dash"></span> clears floor ${ppmAt(devFloor)}</span>
+      <span class="li" style="color:var(--bloom-500)"><span class="dash"></span> saturates ${ppmAt(devSat)}</span>
+      <span class="li" style="color:var(--led-amber)"><span class="dash"></span> floor ${fmt(R.floor)}</span>
+    </div>
+    <table class="kv" style="margin-top:8px"><tr><td>co2_gain / co2_break</td>
+      <td>${fmt(R.co2Gain, 2)} / ${fmt(R.co2Break)}</td></tr>
+    <tr><td>external multiplier</td><td>${!R.external
+      ? "not applied to this regulator"
+      : D.externalSensor.enabled
+      ? "enabled — not modelled; device range ×" + fmt(externalMultRange(), 2) + "–1.00"
+      : "sensor off · constant 1.0"}</td></tr></table>
+  </div>`;
+}
+
+/* ---------- cell detail: headline + waterfall + adapter + slices ------- */
+
 function renderDetail(reg, R) {
-  if (!state.sel) { el("detail").innerHTML = `<p class="empty">Click a cell in the grid.</p>`; return; }
+  const dt = el("detail"), tagEl = el("detailTag");
+  if (!state.sel) {
+    tagEl.textContent = "";
+    dt.innerHTML = `<div class="empty"><div class="em-badge"></div>
+      <p>Click any cell to inspect its pipeline.</p>
+      <p class="hint">You'll see the raw surface value beside what the actuator actually does,
+      and the stage that changed it.</p></div>`;
+    return;
+  }
   const takesCo2 = R.co2Gain !== undefined;
   const [xi, yi] = state.sel;
   const r = pipeline(reg, xi, yi);
   const dx = R.dims[0], dy = R.dims[1];
-  const finalTxt = r.duty === null ? "history" : fmt(r.duty) + "%";
+  tagEl.textContent = `${dx} ${G[xi]} · ${dy} ${G[yi]}`;
+  const finalTxt = r.duty === null ? "history" : fmt(r.duty);
+  const finalUnit = r.duty === null ? "" : "%";
 
-  const bar = (label, value, colour) => {
-    const w = value === null ? 0 : Math.max(0, Math.min(100, value));
-    return `<div class="barrow"><span>${label}</span>
-      <div class="bartrack"><div class="barfill" style="width:${w}%;background:${colour}"></div></div>
-      <span class="barval">${value === null ? "—" : fmt(value)}</span></div>`;
-  };
-
-  let h = `<table class="kv">
-    <tr><td>${D.dimLabels[dx]} deviation</td><td>${G[xi]} · ${physLabel(G[xi], dx)}</td></tr>
-    <tr><td>${D.dimLabels[dy]} deviation</td><td>${G[yi]} · ${physLabel(G[yi], dy)}</td></tr>
-    <tr><td>CO₂ deviation</td><td>${state.co2dev} · ${physLabel(state.co2dev, "co2")}</td></tr>
-    <tr><td>severity (this regulator / global)</td><td>${fmt(r.regSev)} / ${fmt(r.gmax)}</td></tr>
-  </table>
-  <div class="bars">
-    ${bar("raw surface", r.raw, "var(--seq-300)")}
-    ${takesCo2 ? bar("+ CO₂ term", r.afterCo2, "var(--seq-400)") : ""}
-    ${bar("after floor/conflict", r.command, "var(--seq-500)")}
-    ${bar("final duty", r.duty, "var(--accent)")}
-  </div>
-  <div class="stage"><span class="n">raw surface output</span><span class="v">${fmt(r.raw)}</span></div>`;
-
-  if (takesCo2) {
-    h += `<div class="stage"><span class="n">CO₂ term (gain ${fmt(R.co2Gain, 2)} ×
-      relu(dev − ${fmt(R.co2Break)}))</span>
-      <span class="v">${r.co2Term > 0 ? "+" + fmt(r.co2Term) : "0.0"}</span>
-      ${r.co2Term === 0
-        ? `<span class="note">inside the CO₂ deadband — the term contributes nothing here</span>`
-        : ""}
-      </div>`;
-  }
-  if (R.external) {
-    h += `<div class="stage"><span class="n">× external multiplier</span><span class="v">${fmt(r.extMult, 2)}</span>
-      <span class="note">${D.externalSensor.enabled
-        ? `external sensor ENABLED in config: the device derives this from a live outside reading and `
-          + `could scale the command as low as ×${fmt(externalMultRange(), 2)}. A static plot has no `
-          + `outside reading, so this shows the un-gated command.`
-        : `external sensor disabled in config — the engine uses a constant 1.0`}</span>
-      </div>`;
-  }
-
-  h += `<div class="stage"><span class="n">after floor${r.floorFired ? " — <strong>floor applied</strong>" : ""}</span>
-      <span class="v">${fmt(r.floored)}</span>
-      ${r.floorFired
-        ? `<span class="note">severity ${fmt(r.regSev)} ≥ ${fmt(eMinor(), 0)} forced the
-           command up to the floor of ${fmt(R.floor)}</span>`
-        : ""}
-    </div>
-    <div class="stage"><span class="n">after conflict rules${r.conflictFired
-      ? " — <strong>" + r.conflictWhy + "</strong>" : ""}</span>
-      <span class="v">${fmt(r.command)}</span>
-      ${r.conflictFired ? `<span class="note">${r.conflictWhen}</span>` : ""}
-    </div>`;
-
-  // Adapter stage — say what the device actually does with that command.
-  let adNote = "";
-  if (r.kind === "pwm_pair") {
-    adNote = `center ch${R.adapter.center_ch} ${fmt(r.center)} % · wall ch${R.adapter.wall_ch} ${fmt(r.wall)} % `
-      + `(grid is coloured by the center channel)`;
-  } else if (r.kind === "heater") {
-    adNote = `time-proportioned: ${fmt(r.duty)} % of a ${R.adapter.window_s} s window, `
-      + `bounded by min_on_s ${R.adapter.min_on_s} s / min_off_s ${R.adapter.min_off_s} s`;
-  } else if (r.state === "band") {
-    adNote = `command ${fmt(r.command)} sits inside the hysteresis band `
-      + `(${fmt(R.adapter.off_below)}–${fmt(R.adapter.on_above)}, inclusive): the relay stays wherever it already was. `
-      + `min_on_s ${R.adapter.min_on_s} s / min_off_s ${R.adapter.min_off_s} s also gate the transition.`;
-  } else if (r.kind === "relay" || r.kind === "growlight") {
-    adNote = `command ${fmt(r.command)} is ${r.state === "on" ? "above on_above " + fmt(R.adapter.on_above)
-      : "below off_below " + fmt(R.adapter.off_below)} — relay ${r.state.toUpperCase()}`
-      + (r.kind === "growlight" && !R.dimmable
-        ? `; relay-only mode, so dac_max_pct ${R.adapter.dac_max_pct} % is unused` : "");
-  } else {
-    adNote = `PWM duty passes straight through to channel ${R.adapter.pca9685_ch}`;
-  }
-
-  h += `<div class="stage final"><span class="n">FINAL effective duty</span><span class="v">${finalTxt}</span>
-      <span class="note">${adNote}</span></div>`;
-
+  // --- headline: raw vs final — the money comparison ---
   const delta = r.duty === null ? null : r.duty - r.raw;
-  if (delta !== null && Math.abs(delta) >= 0.05) {
-    h += `<p class="warn">Raw ${fmt(r.raw)} → final ${fmt(r.duty)}: a difference of
-      ${delta > 0 ? "+" : ""}${fmt(delta)} points. The organic surface is <strong>not</strong> what
-      the actuator does here.</p>`;
-  }
+  const changed = delta !== null && Math.abs(delta) >= 0.05;
+  const mover = moverStage(r, R, takesCo2);
+  let h = `<div class="coordgrid">
+      <div class="coord"><div class="t">${D.dimLabels[dx]} dev</div>
+        <div class="v">${G[xi]} <small>· ${physLabel(G[xi], dx)}</small></div></div>
+      <div class="coord"><div class="t">${D.dimLabels[dy]} dev</div>
+        <div class="v">${G[yi]} <small>· ${physLabel(G[yi], dy)}</small></div></div>
+      <div class="coord"><div class="t">CO₂ dev</div>
+        <div class="v">${state.co2dev} <small>· ${physLabel(state.co2dev, "co2")}</small></div></div>
+      <div class="coord"><div class="t">severity · this / global</div>
+        <div class="v">${fmt(r.regSev, 0)} / ${fmt(r.gmax, 0)}</div></div>
+    </div>
+    <div class="headline ${changed ? "changed" : ""}">
+      <div class="hl-col"><div class="t">raw surface</div><div class="n">${fmt(r.raw)}</div></div>
+      <div class="hl-arrow">→</div>
+      <div class="hl-col"><div class="t">actuator does</div>
+        <div class="n final">${finalTxt}<small>${finalUnit}</small></div></div>
+    </div>
+    <div class="hl-verdict ${changed ? "changed" : "same"}">${
+      changed
+        ? `<strong>${delta > 0 ? "+" : ""}${fmt(delta)}</strong> — the ${mover} changed it.
+           The surface is <strong>not</strong> what the actuator does here.`
+        : (r.duty === null
+          ? `history-dependent — the relay holds its previous state in this band`
+          : `raw = final — the surface passes straight through`)
+    }</div>`;
+
+  h += `<div class="sub-h">Stage waterfall</div>` + waterfallHTML(reg, R, r, takesCo2);
+  h += `<div class="adnote"><span class="k">adapter · ${r.kind}</span> — ${adapterNote(R, r)}</div>`;
+
   if (r.escEmergency) {
-    h += `<p class="warn">This cell would escalate: gated severity ${fmt(r.esc)} ≥
-      ${fmt(eEmerg(), 0)}${r.escLatch ? ` (and ≥ the latch edge ${fmt(eLatch(), 0)})` : ""},
-      held for ${D.latch.enter_ticks} ticks. The forced vector would then set this regulator to
-      <strong>${R.emergencyValue === null ? "free (keeps its organic command)" : fmt(R.emergencyValue) + " %"}</strong>
-      in emergency and <strong>${R.safeState === null ? "free" : fmt(R.safeState) + " %"}</strong> under latch,
-      overriding everything above.</p>`;
+    const latchTxt = r.escLatch ? ` (≥ latch ${fmt(eLatch(), 0)})` : "";
+    h += `<div class="callout esc"><strong>Would escalate.</strong> gated severity
+      <span class="mono">${fmt(r.esc, 0)} ≥ ${fmt(eEmerg(), 0)}</span>${latchTxt},
+      held ${D.latch.enter_ticks} ticks. Forced to
+      <strong>${R.emergencyValue === null ? "free" : fmt(R.emergencyValue) + " %"}</strong> in emergency,
+      <strong>${R.safeState === null ? "free" : fmt(R.safeState) + " %"}</strong> under latch —
+      overriding everything above.</div>`;
   }
-  el("detail").innerHTML = h;
+
+  h += `<div class="sub-h">1-D slices through this cell</div>` + slicesHTML(reg, R, xi, yi);
+
+  dt.innerHTML = h;
+}
+
+function moverStage(r, R, takesCo2) {
+  if (r.conflictFired && Math.abs(r.command - r.floored) >= 0.05) return "conflict rule";
+  if (r.floorFired) return "floor";
+  if (takesCo2 && r.co2Term > 0) return "CO₂ term";
+  return "adapter";
+}
+
+/* Stage waterfall — a floating-bar bridge from raw surface through each stage
+   to FINAL, with the stage that actually moved the value highlighted and its
+   note shown only when it fired. */
+function waterfallHTML(reg, R, r, takesCo2) {
+  const seq = [];
+  seq.push({ name: "raw surface", val: r.raw, from: 0, note: null });
+  if (takesCo2) {
+    const v1 = clamp(r.raw + r.co2Term);
+    seq.push({ name: "+ CO₂ term", val: v1, from: r.raw, active: r.co2Term > 0,
+      note: r.co2Term > 0
+        ? `+${fmt(r.co2Term)} · gain ${fmt(R.co2Gain, 2)} × relu(dev − ${fmt(R.co2Break)})`
+        : `0 · inside the CO₂ deadband` });
+    if (R.external) {
+      seq.push({ name: "× external", val: r.afterCo2, from: v1, active: Math.abs(r.afterCo2 - v1) >= 0.05,
+        note: D.externalSensor.enabled
+          ? `enabled — not modelled; device range ×${fmt(externalMultRange(), 2)}–1.00`
+          : `×1.00 · sensor off (constant)` });
+    }
+  }
+  seq.push({ name: "after floor", val: r.floored, from: r.afterCo2, active: r.floorFired,
+    note: r.floorFired
+      ? `sev ${fmt(r.regSev, 0)} ≥ ${fmt(eMinor(), 0)} forced up to floor ${fmt(R.floor)}`
+      : (R.floor > 0 ? `floor ${fmt(R.floor)} not forced (sev < ${fmt(eMinor(), 0)} or already above)` : null) });
+  seq.push({ name: "after conflict", val: r.command, from: r.floored, active: Math.abs(r.command - r.floored) >= 0.05,
+    note: r.conflictFired ? `${r.conflictWhy} · ${r.conflictWhen}` : null });
+
+  const rows = seq.map((s, i) => {
+    const lo = Math.min(s.from, s.val), hi = Math.max(s.from, s.val);
+    const dir = i === 0 ? "up" : (s.val > s.from ? "up" : (s.val < s.from ? "down" : "hold"));
+    const bar = i === 0
+      ? `<div class="wf-delta up" style="left:0;width:${clamp(s.val)}%"></div>`
+      : `<div class="wf-delta ${dir}" style="left:${lo}%;width:${Math.max(hi - lo, dir === "hold" ? 0 : 0.6)}%"></div>`
+        + `<div class="wf-base" style="left:0;width:${lo}%"></div>`;
+    return `<div class="wf-row ${s.active ? "active" : ""}">
+        <div class="wf-name">${s.name}</div>
+        <div class="wf-track">${bar}</div>
+        <div class="wf-val">${fmt(s.val)}</div>
+      </div>${s.note ? `<div class="wf-note">${s.active ? "<b>changed</b> · " : ""}${s.note}</div>` : ""}`;
+  }).join("");
+
+  const fv = r.duty === null ? null : r.duty;
+  const finalBar = fv === null
+    ? `<div class="wf-delta hold" style="left:0;width:100%"></div>`
+    : `<div class="wf-delta up" style="left:0;width:${clamp(fv)}%"></div>`;
+  const finalRow = `<div class="wf-row final">
+      <div class="wf-name">FINAL effective</div>
+      <div class="wf-track">${finalBar}</div>
+      <div class="wf-val">${r.duty === null ? "—" : fmt(r.duty)}</div>
+    </div>`;
+  return `<div class="waterfall">${rows}${finalRow}`
+    + `<div class="wf-scale"><span>0</span><span>50</span><span>100 %</span></div></div>`;
+}
+
+function adapterNote(R, r) {
+  const a = R.adapter;
+  if (r.kind === "pwm_pair") {
+    return `center ch${a.center_ch} ${fmt(r.center)} % · wall ch${a.wall_ch} ${fmt(r.wall)} % `
+      + `(grid coloured by center)`;
+  }
+  if (r.kind === "heater") {
+    return `time-proportioned: ${fmt(r.duty)} % of a ${a.window_s} s window, `
+      + `bounded by min_on ${a.min_on_s} s / min_off ${a.min_off_s} s`;
+  }
+  if (r.state === "band") {
+    return `command ${fmt(r.command)} sits in the hysteresis band (${fmt(a.off_below)}–${fmt(a.on_above)}, inclusive): `
+      + `the relay holds its previous state. min_on ${a.min_on_s} s / min_off ${a.min_off_s} s also gate it.`;
+  }
+  if (r.kind === "relay" || r.kind === "growlight") {
+    const side = r.state === "on" ? "above on_above " + fmt(a.on_above) : "below off_below " + fmt(a.off_below);
+    return `command ${fmt(r.command)} is ${side}`
+      + ` — relay ${r.state.toUpperCase()}`
+      + (r.kind === "growlight" && !R.dimmable ? `; relay-only, dac_max_pct ${a.dac_max_pct} % unused` : "");
+  }
+  return `PWM duty passes straight through to channel ch${a.pca9685_ch}`;
+}
+
+/* 1-D slice charts: duty along X at the clicked Y, and along Y at the clicked
+   X — reads a row/column far faster than scanning fills. Nulls (hysteresis
+   band) break the line. */
+function sliceSVG(vals, markIdx) {
+  const W = 100, H = 100, n = vals.length;
+  const sx = i => (i / (n - 1)) * W, sy = v => H - (v / 100) * H;
+  let segs = [], cur = [];
+  vals.forEach((v, i) => {
+    if (v === null) { if (cur.length) { segs.push(cur); cur = []; } }
+    else cur.push(`${sx(i).toFixed(1)},${sy(v).toFixed(1)}`);
+  });
+  if (cur.length) segs.push(cur);
+  const polys = segs.map(s =>
+    `<polyline points="${s.join(" ")}" fill="none" stroke="var(--grow-600)" stroke-width="2"`
+    + ` vector-effect="non-scaling-stroke"/>`).join("");
+  const mv = vals[markIdx];
+  const mx = sx(markIdx).toFixed(1);
+  const mark = `<line x1="${mx}" y1="0" x2="${mx}" y2="${H}" stroke="var(--fg-1)" stroke-width="1.25"`
+    + ` vector-effect="non-scaling-stroke"/>`
+    + (mv !== null ? `<circle cx="${mx}" cy="${sy(mv).toFixed(1)}" r="2.6" fill="var(--bloom-500)"/>` : "");
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">`
+    + `<line x1="0" y1="${H - 0.5}" x2="${W}" y2="${H - 0.5}" stroke="var(--border-strong)" stroke-width="1"/>`
+    + `<line x1="50" y1="0" x2="50" y2="${H}" stroke="var(--grid-line)" stroke-width="1"/>`
+    + polys + mark + `</svg>`;
+}
+function slicesHTML(reg, R, xi, yi) {
+  const dx = R.dims[0], dy = R.dims[1];
+  const rowX = G.map((_, i) => pipeline(reg, i, yi).duty);   // vary X, fixed Y
+  const colY = G.map((_, j) => pipeline(reg, xi, j).duty);   // vary Y, fixed X
+  return `<div class="slices">
+    <div class="slice"><div class="st">duty vs ${D.dimLabels[dx]} · at ${D.dimLabels[dy]} dev ${G[yi]}</div>
+      ${sliceSVG(rowX, xi)}</div>
+    <div class="slice"><div class="st">duty vs ${D.dimLabels[dy]} · at ${D.dimLabels[dx]} dev ${G[xi]}</div>
+      ${sliceSVG(colY, yi)}</div>
+  </div>`;
 }
 
 /* ---------- editor ----------------------------------------------------- */
@@ -934,7 +1403,7 @@ function edRow(label, cells, baseText) {
 
 function renderEditor() {
   const reg = state.reg, R = LIVE[reg], B = D.regulators[reg];
-  el("edSubtitle").textContent = "— " + reg;
+  el("edSubtitle").textContent = reg;
   let h = "";
 
   if (R.driven === "surface") {
@@ -1123,7 +1592,7 @@ el("editor").addEventListener("input", ev => {
   updateDirty();
   // Re-mark just this input; re-rendering the whole editor here would steal
   // focus mid-keystroke.
-  const [scope, key] = [t.dataset.path, null];
+  const scope = t.dataset.path;
   const B = D.regulators[state.reg];
   let base;
   if (scope.startsWith("surface.")) base = B.surface[scope.slice(8)];
@@ -1166,10 +1635,16 @@ el("btnCopy").onclick = async () => {
   setTimeout(() => { el("btnCopy").textContent = "Copy to clipboard"; }, 2500);
 };
 
-buildControls();
-selfCheck();
-render();
-renderEditor();
+/* ---------- boot -------------------------------------------------------- */
+
+(function boot() {
+  const saved = localStorage.getItem("rse.theme");
+  const t = saved || (window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  buildControls();
+  selfCheck();
+  setTheme(t);   // sets the attribute, the toggle state, and runs render()
+  renderEditor();
+})();
 
 </script>
 </body>

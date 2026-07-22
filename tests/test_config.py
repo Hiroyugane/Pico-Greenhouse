@@ -705,11 +705,18 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["pca9685"]["enabled"] = original
 
-    def test_pca9685_invert_default_true(self):
-        """pca9685.invert ships True — the next-rev fan MOSFET stage inverts."""
+    def test_pca9685_invert_default_false(self):
+        """pca9685.invert ships False — the reworked fan MOSFET stage does not invert.
+
+        FAN.PP.1 moved the fan's black lead from pin 1 to pin 4, putting the
+        AO3400A in the fan's ground return, so a commanded 0 % must reach the
+        chip as 0 %. While this was still True the driver wrote the complement
+        of every command: 0 % became FULL_ON and the fans ran flat out with no
+        observable speed step.
+        """
         from config import DEVICE_CONFIG
 
-        assert DEVICE_CONFIG["pca9685"]["invert"] is True
+        assert DEVICE_CONFIG["pca9685"]["invert"] is False
 
     def test_pca9685_invert_non_bool_raises(self):
         """pca9685.invert must be a bool."""

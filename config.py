@@ -316,7 +316,7 @@ DEVICE_CONFIG = {
         "enabled": True,
         "i2c_address": 0x40,
         "freq_hz": 1000,
-        "invert": True,
+        "invert": False,
     },
     # Soil Moisture Logger Configuration (GP28 / ADC2, single-probe)
     #

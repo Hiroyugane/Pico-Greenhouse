@@ -102,6 +102,32 @@ class TestReactions:
         engine.tick(now_s=0.0)
         assert _adapter(adapters, names, "exhaust").value > 0.0
 
+    def test_co2_moves_exhaust_even_when_the_floor_is_active(self):
+        # Regression (2026-07-22): the additive CO2 term is bounded by
+        # co2_gain * (100 - co2_break). At the shipped 0.8 / 60.0 that ceiling
+        # was 32 — below the exhaust floor of 40, which the arbiter forces
+        # whenever temp or RH severity reaches the minor edge. So in any tent
+        # that was not already at ideal temp AND humidity, the exhaust sat
+        # pinned at the floor and CO2 from 0 to 2000 ppm changed nothing.
+        #
+        # Hold temp/RH off-ideal (so the floor IS active) and vary only CO2:
+        # the command must still rise, and rise past the floor.
+        floor = 25.0  # regulation.regulators.exhaust.floor
+        engine_low, ad_low, names = _engine(temp=27.0, hum=85.0, co2=600.0, minutes=720)
+        engine_high, ad_high, _ = _engine(temp=27.0, hum=85.0, co2=1200.0, minutes=720)
+        # slew_normal caps the per-tick climb, so let both settle.
+        for i in range(10):
+            engine_low.tick(now_s=float(i * 30))
+            engine_high.tick(now_s=float(i * 30))
+        low = _adapter(ad_low, names, "exhaust").value
+        high = _adapter(ad_high, names, "exhaust").value
+        # The bug was low == high == floor. Assert the response first, so a
+        # regression reads as "CO2 does not move the exhaust", not as a
+        # constant that drifted.
+        assert high > low + 20.0  # CO2 alone swings the fan by a visible margin
+        assert high > floor  # stale air clears the floor on its own
+        assert low == floor  # and ambient CO2 leaves only the floor
+
     def test_heater_follower_tracks_heater(self):
         # Cold (not extreme) → heater on; follower fan = heater*0.8.
         engine, adapters, names = _engine(temp=20.0, hum=92.0, co2=700.0, minutes=720)

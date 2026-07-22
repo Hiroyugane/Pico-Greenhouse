@@ -989,13 +989,40 @@ DEVICE_CONFIG = {
                     hy_hi2=1.6,
                     by_hi2=75.0,
                 ),
-                "co2_gain": 0.8,  # additive: co2_gain * relu(co2_dev - co2_break)
-                "co2_break": 60.0,
+                # CO2 enters additively as co2_gain * relu(co2_dev - co2_break),
+                # which is the ONLY path by which CO2 moves any actuator — no
+                # surface takes co2 as a dimension.
+                #
+                # The shipped 0.8 / 60.0 pair could not do that. The term is
+                # bounded by co2_gain * (100 - co2_break), so it saturated at
+                # 0.8 * 40 = 32 — below this regulator's own floor of 40, which
+                # the arbiter forces whenever temp or RH severity reaches the
+                # minor edge. In every realistic tent state the exhaust was
+                # pinned at 40 and CO2 from 0 to 2000 ppm changed nothing; at
+                # the 1200 ppm actually observed on the OLED the term was 9.1
+                # (docs/notes/chat-log.md 2026-07-22).
+                #
+                # Gain and break are ONE calibration with the floor below — the
+                # term must be able to clear the floor well inside the profile's
+                # CO2 anchor range, or the floor silently swallows it again.
+                # Against the cubensis fruiting anchors (0 / 600 / 2000 ppm):
+                #   deadband ends   co2_dev 55  →   740 ppm
+                #   clears floor 25 co2_dev 65  →  1020 ppm
+                #   saturates 100   co2_dev 95  →  1860 ppm
+                # The deadband keeps normal indoor drift (~400-700 ppm) from
+                # running the fan; above it the response is deliberately steep,
+                # because stale air in a fruiting chamber is a fast problem.
+                "co2_gain": 2.5,
+                "co2_break": 55.0,
                 "external": True,  # apply external-effectiveness multiplier
                 "adapter": {"type": "pwm", "pca9685_ch": 4},
                 "slew_normal": 25.0,
                 "slew_fast": 60.0,
-                "floor": 40.0,
+                # Lowered from 40 alongside the CO2 retune above: the floor
+                # guarantees minimum air exchange when temp/RH drift, but at 40
+                # it sat above everything CO2 could command. 25 still forces a
+                # baseline exchange while leaving the CO2 ramp visible.
+                "floor": 25.0,
                 "emergency_value": 100.0,  # vent hard in emergency
                 "safe_state": 100.0,
             },

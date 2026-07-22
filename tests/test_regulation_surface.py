@@ -111,11 +111,18 @@ class TestShippedCouplings:
 
     def test_humidifier_suppressed_when_already_humid(self):
         # Humid (x>55) cancels the evaporative-cooling bias so it never adds
-        # moisture to a humid room, even when hot.
+        # moisture to a humid room, even when hot. The 2026-07-22 retune leaves
+        # a few command units of residue there instead of an exact zero, so the
+        # assertion is against what the ACTUATOR can observe: a relay whose
+        # command never reaches off_below can never be held closed.
+        import config
         from lib.regulation_surface import evaluate
 
         p = _cfg_surface("humidifier")
-        assert evaluate(p, 80.0, 100.0) == 0.0
+        adapter = config.DEVICE_CONFIG["regulation"]["regulators"]["humidifier"]["adapter"]
+        humid_hot = evaluate(p, 80.0, 100.0)
+        assert humid_hot < adapter["off_below"]
+        assert humid_hot < evaluate(p, 20.0, 100.0)
 
     def test_humidifier_dry_is_hotter_wetter(self):
         from lib.regulation_surface import evaluate

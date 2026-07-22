@@ -32,8 +32,14 @@
 # the neutral defaults make an untouched surface a pass-through so a regulator
 # only needs to spell out the params it actually tunes.
 _SURFACE_PARAMS = (
-    ("ca", -1.0, 1.0, 1.0),  # cos(angle) — rotation of the linear plane
-    ("sa", -1.0, 1.0, 0.0),  # sin(angle)
+    # ca/sa started life as cos/sin of a plane rotation and were bounded to
+    # [-1, 1] to match. Nothing in regulation_surface.evaluate() requires unit
+    # norm: they are a weight PAIR that multiplies gain (and cross), so scaling
+    # both by k is identical to scaling gain and cross by k. The tuning explorer
+    # authors them freely, and clamping its export would silently change a
+    # tuning, so the bound now matches the other coupling params.
+    ("ca", -100.0, 100.0, 1.0),  # x weight of the linear plane (was cos(angle))
+    ("sa", -100.0, 100.0, 0.0),  # y weight of the linear plane (was sin(angle))
     ("cross", -100.0, 100.0, 0.0),  # cross-axis coupling
     ("gain", -100.0, 100.0, 0.0),  # linear bandwidth (slope of the plane)
     ("offset", -1000.0, 1000.0, 0.0),  # shift
@@ -945,65 +951,64 @@ DEVICE_CONFIG = {
             "humidifier": {
                 "driven": "surface",
                 "dims": ["humidity", "temp"],
-                # x = RH dev, y = temp dev. Temp couples additively (ca=0, sa=1,
-                # gain): hot → humidify MORE as evaporative cooling; cold →
-                # humidify LESS (misting would chill further). A negative
-                # high-RH hinge cuts humidifying once the air is already humid,
-                # so the evaporative bias never adds moisture to a humid room.
+                # x = RH dev, y = temp dev. Retuned 2026-07-22 in the tuning
+                # explorer and exported from there verbatim; the values below
+                # are the blessed ones, this comment explains what they do.
                 #
-                # The RH response is one proportional ramp that starts AT ideal
-                # (hx_lo1 from bx_lo1=50), not the deadband + steeper-knee pair
-                # the other regulators use, and it deliberately carries no
-                # deadband of its own. A relay actuator only ever observes two
-                # points on the curve — where the command crosses the adapter's
-                # on_above / off_below — so a surface-level deadband around
-                # ideal just means the relay never closes. The shipped
-                # deadband-below-40 version commanded 48.9 at RH 80.4% against
-                # an ideal of 92%, under an on_above of 60, and left the
-                # humidifier off in a drying tent (docs/notes/chat-log.md
-                # 2026-07-21). The hysteresis band now lives entirely in the
-                # adapter, which is what on_above/off_below are for.
+                # The plane is now rotated (ca=-1.2, sa=1.4) with a cross term
+                # (0.5) rather than the pure additive temp coupling it carried
+                # before, so the temp bias on the RH response grows with how far
+                # RH itself has drifted instead of being a constant offset. The
+                # sign of the coupling is unchanged: hot → humidify MORE
+                # (evaporative cooling), cold → humidify LESS (misting would
+                # chill further). hy_lo1/hy_lo2 add a mild cold-side taper so a
+                # cold chamber backs off progressively rather than in one step.
                 #
-                # slope 2.0 = full command at RH 75 (the at_0 anchor), zero at
-                # ideal, so the number on the OLED still reads as "how hard the
-                # humidifier is being asked to work". The adapter thresholds
-                # below are derived from this slope — retune them together.
+                # The RH response is still a proportional ramp that starts AT
+                # ideal (hx_lo1 = 1.4 from bx_lo1 = 43), and it deliberately
+                # carries no deadband of its own. A relay actuator only ever
+                # observes two points on the curve — where the command crosses
+                # the adapter's on_above / off_below — so a surface-level
+                # deadband around ideal just means the relay never closes. The
+                # deadband-below-40 version shipped before 2026-07-21 commanded
+                # 48.9 at RH 80.4% against an ideal of 92%, under an on_above of
+                # 60, and left the humidifier off in a drying tent
+                # (docs/notes/chat-log.md 2026-07-21). The hysteresis band lives
+                # entirely in the adapter, which is what on_above/off_below are
+                # for.
+                #
+                # hx_hi1/-bx_hi1 and hx_hi2 cut the command back once the air is
+                # already humid, so the evaporative bias never adds moisture to
+                # a humid room.
                 "surface": _surface(
-                    ca=0.0,
-                    sa=1.0,
-                    gain=0.5,
-                    hx_lo1=2.0,
-                    bx_lo1=50.0,
-                    hx_hi1=-2.0,
+                    ca=-1.2,
+                    sa=1.4,
+                    cross=0.5,
+                    gain=0.2,
+                    hx_hi1=-0.7,
                     bx_hi1=55.0,
+                    hx_hi2=0.2,
+                    hx_lo1=1.4,
+                    bx_lo1=43.0,
+                    hy_lo1=0.2,
+                    hy_lo2=0.1,
                 ),
-                # Hysteresis band, in command units, that puts the relay's
-                # switch points at RH 88.6% (close) and RH 91.0% (open) for the
-                # cubensis ideal of 92%. Derived from the surface slope above,
-                # with d(rh) = 50 * (rh - at_0) / (at_50 - at_0):
-                #   on_above  = hx_lo1 * (bx_lo1 - d(rh_close)) = 2 * 10.0
-                #   off_below = hx_lo1 * (bx_lo1 - d(rh_open))  = 2 *  3.0
-                # Re-derive both whenever the slope or the humidity anchors
-                # change — they are one calibration, not two knobs.
+                # Hysteresis band, in command units, matched to the surface
+                # above. The surface and these two thresholds are ONE
+                # calibration, not two knobs — re-derive both whenever the
+                # slope, the hinges, or the humidity anchors change. Values
+                # exported alongside the surface from the tuning explorer.
                 #
-                # on_above came down from 23.5 (RH 88.0, deviation 38.3) so the
-                # humidifier is already running by deviation 40, the edge of the
-                # band the KPI targets, rather than a point and a half outside
-                # it.
-                #
-                # Those RH figures hold at the ideal temperature. The
-                # evaporative-cooling coupling (gain 0.5 on temp dev) shifts
-                # them by a couple of RH points at the edges of the working
-                # range — the relay closes near 86.5% at 20C and near 91.4% at
-                # 28C, against 88.6% at the ideal temperature. That
-                # bias is intended: a hot chamber mists sooner, a cold one
-                # later. Cut gain toward 0 if the band should be temperature-
+                # The temp coupling shifts the effective RH switch points by a
+                # couple of points across the working range — a hot chamber
+                # mists sooner, a cold one later. That bias is intended; cut
+                # gain/cross toward 0 if the band should be temperature-
                 # independent instead.
                 "adapter": {
                     "type": "relay",
                     "pin_key": "relay_humidifier",  # GP19 (freed fan relay 2)
-                    "on_above": 20.0,
-                    "off_below": 6.0,
+                    "on_above": 18.0,
+                    "off_below": 7.0,
                     "min_on_s": 30,
                     "min_off_s": 30,
                 },

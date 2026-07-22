@@ -32,7 +32,7 @@ from reportlab.pdfgen import canvas
 # ---------------------------------------------------------------------------
 # Bump this date whenever CONTENT changes, so a legend glued to the case can
 # be compared against the repo without diffing the PDF.
-LEGEND_REV = "2026-07-21"
+LEGEND_REV = "2026-07-22"
 
 DEFAULT_OUTPUT = Path("docs/hardware/case-legend.pdf")
 
@@ -162,7 +162,7 @@ PAGE2 = [
             [
                 ("Cool GP18", "cooler / AC"),
                 ("Humi GP19", "humidifier"),
-                ("Lite GP20", "grow light"),
+                ("Lite GP20", "grow light (+ 0-10 V dimmer)"),
                 ("Spar GP21", "spare, unassigned"),
             ],
         ),

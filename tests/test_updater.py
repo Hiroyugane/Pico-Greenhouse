@@ -1269,3 +1269,162 @@ class TestRunPendingUpdateFeedback:
         monkeypatch.setattr("machine.reset", lambda: reset_called.append(True), raising=False)
         upd_mod.run_pending_update(self._cfg(sd_root), self._HW())
         assert reset_called == [True]
+
+
+class TestMpyAbiGuard:
+    """The .mpy ABI guard (plan section 6.3, punch item P4).
+
+    A .mpy file only imports under the bytecode ABI its mpy-cross targeted.
+    SHA-256 proves the bytes arrived intact, not that this firmware can read
+    them — so before this guard a mismatched payload verified, applied, reset,
+    and then failed every import on a board with no REPL.
+    """
+
+    def _manifest(self, **extra):
+        manifest = {"version": "2026-07-22.1", "files": [{"path": "main.py", "sha256": "x", "bytes": 1}]}
+        manifest.update(extra)
+        return manifest
+
+    def test_matching_abi_passes(self, updater_factory, monkeypatch):
+        from lib import updater as upd_mod
+
+        monkeypatch.setattr(upd_mod, "_running_mpy_abi", lambda: 6)
+        assert updater_factory().check_mpy_abi(self._manifest(mpy_abi=6)) is None
+
+    def test_mismatched_abi_is_refused_with_both_numbers(self, updater_factory, monkeypatch):
+        from lib import updater as upd_mod
+
+        monkeypatch.setattr(upd_mod, "_running_mpy_abi", lambda: 6)
+        detail = updater_factory().check_mpy_abi(self._manifest(mpy_abi=5))
+        assert detail is not None
+        assert "payload=5" in detail and "firmware=6" in detail
+
+    def test_absent_stamp_is_skipped(self, updater_factory, monkeypatch):
+        """Raw-.py payloads recompile on-device and predate the field entirely."""
+        from lib import updater as upd_mod
+
+        monkeypatch.setattr(upd_mod, "_running_mpy_abi", lambda: 6)
+        assert updater_factory().check_mpy_abi(self._manifest()) is None
+
+    def test_unknown_firmware_abi_is_skipped_not_guessed(self, updater_factory, monkeypatch):
+        """No comparison is possible — guessing would brick good payloads."""
+        from lib import updater as upd_mod
+
+        monkeypatch.setattr(upd_mod, "_running_mpy_abi", lambda: None)
+        assert updater_factory().check_mpy_abi(self._manifest(mpy_abi=5)) is None
+
+    def test_malformed_stamp_is_refused(self, updater_factory, monkeypatch):
+        """A broken builder is exactly when the update should stop."""
+        from lib import updater as upd_mod
+
+        monkeypatch.setattr(upd_mod, "_running_mpy_abi", lambda: 6)
+        detail = updater_factory().check_mpy_abi(self._manifest(mpy_abi="six"))
+        assert detail is not None and "malformed" in detail
+
+    def test_disabled_gate_skips_the_check(self, updater_factory, monkeypatch):
+        from lib import updater as upd_mod
+
+        monkeypatch.setattr(upd_mod, "_running_mpy_abi", lambda: 6)
+        u = updater_factory(enforce_mpy_abi=False)
+        assert u.check_mpy_abi(self._manifest(mpy_abi=5)) is None
+
+    def test_running_abi_reads_lib_version(self, monkeypatch):
+        from lib import updater as upd_mod
+        from lib import version as version_mod
+
+        monkeypatch.setattr(version_mod, "current_mpy_abi", lambda: 6)
+        assert upd_mod._running_mpy_abi() == 6
+
+    def test_running_abi_is_none_when_version_helper_explodes(self, monkeypatch):
+        from lib import updater as upd_mod
+        from lib import version as version_mod
+
+        def _boom():
+            raise RuntimeError("no runtime")
+
+        monkeypatch.setattr(version_mod, "current_mpy_abi", _boom)
+        assert upd_mod._running_mpy_abi() is None
+
+
+class TestMpyAbiGuardBootPath:
+    """The guard as the boot hook sees it: refuse before touching live code."""
+
+    def _cfg(self, sd_root, **overrides):
+        cfg = {
+            "enabled": True,
+            "update_dir": str(sd_root / "update"),
+            "applied_dir": str(sd_root / "applied"),
+            "log_path": str(sd_root / "updates.log"),
+            "max_retries": 3,
+            "retry_delay_ms": 0,
+            "verify_max_retries": 3,
+            "verify_retry_delay_ms": 0,
+            "allowed_paths": ["main.py", "config.py", "lib/"],
+            "enforce_mpy_abi": True,
+        }
+        cfg.update(overrides)
+        return {"updater": cfg}
+
+    class _HW:
+        def is_sd_mounted(self):
+            return True
+
+    def _stamp(self, sd_root, abi):
+        path = sd_root / "update" / "manifest.json"
+        manifest = json.loads(path.read_text())
+        manifest["mpy_abi"] = abi
+        path.write_text(json.dumps(manifest))
+
+    def test_mismatch_refuses_and_leaves_live_code_untouched(self, sd_root, good_payload, monkeypatch):
+        from lib import updater as upd_mod
+
+        flash_root = sd_root / "flash"
+        flash_root.mkdir()
+        monkeypatch.setattr(upd_mod, "_FLASH_ROOT", str(flash_root), raising=False)
+        monkeypatch.setattr(upd_mod, "_running_mpy_abi", lambda: 6)
+        self._stamp(sd_root, 5)
+
+        reset_called = []
+        monkeypatch.setattr("machine.reset", lambda: reset_called.append(True), raising=False)
+        upd_mod.run_pending_update(self._cfg(sd_root), self._HW())
+
+        assert reset_called == []
+        assert list(flash_root.iterdir()) == [], "no file may be written when the ABI cannot match"
+        # Payload stays in place so the operator can rebuild it against the right ABI.
+        assert (sd_root / "update" / "manifest.json").exists()
+        log_text = (sd_root / "updates.log").read_text()
+        assert "verify_fail" in log_text
+        assert "mpy_abi mismatch" in log_text
+
+    def test_matching_stamp_applies_as_before(self, sd_root, good_payload, monkeypatch):
+        from lib import updater as upd_mod
+
+        flash_root = sd_root / "flash"
+        flash_root.mkdir()
+        monkeypatch.setattr(upd_mod, "_FLASH_ROOT", str(flash_root), raising=False)
+        monkeypatch.setattr(upd_mod, "_running_mpy_abi", lambda: 6)
+        self._stamp(sd_root, 6)
+
+        reset_called = []
+        monkeypatch.setattr("machine.reset", lambda: reset_called.append(True), raising=False)
+        upd_mod.run_pending_update(self._cfg(sd_root), self._HW())
+
+        assert reset_called == [True]
+        assert (flash_root / "main.py").exists()
+
+    def test_config_can_force_a_mismatched_payload_through(self, sd_root, good_payload, monkeypatch):
+        """The escape hatch for a wrong stamp on an otherwise-good payload."""
+        from lib import updater as upd_mod
+
+        flash_root = sd_root / "flash"
+        flash_root.mkdir()
+        monkeypatch.setattr(upd_mod, "_FLASH_ROOT", str(flash_root), raising=False)
+        monkeypatch.setattr(upd_mod, "_running_mpy_abi", lambda: 6)
+        self._stamp(sd_root, 5)
+
+        reset_called = []
+        monkeypatch.setattr("machine.reset", lambda: reset_called.append(True), raising=False)
+        upd_mod.run_pending_update(self._cfg(sd_root, enforce_mpy_abi=False), self._HW())
+
+        assert reset_called == [True]
+        assert (flash_root / "main.py").exists()

@@ -56,3 +56,134 @@ class TestWriteBuildInfo:
         contents = target.read_text()
         assert 'VERSION = "v1.0"' in contents
         assert 'BUILD_TIME = "2026-05-17T00:00:00Z"' in contents
+
+
+def _mpy(path: Path, abi: int, body: bytes = b"\x00\x00") -> Path:
+    """Write a stub .mpy file: magic 'M', ABI byte, then anything."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(bytes([0x4D, abi]) + body)
+    return path
+
+
+class TestMpyAbiOf:
+    def test_reads_the_abi_byte(self, build_module, tmp_path):
+        assert build_module._mpy_abi_of(_mpy(tmp_path / "a.mpy", 6)) == 6
+
+    def test_rejects_a_non_mpy_file(self, build_module, tmp_path):
+        path = tmp_path / "not.mpy"
+        path.write_bytes(b"# python source\n")
+        with pytest.raises(build_module.PayloadError, match="bad magic"):
+            build_module._mpy_abi_of(path)
+
+    def test_rejects_a_truncated_file(self, build_module, tmp_path):
+        path = tmp_path / "short.mpy"
+        path.write_bytes(b"M")
+        with pytest.raises(build_module.PayloadError):
+            build_module._mpy_abi_of(path)
+
+
+class TestDetectMpyAbi:
+    def test_none_for_a_raw_python_payload(self, build_module, tmp_path):
+        source = tmp_path / "main.py"
+        source.write_text("print('hi')\n")
+        assert build_module._detect_mpy_abi([("main.py", source)]) is None
+
+    def test_returns_the_shared_abi(self, build_module, tmp_path):
+        sources = [
+            ("config.mpy", _mpy(tmp_path / "config.mpy", 6)),
+            ("lib/relay.mpy", _mpy(tmp_path / "lib" / "relay.mpy", 6)),
+        ]
+        assert build_module._detect_mpy_abi(sources) == 6
+
+    def test_ignores_raw_files_mixed_in(self, build_module, tmp_path):
+        """--compiled payloads still ship a raw build_info.py alongside the .mpy set."""
+        raw = tmp_path / "lib" / "build_info.py"
+        raw.parent.mkdir(parents=True, exist_ok=True)
+        raw.write_text("VERSION = 'x'\n")
+        sources = [("config.mpy", _mpy(tmp_path / "config.mpy", 6)), ("lib/build_info.py", raw)]
+        assert build_module._detect_mpy_abi(sources) == 6
+
+    def test_refuses_to_stamp_a_mixed_abi_payload(self, build_module, tmp_path):
+        """Two mpy-cross binaries built this; any single stamp would be a lie."""
+        sources = [
+            ("config.mpy", _mpy(tmp_path / "config.mpy", 6)),
+            ("lib/relay.mpy", _mpy(tmp_path / "lib" / "relay.mpy", 5)),
+        ]
+        with pytest.raises(build_module.PayloadError, match="mixes .mpy ABI"):
+            build_module._detect_mpy_abi(sources)
+
+
+class TestManifestAbiField:
+    def test_stamp_written_when_known(self, build_module, tmp_path):
+        import json
+
+        path = build_module._write_manifest(tmp_path, "v1", [{"path": "config.mpy", "sha256": "x", "bytes": 1}], 6)
+        assert json.loads(path.read_text())["mpy_abi"] == 6
+
+    def test_key_absent_for_raw_payloads(self, build_module, tmp_path):
+        """No stamp means the device guard skips — raw .py imports under any ABI."""
+        import json
+
+        path = build_module._write_manifest(tmp_path, "v1", [{"path": "main.py", "sha256": "x", "bytes": 1}])
+        assert "mpy_abi" not in json.loads(path.read_text())
+
+
+class TestCliAbiStamping:
+    def _build_tree(self, tmp_path, abi=6):
+        build_dir = tmp_path / "build"
+        (build_dir / "lib").mkdir(parents=True)
+        (build_dir / "main.py").write_text("print('hi')\n")
+        _mpy(build_dir / "config.mpy", abi)
+        _mpy(build_dir / "lib" / "relay.mpy", abi)
+        return build_dir
+
+    def test_compiled_payload_is_stamped_automatically(self, build_module, tmp_path, monkeypatch, capsys):
+        import json
+
+        monkeypatch.setattr(build_module, "PROJECT_ROOT", tmp_path)
+        build_dir = self._build_tree(tmp_path, abi=6)
+        out_dir = tmp_path / "payload"
+        assert (
+            build_module.main(
+                ["--compiled", "--build-dir", str(build_dir), "--out", str(out_dir), "--version", "test-deadbee"]
+            )
+            == 0
+        )
+        assert json.loads((out_dir / "manifest.json").read_text())["mpy_abi"] == 6
+        assert "mpy_abi    : 6" in capsys.readouterr().out
+
+    def test_no_mpy_abi_flag_omits_the_stamp(self, build_module, tmp_path, monkeypatch):
+        import json
+
+        monkeypatch.setattr(build_module, "PROJECT_ROOT", tmp_path)
+        build_dir = self._build_tree(tmp_path, abi=6)
+        out_dir = tmp_path / "payload"
+        assert (
+            build_module.main(
+                [
+                    "--compiled",
+                    "--build-dir",
+                    str(build_dir),
+                    "--out",
+                    str(out_dir),
+                    "--version",
+                    "test-deadbee",
+                    "--no-mpy-abi",
+                ]
+            )
+            == 0
+        )
+        assert "mpy_abi" not in json.loads((out_dir / "manifest.json").read_text())
+
+    def test_mixed_abi_tree_exits_nonzero(self, build_module, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr(build_module, "PROJECT_ROOT", tmp_path)
+        build_dir = self._build_tree(tmp_path, abi=6)
+        _mpy(build_dir / "lib" / "relay.mpy", 5)
+        out_dir = tmp_path / "payload"
+        assert (
+            build_module.main(
+                ["--compiled", "--build-dir", str(build_dir), "--out", str(out_dir), "--version", "test-deadbee"]
+            )
+            == 1
+        )
+        assert "mixes .mpy ABI" in capsys.readouterr().err

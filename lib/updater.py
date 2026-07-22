@@ -116,6 +116,20 @@ def _sleep_ms(ms):
         pass
 
 
+def _running_mpy_abi():
+    """Bytecode ABI of the firmware we are running on, or None if unknowable.
+
+    Isolated in a module-level function so the guard can be exercised on the
+    host, where there is no MicroPython runtime to ask.
+    """
+    try:
+        from lib import version
+
+        return version.current_mpy_abi()
+    except Exception:
+        return None
+
+
 def _timestamp_iso():
     """Best-effort ISO-like timestamp; falls back to '?' on failure."""
     try:
@@ -163,6 +177,7 @@ class Updater:
         log_max_size=50000,
         verify_max_retries=3,
         verify_retry_delay_ms=200,
+        enforce_mpy_abi=True,
     ):
         self.update_dir = update_dir.rstrip("/").rstrip("\\")
         self.applied_dir = applied_dir.rstrip("/").rstrip("\\")
@@ -175,6 +190,7 @@ class Updater:
         self.log_max_size = int(log_max_size)
         self.verify_max_retries = int(verify_max_retries)
         self.verify_retry_delay_ms = int(verify_retry_delay_ms)
+        self.enforce_mpy_abi = bool(enforce_mpy_abi)
 
     # --- Public API --------------------------------------------------
 
@@ -200,6 +216,46 @@ class Updater:
         if not isinstance(data["files"], list):
             raise UpdateError("manifest.files must be a list")
         return data
+
+    def check_mpy_abi(self, manifest):
+        """Return None when the payload is importable here, else a refusal detail.
+
+        A ``.mpy`` file only loads under the bytecode ABI its ``mpy-cross``
+        targeted. SHA-256 verification cannot see that — it proves the bytes
+        arrived intact, not that they mean anything to this firmware — so a
+        mismatched compiled payload used to verify, apply, reset, and only
+        then fail every import, on a board with no REPL. This check moves that
+        failure to before the first write.
+
+        Skipped (returns None) when:
+        - the guard is disabled in config,
+        - the manifest carries no ``mpy_abi`` (a raw-.py payload, which
+          recompiles on-device against whatever firmware is present, and every
+          payload built before this field existed),
+        - the running firmware's ABI cannot be determined. Guessing would
+          either brick a good payload or wave a bad one through; a breadcrumb
+          records that the check did not run.
+
+        A malformed stamp IS refused: it means the builder is broken, and a
+        broken builder is exactly when you want the update to stop.
+        """
+        if not self.enforce_mpy_abi:
+            return None
+        declared = manifest.get("mpy_abi")
+        if declared is None:
+            return None
+        try:
+            declared = int(declared)
+        except (TypeError, ValueError):
+            return "mpy_abi malformed: %r" % (declared,)
+        running = _running_mpy_abi()
+        if running is None:
+            self._breadcrumb("abi check skipped (firmware abi unknown)")
+            return None
+        if declared != running:
+            return "mpy_abi mismatch: payload=%d firmware=%d" % (declared, running)
+        self._breadcrumb("abi ok (%d)" % declared)
+        return None
 
     def verify_payload(self, manifest):
         errors = []
@@ -552,6 +608,15 @@ def _drive_pending_update(updater, signal_failure, version_out):
 
     version = str(manifest.get("version", "?"))
     version_out[0] = version
+
+    # Cheapest refusal first: an ABI-incompatible payload can never be applied,
+    # so there is no point hashing megabytes of it off a slow SD card.
+    abi_error = updater.check_mpy_abi(manifest)
+    if abi_error:
+        updater.log("verify_fail", version, detail=abi_error)
+        signal_failure()
+        return False
+
     errors = updater.verify_payload(manifest)
     if errors:
         # Keep log line bounded so a long error list can't blow the file.
@@ -658,6 +723,7 @@ def run_pending_update(config, hardware, wdt=None):
         log_max_size=upd_cfg.get("log_max_size", 50000),
         verify_max_retries=upd_cfg.get("verify_max_retries", 3),
         verify_retry_delay_ms=upd_cfg.get("verify_retry_delay_ms", 200),
+        enforce_mpy_abi=upd_cfg.get("enforce_mpy_abi", True),
     )
 
     if not updater.has_pending_update():

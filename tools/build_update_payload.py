@@ -25,11 +25,17 @@ The manifest format:
     {
         "version": "YYYYMMDDTHHMMSSZ-<shorthash>",
         "created_at": "YYYY-MM-DDTHH:MM:SSZ",
+        "mpy_abi": 6,                       # compiled payloads only; see below
         "files": [
             {"path": "main.py", "sha256": "<hex>", "bytes": <int>},
             ...
         ]
     }
+
+`mpy_abi` is read out of the .mpy headers in `--compiled` mode and lets the
+device refuse a payload its firmware cannot import (SHA-256 proves integrity,
+not compatibility). Raw-.py payloads carry no stamp — they recompile
+on-device — and the device-side guard skips them.
 
 Vendored drivers (lib/sdcard*, lib/ds3231.py, lib/ssd1306*) are excluded by
 default — they ship with the firmware image and should not be churned by an
@@ -67,6 +73,45 @@ LIB_EXCLUDE_PREFIXES = ("sdcard-", "ssd1306-")
 
 # Read in 64 KiB chunks — fine on host, irrelevant on Pico (this script is host-only).
 _HASH_CHUNK = 64 * 1024
+
+# Every .mpy file starts with b"M" followed by the bytecode ABI version.
+_MPY_MAGIC = 0x4D  # ord("M")
+
+
+class PayloadError(Exception):
+    """Raised when the payload cannot be described honestly."""
+
+
+def _mpy_abi_of(path: Path) -> int:
+    """Read the bytecode ABI out of a .mpy header.
+
+    Byte 0 is the magic 'M', byte 1 is the ABI the emitting mpy-cross targeted
+    — the same number the firmware exposes as the low byte of
+    ``sys.implementation._mpy``. Stamping it into the manifest is what lets the
+    device refuse a payload it cannot import (plan section 6.3).
+    """
+    with path.open("rb") as handle:
+        header = handle.read(2)
+    if len(header) < 2 or header[0] != _MPY_MAGIC:
+        raise PayloadError(f"{path} is not a .mpy file (bad magic)")
+    return header[1]
+
+
+def _detect_mpy_abi(sources: list[tuple[str, Path]]) -> int | None:
+    """The ABI shared by every compiled artifact in the payload, or None.
+
+    Refuses to stamp anything when the artifacts disagree: a payload built by
+    two different mpy-cross binaries is broken whichever ABI you write down,
+    and a wrong stamp is worse than no stamp because the device trusts it.
+    """
+    abis = {_mpy_abi_of(path) for _rel, path in sources if path.suffix == ".mpy"}
+    if not abis:
+        return None
+    if len(abis) > 1:
+        raise PayloadError(
+            f"payload mixes .mpy ABI versions {sorted(abis)} — rebuild it with a single mpy-cross (see plan 5.2)"
+        )
+    return abis.pop()
 
 
 def _sha256_of(path: Path) -> str:
@@ -211,12 +256,17 @@ def _copy_payload(sources: list[tuple[str, Path]], out_dir: Path) -> list[dict]:
     return files_meta
 
 
-def _write_manifest(out_dir: Path, version: str, files_meta: list[dict]) -> Path:
+def _write_manifest(out_dir: Path, version: str, files_meta: list[dict], mpy_abi: int | None = None) -> Path:
     manifest = {
         "version": version,
         "created_at": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "files": files_meta,
     }
+    # Optional by design: raw-.py payloads recompile on-device and are
+    # importable under any ABI, so they carry no stamp and the device's guard
+    # skips them.
+    if mpy_abi is not None:
+        manifest["mpy_abi"] = mpy_abi
     manifest_path = out_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=False) + "\n")
     return manifest_path
@@ -273,6 +323,17 @@ def main(argv: list[str] | None = None) -> int:
         default=str(PROJECT_ROOT / "build"),
         help="Directory containing build-mpy output (default: build/)",
     )
+    parser.add_argument(
+        "--mpy-abi",
+        type=int,
+        default=None,
+        help="Stamp this bytecode ABI into the manifest (default: read from the .mpy files in --compiled mode)",
+    )
+    parser.add_argument(
+        "--no-mpy-abi",
+        action="store_true",
+        help="Ship a compiled payload with no ABI stamp (disables the device-side guard for this payload)",
+    )
     args = parser.parse_args(argv)
 
     out_dir = Path(args.out).resolve()
@@ -303,10 +364,22 @@ def main(argv: list[str] | None = None) -> int:
             }
         )
 
-    manifest_path = _write_manifest(out_dir, version, files_meta)
+    if args.no_mpy_abi:
+        mpy_abi = None
+    elif args.mpy_abi is not None:
+        mpy_abi = args.mpy_abi
+    else:
+        try:
+            mpy_abi = _detect_mpy_abi(sources)
+        except PayloadError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+
+    manifest_path = _write_manifest(out_dir, version, files_meta, mpy_abi)
 
     total_bytes = sum(entry["bytes"] for entry in files_meta)
     print(f"version    : {version}")
+    print(f"mpy_abi    : {mpy_abi if mpy_abi is not None else '(none — raw .py, device guard skipped)'}")
     print(f"files      : {len(files_meta)}")
     print(f"total size : {total_bytes:,} bytes")
     print(f"output     : {out_dir}")

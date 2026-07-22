@@ -314,6 +314,35 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["updater"]["allowed_paths"] = original
 
+    def test_updater_enforce_mpy_abi_defaults_on(self):
+        """The ABI guard ships enabled — a mismatched .mpy payload must fail safe."""
+        from config import DEVICE_CONFIG
+
+        assert DEVICE_CONFIG["updater"]["enforce_mpy_abi"] is True
+
+    def test_updater_enforce_mpy_abi_non_bool_raises(self):
+        """updater.enforce_mpy_abi must be a bool."""
+        import config
+
+        original = config.DEVICE_CONFIG["updater"]["enforce_mpy_abi"]
+        config.DEVICE_CONFIG["updater"]["enforce_mpy_abi"] = "yes"
+        try:
+            with pytest.raises(ValueError, match="updater.enforce_mpy_abi"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["updater"]["enforce_mpy_abi"] = original
+
+    def test_updater_enforce_mpy_abi_may_be_disabled(self):
+        """Turning the guard off is a valid operator override, not a config error."""
+        import config
+
+        original = config.DEVICE_CONFIG["updater"]["enforce_mpy_abi"]
+        config.DEVICE_CONFIG["updater"]["enforce_mpy_abi"] = False
+        try:
+            assert config.validate_config() is True
+        finally:
+            config.DEVICE_CONFIG["updater"]["enforce_mpy_abi"] = original
+
     def test_updater_legacy_update_dirs_non_list_raises(self):
         """updater.legacy_update_dirs must be a list."""
         import config

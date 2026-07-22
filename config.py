@@ -615,6 +615,16 @@ DEVICE_CONFIG = {
         "verify_max_retries": 3,  # Per-file stat/hash retry count on SD glitch during verify
         "verify_retry_delay_ms": 200,  # Delay between verify retries (ms)
         "allowed_paths": ["main.py", "config.py", "config.mpy", "lib/"],  # Whitelist; anything outside fails verify
+        # Refuse payloads whose manifest declares an "mpy_abi" that the running
+        # firmware cannot import. A .mpy file is only loadable by the bytecode
+        # ABI its mpy-cross targeted; a mismatched payload passes SHA-256
+        # (integrity, not compatibility), applies, resets, and then fails every
+        # import on the next boot. With this True the mismatch is a logged
+        # verify_fail and live code is never touched. Manifests with no
+        # "mpy_abi" key (raw-.py payloads, and every payload built before this
+        # existed) are unaffected — they recompile on-device. Set False only to
+        # force a payload through when you know the ABI stamp is wrong.
+        "enforce_mpy_abi": True,
         # Legacy update_dir locations checked when the canonical update_dir
         # holds no manifest. Lets payloads dropped at the pre-2026-05-15
         # path (/sd/update) still apply without re-copying. Empty the list
@@ -1713,6 +1723,7 @@ def validate_config():
             "verify_retry_delay_ms",
             "allowed_paths",
             "legacy_update_dirs",
+            "enforce_mpy_abi",
         ],
         "updater_feedback": [
             "enabled",
@@ -2053,6 +2064,8 @@ def validate_config():
     for entry in upd_cfg["allowed_paths"]:
         if not isinstance(entry, str) or not entry:
             raise ValueError("updater.allowed_paths entries must be non-empty strings")
+    if not isinstance(upd_cfg["enforce_mpy_abi"], bool):
+        raise ValueError("updater.enforce_mpy_abi must be a bool")
     if not isinstance(upd_cfg["legacy_update_dirs"], list):
         raise ValueError("updater.legacy_update_dirs must be a list")
     for entry in upd_cfg["legacy_update_dirs"]:

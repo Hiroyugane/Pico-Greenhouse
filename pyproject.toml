@@ -50,6 +50,9 @@ select = ["E", "F", "I"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
+# main.py deliberately runs the boot-time OTA check (and WDT feeds) between
+# module imports so the updater sees an empty heap — see the Step 0 block.
+"main.py" = ["E402"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["lib"]

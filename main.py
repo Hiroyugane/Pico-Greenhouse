@@ -41,16 +41,75 @@ from machine import ADC, UART, WDT, Pin
 
 from config import _REG_DIMENSIONS, _REG_NAMES, DEVICE_CONFIG, validate_config
 from lib import boot_log
+from lib.hardware_factory import HardwareFactory
+from lib.updater import run_pending_update
+
+# --- Step 0: boot-time OTA check (device only) ----------------------------
+# Must run BEFORE the application imports below. Compiling the full module
+# tree fills the ~245 KB heap almost completely, and every OTA attempt was
+# dying in load_manifest with "MemoryError: allocating 1792 bytes" (see
+# updates.log / chat-log 2026-07-22). Up here the updater sees a nearly
+# empty heap. On a successful apply run_pending_update() ends in
+# machine.reset(), so the heavy imports below never execute on old code.
+#
+# The WDT is armed here (earlier than before) so the SD mount and the
+# update itself stay watchdog-protected; the import block below feeds it
+# between modules because compile time is now spent under a live WDT.
+_early_wdt = None
+_early_hardware = None
+if sys.implementation.name == "micropython":
+    try:
+        # main() re-validates and owns the operator-facing error report; a
+        # config error here just means "no early OTA on this boot".
+        validate_config()
+        _sys_cfg = DEVICE_CONFIG.get("system", {})
+        boot_log.configure(
+            path=_sys_cfg.get("boot_log_path", "/boot.log"),
+            max_bytes=int(_sys_cfg.get("boot_log_max_kb", 10)) * 1024,
+        )
+        _gc_thr = DEVICE_CONFIG.get("memory", {}).get("gc_threshold_b", -1)
+        if _gc_thr > 0 and hasattr(gc, "threshold"):
+            gc.threshold(_gc_thr)
+        _early_wdt = WDT(timeout=_sys_cfg.get("watchdog_timeout_ms", 8000))
+        _early_wdt.feed()
+        _dbg = None
+        if DEVICE_CONFIG.get("event_logger", {}).get("log_level", "INFO") == "DEBUG":
+            _dbg = lambda msg: print("[DEBUG] " + msg)  # noqa: E731
+        _hw = HardwareFactory(DEVICE_CONFIG, debug_callback=_dbg, wdt=_early_wdt)
+        if _hw.setup():
+            _early_hardware = _hw
+            run_pending_update(DEVICE_CONFIG, _hw, _early_wdt)
+        # setup() False → leave _early_hardware None; main() retries with a
+        # fresh factory and owns the RTC-critical failure report.
+    except Exception as _e:
+        boot_log.log("[STARTUP] early OTA check failed (non-fatal): %s: %s" % (type(_e).__name__, _e))
+    gc.collect()
+
+
+def _feed_boot_wdt():
+    """Feed the early WDT between application imports (no-op on host)."""
+    if _early_wdt is not None:
+        _early_wdt.feed()
+
+
+_feed_boot_wdt()
 from lib.buffer_manager import BufferManager
 from lib.buzzer import BuzzerController
 from lib.co2_logger import CO2Logger
+
+_feed_boot_wdt()
 from lib.event_logger import EventLogger
 from lib.fan_controllers import AlwaysOnFanController
 from lib.fan_output import NullFanOutput, Pca9685FanOutput, RelayFanOutput
-from lib.hardware_factory import HardwareFactory
+
+_feed_boot_wdt()
 from lib.led_button import LEDButtonHandler, ServiceReminder
 from lib.metrics_logger import MetricsLogger
+
+_feed_boot_wdt()
 from lib.oled_display import OLEDDisplay
+
+_feed_boot_wdt()
 from lib.regulation_adapters import (
     GrowlightAdapter,
     PwmAdapter,
@@ -58,14 +117,21 @@ from lib.regulation_adapters import (
     RelayHysteresisAdapter,
     TimeProportionAdapter,
 )
+
+_feed_boot_wdt()
 from lib.regulation_engine import RegulationEngine
+
+_feed_boot_wdt()
 from lib.relay import RelayController
 from lib.sht31 import SHT31
 from lib.status_manager import SD_MOUNT_FAILED, SD_MOUNTED, SD_NO_CARD, StatusManager
+
+_feed_boot_wdt()
 from lib.temp_humidity_logger import TempHumidityLogger
 from lib.time_provider import RTCTimeProvider
-from lib.updater import run_pending_update
 from lib.write_queue_manager import WriteQueueManager
+
+_feed_boot_wdt()
 
 
 def _describe_reset_cause() -> str:
@@ -243,7 +309,9 @@ async def main():
     system_config = DEVICE_CONFIG.get("system", {})
     wdt_timeout_ms = system_config.get("watchdog_timeout_ms", 8000)
     wdt_feed_interval_ms = system_config.get("watchdog_feed_interval_ms", 2000)
-    wdt = WDT(timeout=wdt_timeout_ms)
+    # The device path armed the WDT in Step 0 (before the early OTA check);
+    # reuse it rather than constructing a second instance.
+    wdt = _early_wdt if _early_wdt is not None else WDT(timeout=wdt_timeout_ms)
     _wdt = wdt  # Store for feed_wdt() helper
     print(f"[STARTUP] Watchdog enabled: timeout={wdt_timeout_ms}ms, feed_interval={wdt_feed_interval_ms}ms")
 
@@ -255,31 +323,41 @@ async def main():
         _dbg_cb = lambda msg: print(f"[DEBUG] {msg}")  # noqa: E731
 
     wdt.feed()  # Feed before hardware init
-    hardware = HardwareFactory(DEVICE_CONFIG, debug_callback=_dbg_cb, wdt=wdt)
-    if not hardware.setup():
-        print("[STARTUP ERROR] Critical hardware initialization failed (RTC)")
-        hardware.print_status()
-        return
+    if _early_hardware is not None:
+        # Device path: Step 0 already built and set up the factory (and ran
+        # the OTA check with it). Reuse it — a second setup() would re-init
+        # SPI and remount the SD mid-boot for nothing.
+        hardware = _early_hardware
+    else:
+        hardware = HardwareFactory(DEVICE_CONFIG, debug_callback=_dbg_cb, wdt=wdt)
+        if not hardware.setup():
+            print("[STARTUP ERROR] Critical hardware initialization failed (RTC)")
+            hardware.print_status()
+            return
 
     wdt.feed()  # Feed after hardware init
     hardware.print_status()
 
     # Step 2b: SD-payload software update (see lib/updater.py).
-    # Runs BEFORE EventLogger so logging code can be safely replaced
-    # along with the rest. If a pending update is applied, this call
-    # ends in machine.reset() and does not return; the new code boots
-    # from a clean import state.
+    # On the device this already ran in Step 0, before the application
+    # imports, where the heap is still nearly empty — see the Step 0 block.
+    # This call remains for the host path and as a fallback when Step 0's
+    # hardware setup failed but the retry above succeeded. If a pending
+    # update is applied, this call ends in machine.reset() and does not
+    # return; the new code boots from a clean import state.
     wdt.feed()
-    try:
-        run_pending_update(DEVICE_CONFIG, hardware, wdt)
-    except Exception as e:
-        # Updater failures must never block normal boot. The updater logs its
-        # own diagnostics to /sd/logs/updates.log (including an `error` line
-        # for anything that escapes its internal sequence); live code is left
-        # in whatever state the apply loop reached. Reaching HERE means even
-        # that failed, so tee into /boot.log too — a bare print() is invisible
-        # on a Pico running standalone with no USB serial attached.
-        boot_log.log(f"[STARTUP] Updater raised (non-fatal): {type(e).__name__}: {e}")
+    if _early_hardware is None:
+        try:
+            run_pending_update(DEVICE_CONFIG, hardware, wdt)
+        except Exception as e:
+            # Updater failures must never block normal boot. The updater logs
+            # its own diagnostics to /sd/logs/updates.log (including an `error`
+            # line for anything that escapes its internal sequence); live code
+            # is left in whatever state the apply loop reached. Reaching HERE
+            # means even that failed, so tee into /boot.log too — a bare
+            # print() is invisible on a Pico running standalone with no USB
+            # serial attached.
+            boot_log.log(f"[STARTUP] Updater raised (non-fatal): {type(e).__name__}: {e}")
     wdt.feed()
 
     # Reclaim the updater bytecode: run_pending_update() runs exactly once at

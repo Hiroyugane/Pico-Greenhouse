@@ -828,15 +828,30 @@ DEVICE_CONFIG = {
             "heater": {
                 "driven": "surface",
                 "dims": ["temp", "humidity"],
-                # Cold (temp dev < 50) → heat, with a deadband below dev 40 and a
-                # steeper ramp below dev 25. Humidity amplifies (warming lowers
-                # relative humidity) via the y-boost, which only scales the
-                # already-active cold response — no heat when it is hot.
+                # Cold (temp dev < 50) → heat, with a narrow deadband below dev
+                # 47 and a steeper ramp below dev 30. Humidity amplifies
+                # (warming lowers relative humidity) via the y-boost, which only
+                # scales the already-active cold response — no heat when it is
+                # hot.
+                #
+                # The deadband is 3 deviation points wide, not 10, because the
+                # target is to hold the tent inside ±10 of ideal 95 % of the
+                # time and ±5 of ideal 85 % of the time. A regulator that only
+                # begins to respond at the edge of the band it is supposed to
+                # keep you inside can never hit that: by the time it commands
+                # anything, the excursion has already happened. It now ramps
+                # from just off ideal and reaches ~18 % duty at dev 40 (22.4 °C
+                # on the cubensis day anchors), full output by dev 14.
+                #
+                # The bottom of the ramp is gated by the adapter, not by the
+                # surface: min_on_s 30 s in a 600 s window means anything under
+                # 5 % duty (dev 48) cannot fire at all, so the near-ideal tail
+                # costs nothing.
                 "surface": _surface(
-                    hx_lo1=1.5,
-                    bx_lo1=40.0,
-                    hx_lo2=1.6,
-                    bx_lo2=25.0,
+                    hx_lo1=2.5,
+                    bx_lo1=47.0,
+                    hx_lo2=1.5,
+                    bx_lo2=30.0,
                     x_top=200.0,
                     x_bot=-100.0,  # neutral x-boost
                     y_top=60.0,
@@ -870,26 +885,47 @@ DEVICE_CONFIG = {
             "cooler": {
                 "driven": "surface",
                 "dims": ["temp", "humidity"],
-                # Hot (temp dev > 50) → cool, deadband above dev 60, steeper above
-                # 75. Humidity amplifies (compressor coils condense moisture) via
-                # the y-boost; because it only scales the hot-side response it
-                # cannot overcool a cold+humid room.
+                # Hot (temp dev > 50) → cool, narrow deadband above dev 53,
+                # steeper above 70. Humidity amplifies (compressor coils
+                # condense moisture) via the y-boost; because it only scales the
+                # hot-side response it cannot overcool a cold+humid room.
+                #
+                # This was by far the slowest actuator in the system. The
+                # shipped surface reached the relay's on_above of 60 only at
+                # deviation 87 — 28.4 °C against an ideal of 24 — so the room
+                # had to be more than four degrees hot before the air
+                # conditioner switched on at all, and the tent spent the whole
+                # approach outside the band the KPI cares about.
+                #
+                # Surface and adapter thresholds below are ONE calibration.
+                # Re-derive them together: the surface sets how command maps to
+                # deviation, and on_above/off_below pick the two points on that
+                # curve where the compressor actually switches.
                 "surface": _surface(
-                    hx_hi1=1.5,
-                    bx_hi1=60.0,
-                    hx_hi2=1.6,
-                    bx_hi2=75.0,
+                    hx_hi1=2.5,
+                    bx_hi1=53.0,
+                    hx_hi2=1.5,
+                    bx_hi2=70.0,
                     x_top=200.0,
                     x_bot=-100.0,  # neutral x-boost
                     y_top=60.0,
                     y_bot=-100.0,  # humid (y>60) amplifies
                     grad=0.01,
                 ),
+                # Switch points on the ramp above, with d = temp deviation and
+                # command = 2.5 * (d - 53):
+                #   on_above  12.0 → closes at dev 57.8 (24.9 °C day cubensis)
+                #   off_below  2.5 → opens  at dev 54.0 (24.5 °C)
+                # so the compressor works a ~0.5 °C band just above ideal
+                # instead of a 3 °C band starting well outside it. The band is
+                # deliberately tight because min_on_s / min_off_s — not the
+                # hysteresis width — are what bound the cycle rate here: the
+                # shortest possible period is 120 s on + 300 s off = 7 minutes.
                 "adapter": {
                     "type": "relay",
                     "pin_key": "relay_cooler",  # GP18 (freed fan relay 1)
-                    "on_above": 60.0,
-                    "off_below": 40.0,
+                    "on_above": 12.0,
+                    "off_below": 2.5,
                     "min_on_s": 120,
                     "min_off_s": 300,  # compressor anti-short-cycle
                 },
@@ -942,26 +978,32 @@ DEVICE_CONFIG = {
                     bx_hi1=55.0,
                 ),
                 # Hysteresis band, in command units, that puts the relay's
-                # switch points at RH 88% (close) and RH 91% (open) for the
+                # switch points at RH 88.6% (close) and RH 91.0% (open) for the
                 # cubensis ideal of 92%. Derived from the surface slope above,
                 # with d(rh) = 50 * (rh - at_0) / (at_50 - at_0):
-                #   on_above  = hx_lo1 * (bx_lo1 - d(rh_close)) = 2 * 11.76
-                #   off_below = hx_lo1 * (bx_lo1 - d(rh_open))  = 2 *  2.94
+                #   on_above  = hx_lo1 * (bx_lo1 - d(rh_close)) = 2 * 10.0
+                #   off_below = hx_lo1 * (bx_lo1 - d(rh_open))  = 2 *  3.0
                 # Re-derive both whenever the slope or the humidity anchors
                 # change — they are one calibration, not two knobs.
                 #
+                # on_above came down from 23.5 (RH 88.0, deviation 38.3) so the
+                # humidifier is already running by deviation 40, the edge of the
+                # band the KPI targets, rather than a point and a half outside
+                # it.
+                #
                 # Those RH figures hold at the ideal temperature. The
                 # evaporative-cooling coupling (gain 0.5 on temp dev) shifts
-                # them by about 2 RH points at the edges of the working range —
-                # the relay closes near 86% at 20C and near 90% at 28C. That
+                # them by a couple of RH points at the edges of the working
+                # range — the relay closes near 86.5% at 20C and near 91.4% at
+                # 28C, against 88.6% at the ideal temperature. That
                 # bias is intended: a hot chamber mists sooner, a cold one
                 # later. Cut gain toward 0 if the band should be temperature-
                 # independent instead.
                 "adapter": {
                     "type": "relay",
                     "pin_key": "relay_humidifier",  # GP19 (freed fan relay 2)
-                    "on_above": 23.5,
-                    "off_below": 5.9,
+                    "on_above": 20.0,
+                    "off_below": 6.0,
                     "min_on_s": 30,
                     "min_off_s": 30,
                 },
@@ -976,17 +1018,24 @@ DEVICE_CONFIG = {
                 "dims": ["temp", "humidity"],
                 # Venting dumps BOTH heat and moisture, so hot (high-x) and humid
                 # (high-y) each drive it additively — either one alone opens the
-                # exhaust; both open it further. Deadband above dev 60, steeper
-                # above 75 on each axis. The external-effectiveness multiplier
-                # (engine) gates this by whether outside air is actually better.
+                # exhaust; both open it further. Narrow deadband above dev 52,
+                # steeper above 75 on each axis. The external-effectiveness
+                # multiplier (engine) gates this by whether outside air is
+                # actually better.
+                #
+                # The old break at 60 put the start of the response exactly at
+                # the edge of the band the system is meant to hold, and a slope
+                # of 1.5 meant deviation 61 asked the fan for 1.5 % — nominally
+                # acting, physically stationary. It now reaches 20 % by
+                # deviation 60 on either axis and full output by deviation 88.
                 "surface": _surface(
-                    hx_hi1=1.5,
-                    bx_hi1=60.0,
-                    hx_hi2=1.6,
+                    hx_hi1=2.5,
+                    bx_hi1=52.0,
+                    hx_hi2=1.5,
                     bx_hi2=75.0,
-                    hy_hi1=1.5,
-                    by_hi1=60.0,
-                    hy_hi2=1.6,
+                    hy_hi1=2.5,
+                    by_hi1=52.0,
+                    hy_hi2=1.5,
                     by_hi2=75.0,
                 ),
                 # CO2 enters additively as co2_gain * relu(co2_dev - co2_break),
@@ -1007,7 +1056,7 @@ DEVICE_CONFIG = {
                 # CO2 anchor range, or the floor silently swallows it again.
                 # Against the cubensis fruiting anchors (0 / 600 / 2000 ppm):
                 #   deadband ends   co2_dev 55  →   740 ppm
-                #   clears floor 25 co2_dev 65  →  1020 ppm
+                #   clears floor 5  co2_dev 57  →   796 ppm
                 #   saturates 100   co2_dev 95  →  1860 ppm
                 # The deadband keeps normal indoor drift (~400-700 ppm) from
                 # running the fan; above it the response is deliberately steep,
@@ -1018,19 +1067,21 @@ DEVICE_CONFIG = {
                 "adapter": {"type": "pwm", "pca9685_ch": 4},
                 "slew_normal": 25.0,
                 "slew_fast": 60.0,
-                # Lowered from 40 alongside the CO2 retune above, then to 10 on
-                # operator instruction. At 40 the floor sat above everything CO2
-                # could command and hid the whole ramp. At 10 it is a token
-                # trickle rather than a meaningful minimum exchange rate: the
-                # CO2 term, the temp/RH surface and the conflict rules do
-                # essentially all the work, and the floor only guarantees the
-                # fan is not fully stopped while any dimension is off-ideal.
+                # Walked down 40 → 25 → 10 → 5, each step on operator
+                # instruction. At 40 the floor sat above everything CO2 could
+                # command and hid the whole ramp. At 5 it is an idle trickle
+                # rather than a minimum exchange rate: the CO2 term, the temp/RH
+                # surface and the conflict rules do all the work, and the floor
+                # only keeps the fan from being fully stopped while any
+                # dimension is off-ideal.
                 #
-                # 10 % may be BELOW the exhaust fan's start-from-rest duty, in
-                # which case the guarantee is nominal — the command is nonzero
-                # but the rotor does not turn. hw-test CO2.2 measures that
-                # threshold; raise this to meet it if the fan will not start.
-                "floor": 10.0,
+                # 5 % is very likely BELOW the exhaust fan's start-from-rest
+                # duty, so the guarantee is probably nominal — the command is
+                # nonzero but the rotor does not turn. That is the intent of an
+                # idle setting this low; hw-test CO2.2 measures the real
+                # threshold, and this only needs raising if a genuinely
+                # continuous trickle turns out to be wanted.
+                "floor": 5.0,
                 "emergency_value": 100.0,  # vent hard in emergency
                 "safe_state": 100.0,
             },
@@ -1039,17 +1090,25 @@ DEVICE_CONFIG = {
                 "dims": ["temp", "humidity"],
                 # Mix air whenever EITHER dimension drifts off-ideal in EITHER
                 # direction — a symmetric V-shape (bowl) from four hinges,
-                # deadband within dev 40-60 on each axis. Breaks up microclimates
-                # so every other actuator reads a representative sensor.
+                # deadband within dev 47-53 on each axis. Breaks up
+                # microclimates so every other actuator reads a representative
+                # sensor.
+                #
+                # The bowl was widened and steepened for the same reason as the
+                # rest: at deadband 40-60 and slope 1.0 the pair was still
+                # commanding 0 at the exact deviation where the tent is about to
+                # leave the target band, and mixing is the cheapest correction
+                # available — it costs a few watts and it makes every other
+                # regulator's sensor reading honest.
                 "surface": _surface(
-                    hx_hi1=1.0,
-                    bx_hi1=60.0,
-                    hx_lo1=1.0,
-                    bx_lo1=40.0,
-                    hy_hi1=1.0,
-                    by_hi1=60.0,
-                    hy_lo1=1.0,
-                    by_lo1=40.0,
+                    hx_hi1=2.0,
+                    bx_hi1=53.0,
+                    hx_lo1=2.0,
+                    bx_lo1=47.0,
+                    hy_hi1=2.0,
+                    by_hi1=53.0,
+                    hy_lo1=2.0,
+                    by_lo1=47.0,
                 ),
                 # CO2 enters additively here for the same reason it does on the
                 # exhaust: no surface takes CO2 as a dimension, so the additive

@@ -114,7 +114,7 @@ class TestReactions:
         # and vary only CO2. The exhaust surface only responds to the HIGH side
         # of each axis, so a dry room leaves it at 0 and the floor is the sole
         # contributor — which is exactly the case the ceiling used to swallow.
-        floor = 10.0  # regulation.regulators.exhaust.floor
+        floor = 5.0  # regulation.regulators.exhaust.floor
         engine_low, ad_low, names = _engine(temp=24.0, hum=85.0, co2=600.0, minutes=720)
         engine_high, ad_high, _ = _engine(temp=24.0, hum=85.0, co2=1200.0, minutes=720)
         # slew_normal caps the per-tick climb, so let both settle.

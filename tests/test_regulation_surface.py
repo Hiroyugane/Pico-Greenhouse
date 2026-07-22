@@ -166,12 +166,29 @@ class TestShippedCouplings:
             assert evaluate(p, x, y) > 0.0
 
     def test_deadband_near_ideal(self):
+        """Each regulator is silent inside its own deadband and speaks just outside it.
+
+        The widths are read from config rather than written out here. The
+        2026-07-22 retune narrowed every deadband — the old fixed deviations
+        (55 for the exhaust, 45 for the cooler) are now well inside the active
+        ramp — and a test that pins literals only records what the deadbands
+        used to be. What must stay true is the shape: no output at ideal, output
+        as soon as the breakpoint is passed.
+        """
+        import config
+
         from lib.regulation_surface import evaluate
 
-        # Small deviations sit inside each actuator's deadband → no output.
-        assert evaluate(_cfg_surface("heater"), 55.0, 50.0) == 0.0
-        assert evaluate(_cfg_surface("cooler"), 45.0, 50.0) == 0.0
-        assert evaluate(_cfg_surface("exhaust"), 55.0, 55.0) == 0.0
+        regs = config.DEVICE_CONFIG["regulation"]["regulators"]
+        # (regulator, its first breakpoint, which side of ideal it responds on)
+        for name, key, side in (("heater", "bx_lo1", -1.0), ("cooler", "bx_hi1", 1.0), ("exhaust", "bx_hi1", 1.0)):
+            p = _cfg_surface(name)
+            edge = regs[name]["surface"][key]
+            inside = edge - side * 0.5
+            outside = edge + side * 2.0
+            assert evaluate(p, 50.0, 50.0) == 0.0, name  # dead at ideal
+            assert evaluate(p, inside, inside) == 0.0, name
+            assert evaluate(p, outside, outside) > 0.0, name
 
 
 class TestHinges:

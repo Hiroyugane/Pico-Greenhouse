@@ -144,11 +144,16 @@ class TestScenarioTable:
         # saturated to the same maximum deviation and vented identically, so
         # the engine had no way to respond harder when it mattered.
         #
-        # Read at 28 C: the CO2 term can add at most 32 to the exhaust, which
-        # is below its floor of 40, so at an ideal temperature the floor hides
-        # the whole CO2 contribution and both readings would tie at 40.
-        indoor = _run_scenario(temp=28.0, hum=92.0, co2=1300.0)
-        stale = _run_scenario(temp=28.0, hum=92.0, co2=2200.0)
+        # Read at the ideal temperature and humidity, so the temp/RH surface
+        # contributes nothing and the CO2 term is the only thing separating the
+        # two. That reading used to be impossible: the term was capped at 32,
+        # under a floor of 40, so both cases tied at the floor. It is now the
+        # sharpest way to state the requirement — CO2 alone must still open the
+        # exhaust further as the air gets staler. The earlier 28 C anchor no
+        # longer works: the retuned surface saturates the fan on temperature
+        # alone there, and both cases tie at 100 for a different reason.
+        indoor = _run_scenario(temp=24.0, hum=92.0, co2=1300.0)
+        stale = _run_scenario(temp=24.0, hum=92.0, co2=2200.0)
         assert indoor["exhaust"] > 0.0
         assert stale["exhaust"] > indoor["exhaust"]
 

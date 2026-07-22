@@ -187,7 +187,10 @@ class Updater:
             raise UpdateError("manifest missing: %s" % path)
         try:
             with open(path, "r") as f:
-                data = json.loads(f.read())
+                # json.load(stream), not json.loads(f.read()): the read would
+                # hold the whole manifest text AND the parsed tree at once,
+                # which is what died first on the memory-tight Pico.
+                data = json.load(f)
         except (OSError, ValueError) as e:
             raise UpdateError("manifest unreadable: %s" % e)
         if not isinstance(data, dict):
@@ -659,6 +662,16 @@ def run_pending_update(config, hardware, wdt=None):
 
     if not updater.has_pending_update():
         return
+
+    # A real update run is imminent: start it from a collected heap. The
+    # 2026-07-22 OTA failures were MemoryErrors before the manifest even
+    # parsed, so every recoverable byte counts here.
+    try:
+        import gc
+
+        gc.collect()
+    except Exception:
+        pass
 
     # Build LED/buzzer feedback only once we know a real update is about to
     # run — otherwise we'd light the row on every boot. Failures here never

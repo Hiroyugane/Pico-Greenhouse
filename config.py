@@ -834,35 +834,39 @@ DEVICE_CONFIG = {
             "heater": {
                 "driven": "surface",
                 "dims": ["temp", "humidity"],
-                # Cold (temp dev < 50) → heat, with a narrow deadband below dev
-                # 47 and a steeper ramp below dev 30. Humidity amplifies
-                # (warming lowers relative humidity) via the y-boost, which only
-                # scales the already-active cold response — no heat when it is
-                # hot.
+                # Cold (temp dev < 51) → heat. Humidity amplifies (warming
+                # lowers relative humidity) via the y-boost, which only scales
+                # the already-active cold response — no heat when it is hot.
                 #
-                # The deadband is 3 deviation points wide, not 10, because the
-                # target is to hold the tent inside ±10 of ideal 95 % of the
-                # time and ±5 of ideal 85 % of the time. A regulator that only
-                # begins to respond at the edge of the band it is supposed to
-                # keep you inside can never hit that: by the time it commands
-                # anything, the excursion has already happened. It now ramps
-                # from just off ideal and reaches ~18 % duty at dev 40 (22.4 °C
-                # on the cubensis day anchors), full output by dev 14.
+                # Operator surface, exported verbatim from the tuning explorer
+                # on 2026-07-22. It replaces the earlier 47/30 ramp, which was
+                # still too slow to hold the KPI (inside ±10 of ideal 95 % of
+                # the time, ±5 of ideal 85 %): reaching only ~18 % duty a whole
+                # 1.6 °C below ideal meant the excursion had already happened
+                # before the heater did anything about it.
                 #
-                # The bottom of the ramp is gated by the adapter, not by the
-                # surface: min_on_s 30 s in a 600 s window means anything under
-                # 5 % duty (dev 48) cannot fire at all, so the near-ideal tail
-                # costs nothing.
+                # With mult 1.5 the ramp is command = 3.75 * (51 - dev):
+                #   dev 50 (24.0 °C, ideal)  →  3.8 %
+                #   dev 40 (22.4 °C)         → 41 %
+                #   dev 24.3 (19.9 °C)       → 100 % (clamped from here down)
+                # so the breakpoint deliberately sits ONE point above ideal —
+                # the heater trims continuously around the setpoint instead of
+                # waiting for the room to fall out of the band. The trim is
+                # bounded by the adapter, not the surface: min_on_s 30 s in a
+                # 600 s window is a 5 % floor on realizable duty, so at ideal
+                # the element fires 30 s per 10 minutes at most.
+                #
+                # bx_lo2 = 10 keeps the second hinge as pure reserve — the
+                # command has already clamped at 100 by dev 24 — and the y-boost
+                # from dev 58 (93.3 % RH) reaches 1.88× at RH 100.
                 "surface": _surface(
                     hx_lo1=2.5,
-                    bx_lo1=47.0,
-                    hx_lo2=1.5,
-                    bx_lo2=30.0,
-                    x_top=200.0,
-                    x_bot=-100.0,  # neutral x-boost
-                    y_top=60.0,
-                    y_bot=-100.0,  # humid (y>60) amplifies
-                    grad=0.008,
+                    bx_lo1=51.0,
+                    hx_lo2=2.0,
+                    bx_lo2=10.0,
+                    y_top=58.0,
+                    grad=0.021,
+                    mult=1.5,
                 ),
                 "adapter": {
                     "type": "heater",

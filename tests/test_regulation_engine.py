@@ -72,10 +72,22 @@ def _adapter(adapters, names, name):
 
 class TestCalm:
     def test_all_zero_at_night_ideal(self):
-        # Night (b=0), everything at the night ideal → every command settles at 0.
+        # Night (b=0), everything at the night ideal → every command settles at
+        # 0, except the heater's deliberate near-ideal trim: its ramp starts one
+        # deviation point ABOVE ideal (bx_lo1 = 51), so it holds the setpoint
+        # from below instead of waiting for the room to fall out of the band.
+        # The trim must stay under the 5 % duty the time-proportioning adapter
+        # can actually realize (min_on_s 30 s in a 600 s window), so at ideal
+        # the element still fires at most 30 s per 10 minutes.
         engine, adapters, names = _engine(temp=23.0, hum=92.0, co2=600.0, minutes=0)
         engine.tick(now_s=0.0)
+        heater = _adapter(adapters, names, "heater").value
+        follower = _adapter(adapters, names, "heater_follower").value
+        assert 0.0 < heater < 5.0
+        assert abs(follower - heater * 0.8) < 1e-3
         for ad in adapters:
+            if ad.name in ("heater", "heater_follower"):
+                continue
             assert ad.value == 0.0
 
     def test_growlight_follows_daylight(self):

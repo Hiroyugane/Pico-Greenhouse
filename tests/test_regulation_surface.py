@@ -179,8 +179,14 @@ class TestShippedCouplings:
         2026-07-22 retune narrowed every deadband — the old fixed deviations
         (55 for the exhaust, 45 for the cooler) are now well inside the active
         ramp — and a test that pins literals only records what the deadbands
-        used to be. What must stay true is the shape: no output at ideal, output
-        as soon as the breakpoint is passed.
+        used to be. What must stay true is the shape: silent on the far side of
+        the breakpoint, output as soon as the breakpoint is passed.
+
+        The heater's breakpoint has since moved one point PAST ideal (bx_lo1 =
+        51), so "dead at ideal" no longer holds for it: it trims continuously
+        around the setpoint. That trim is only legitimate while it stays under
+        the 5 % duty its time-proportioning adapter can realize, which is what
+        this asserts instead.
         """
         import config
         from lib.regulation_surface import evaluate
@@ -192,7 +198,11 @@ class TestShippedCouplings:
             edge = regs[name]["surface"][key]
             inside = edge - side * 0.5
             outside = edge + side * 2.0
-            assert evaluate(p, 50.0, 50.0) == 0.0, name  # dead at ideal
+            at_ideal = evaluate(p, 50.0, 50.0)
+            if (50.0 - edge) * side <= 0.0:  # ideal sits inside the deadband
+                assert at_ideal == 0.0, name
+            else:  # ramp starts past ideal — trim must stay below realizable duty
+                assert 0.0 < at_ideal < 5.0, name
             assert evaluate(p, inside, inside) == 0.0, name
             assert evaluate(p, outside, outside) > 0.0, name
 

@@ -299,6 +299,7 @@ Design convention: **solid = problem, blink = activity, dark = all good.** At bo
 - **Testing**: `pytest` + `pytest-asyncio`, `asyncio_mode=auto`; coverage gate `fail_under=88`
 - **Lint/format**: `ruff` (`line-length=120`, selecting `E,F,I`); vendored drivers, `host_shims/`, and `typings/` are excluded from lint and coverage
 - **Version**: InDev2.0 (Modular Architecture with Dependency Injection)
+- **Custom firmware**: building a frozen-module `.uf2`, flashing it, and the `.mpy` ABI rules that keep OTA payloads importable are in [docs/hardware/firmware-build-runbook.md](docs/hardware/firmware-build-runbook.md); the reasoning behind the freeze scope is in [docs/notes/firmware-freeze-versioning-plan.md](docs/notes/firmware-freeze-versioning-plan.md)
 
 ## Troubleshooting
 
@@ -313,6 +314,8 @@ Design convention: **solid = problem, blink = activity, dark = all good.** At bo
 | OLED blank | Check it answers at `0x3C` on I2C0 (`prototypes/i2c_scan.py`); `display.enabled` must be True |
 | System log growing large | `EventLogger` auto-rotates past `event_logger.max_size`; old logs renamed with a timestamp |
 | Service reminder won't clear | Long-press the menu button (GP9 ≥ 3 s) |
+| OTA payload refused with `mpy_abi mismatch` | The `.mpy` files were compiled by a different `mpy-cross` than the running firmware. Rebuild them with the firmware's own `mpy-cross`, or ship a raw-`.py` payload — see [the runbook](docs/hardware/firmware-build-runbook.md#5-the-mpy-abi-invariant-do-not-get-this-wrong) |
+| OTA applied but a `lib/` module didn't change | That module is frozen into the firmware; the dropped file is ignored. Rebuild and reflash, or move it out of the freeze set |
 
 ## Planned Enhancements
 

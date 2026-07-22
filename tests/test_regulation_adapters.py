@@ -165,3 +165,34 @@ class TestGrowlightAdapter:
         assert calls[-1] == 80.0
         ad.apply(30.0, 1.0)  # relay off → dac 0
         assert calls[-1] == 0.0
+
+    def test_shipped_thresholds_treat_any_nonzero_command_as_on(self):
+        """Operator spec: 1-100% = relay closed at that dim level, 0% = 0V + relay open.
+
+        Pins the shipped on_above/off_below so a future edit cannot reintroduce
+        a half-brightness threshold that ignores the dawn/dusk ramp.
+        """
+        import config
+        from lib.regulation_adapters import GrowlightAdapter
+
+        gl = config.DEVICE_CONFIG["regulation"]["regulators"]["growlight"]
+        cfg = gl["adapter"]
+        assert gl["dimmable"] is True
+
+        sw = FakeSwitch()
+        calls = []
+        ad = GrowlightAdapter(
+            sw,
+            on_above=cfg["on_above"],
+            off_below=cfg["off_below"],
+            min_on_s=0,
+            min_off_s=0,
+            dimmable=True,
+            dac_set=calls.append,
+        )
+        ad.apply(1.0, 0.0)  # lowest non-zero command still closes the relay
+        assert ad.active is True
+        assert calls[-1] == 1.0
+        ad.apply(0.0, 1.0)
+        assert ad.active is False
+        assert calls[-1] == 0.0

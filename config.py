@@ -1155,14 +1155,27 @@ DEVICE_CONFIG = {
             "growlight": {
                 "driven": "tod",
                 "light_level_day": 80.0,  # dimmable target at full day (b=1)
-                "dimmable": False,  # relay bulb (matches growlight.mode relay_only)
+                # The light is TWO actuators driven by one command: the mains
+                # relay and the 0-10V dimmer line. Left on because the dimmer
+                # does nothing for mushrooms but costs nothing when the MCP4725
+                # is fitted; drop to False on a build with no DAC at all.
+                "dimmable": True,
                 "adapter": {
                     "type": "growlight",
                     "pin_key": "relay_growlight",
                     "dac_i2c_address": 0x60,
                     "dac_max_pct": 91,  # ViparSpectra XS1500 safe ceiling — never exceed
-                    "on_above": 50.0,
-                    "off_below": 40.0,
+                    # Operator spec: any command >= 1% closes the relay and puts
+                    # that level on the dimmer; 0% means 0V AND relay open. The
+                    # old 50/40 pair was correct for a plain bulb but would have
+                    # ignored every dim level below half brightness — the dawn
+                    # and dusk halves of the time-of-day ramp included. Both
+                    # thresholds sit BELOW 1 because the adapter compares
+                    # strictly (> on_above / < off_below), so a command of
+                    # exactly 1% must still land on the on side. Relay wear is
+                    # bounded by min_on_s / min_off_s, not by this band.
+                    "on_above": 0.5,
+                    "off_below": 0.25,
                     "min_on_s": 60,
                     "min_off_s": 60,
                 },

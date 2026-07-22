@@ -754,9 +754,14 @@ async def main():
 
         gl_cfg = regulators["growlight"]["adapter"]
         dac_set = None
-        if is_plant_mode and regulators["growlight"]["dimmable"]:
-            # Plant-mode-only import: keeps the MCP4725 driver bytecode off
-            # the heap in mushroom mode, where the DAC is never constructed.
+        if regulators["growlight"]["dimmable"]:
+            # The grow light is TWO actuators that must agree: the mains relay
+            # (master on/off) and the 0-10V dimmer line. Command 1-100% = relay
+            # closed and dimmer at that level; command 0% = dimmer 0V AND relay
+            # open. The dimmer is meaningless for mushrooms, but harmless when
+            # the hardware is present, so `dimmable` alone decides — not the
+            # plant/mushroom mode. Import stays local so the MCP4725 bytecode
+            # never reaches the heap on a relay-only build.
             from lib.mcp4725 import MCP4725
 
             try:

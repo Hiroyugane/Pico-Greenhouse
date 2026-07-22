@@ -542,6 +542,14 @@ async def main():
 
     wdt.feed()  # Feed after TempHumidityLogger init
 
+    # Prime the sensor cache synchronously, before any async task exists.
+    # Without this, regulation_engine.run()'s first tick can run before
+    # th_logger.log_loop() gets its first scheduler turn and see None for
+    # last_temperature/last_humidity, computing neutral commands until the
+    # *second* tick (a full regulation.tick_s, default 30s, after boot).
+    th_logger.prime()
+    wdt.feed()  # Feed after the (bounded, retrying) priming read
+
     # Step 7: Create fan controllers from the role-keyed fans dict.
     # Only always_on policies live here (the case fan) — every regulated
     # fan (exhaust, circulation, heater follower) is a RegulationEngine

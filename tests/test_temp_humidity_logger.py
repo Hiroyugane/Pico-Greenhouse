@@ -172,6 +172,52 @@ class TestTempHumidityLoggerReadSensor:
         assert hum == 0.0
 
 
+class TestTempHumidityLoggerPrime:
+    """Tests for prime() — the synchronous boot-time sensor read.
+
+    Without this, RegulationEngine.run()'s first tick can execute before
+    log_loop() gets its first scheduler turn (it's an asyncio task created
+    later in main.py's Step 9). tick() then reads last_temperature/
+    last_humidity while both are still None, computes neutral (50.0)
+    deviations, and no actuator turns on until the *second* tick — a full
+    regulation.tick_s (default 30s) after boot. prime() populates the
+    cache synchronously before any task is created, so tick #1 already
+    sees real readings regardless of task-scheduling order.
+    """
+
+    def test_prime_populates_cache_before_any_task_runs(self, time_provider, buffer_manager, mock_event_logger):
+        """prime() sets last_temperature/last_humidity synchronously, pre-empting the boot race."""
+        from lib.temp_humidity_logger import TempHumidityLogger
+
+        sensor = _make_sensor(temp=21.3, hum=58.0)
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            th = TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger)
+
+        # Boot-race condition: nothing has read the sensor yet.
+        assert th.last_temperature is None
+        assert th.last_humidity is None
+
+        th.prime()
+
+        assert th.last_temperature == 21.3
+        assert th.last_humidity == 58.0
+
+    def test_prime_leaves_cache_none_on_sensor_failure(self, time_provider, buffer_manager, mock_event_logger):
+        """A failed priming read must not poison the cache with a bogus value."""
+        from lib.temp_humidity_logger import TempHumidityLogger
+
+        sensor = Mock()
+        sensor.measure = Mock(side_effect=OSError("not ready"))
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            th = TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger, max_retries=1)
+
+        with patch("time.sleep"):
+            th.prime()
+
+        assert th.last_temperature is None
+        assert th.last_humidity is None
+
+
 class TestTempHumidityLoggerDateRollover:
     """Tests for date-based file rollover."""
 

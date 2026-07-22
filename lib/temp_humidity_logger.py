@@ -251,6 +251,25 @@ class TempHumidityLogger:
         )
         return None, None
 
+    def prime(self) -> None:
+        """
+        Synchronously read the sensor once and populate the cache.
+
+        Meant to be called from main() right after construction, before
+        any async task is created. RegulationEngine.run()'s first tick can
+        otherwise execute before log_loop() gets its first scheduler turn,
+        reading last_temperature/last_humidity while both are still None
+        and computing neutral commands for a full tick_s (default 30s)
+        after boot before any actuator can respond to real conditions.
+        Reuses read_sensor()'s existing retry/backoff config, so it adds
+        no new tunable and no more boot latency than the first log_loop()
+        iteration would have taken anyway.
+        """
+        temp, hum = self.read_sensor()
+        if temp is not None and hum is not None:
+            self.last_temperature = temp
+            self.last_humidity = hum
+
     def _update_th_status(self) -> None:
         """Update StatusManager warning/error based on consecutive failures."""
         if self.status_manager is None:

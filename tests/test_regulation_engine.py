@@ -130,6 +130,22 @@ class TestReactions:
         assert high > floor  # stale air clears the floor on its own
         assert low == floor  # and ambient CO2 leaves only the floor
 
+    def test_co2_lifts_circulation_as_well_as_exhaust(self):
+        # Stale air is a mixing problem as much as a venting one: the exhaust
+        # pulls from one point, and without the circulation pair stirring the
+        # tent the dead zones between the blocks never reach it. Hold temp and
+        # RH at the day ideal so the circulation surface contributes nothing and
+        # the CO2 term is the only thing that can move the pair.
+        engine_low, ad_low, names = _engine(temp=24.0, hum=92.0, co2=600.0, minutes=720)
+        engine_high, ad_high, _ = _engine(temp=24.0, hum=92.0, co2=1400.0, minutes=720)
+        for i in range(10):  # slew_normal caps the per-tick climb
+            engine_low.tick(now_s=float(i * 30))
+            engine_high.tick(now_s=float(i * 30))
+        low = _adapter(ad_low, names, "circulation").value
+        high = _adapter(ad_high, names, "circulation").value
+        assert low == 0.0  # fresh air at ideal temp/RH → the pair stays off
+        assert high > 20.0  # stale air spins it up on CO2 alone
+
     def test_heater_follower_tracks_heater(self):
         # Cold (not extreme) → heater on; follower fan = heater*0.8.
         engine, adapters, names = _engine(temp=20.0, hum=92.0, co2=700.0, minutes=720)

@@ -2079,6 +2079,87 @@ class TestRegulationConfig:
         assert cooler["emergency_value"] is None
         assert cooler["safe_state"] is None
 
+    def test_regulation_circulation_takes_the_co2_term(self):
+        """Venting alone leaves dead zones — the circulation pair ramps with CO2 too."""
+        from config import DEVICE_CONFIG
+
+        circ = DEVICE_CONFIG["regulation"]["regulators"]["circulation"]
+        assert circ["co2_gain"] > 0.0
+        assert 0.0 <= circ["co2_break"] <= 100.0
+        # Stirring the tent helps regardless of what the outside air is like.
+        assert circ["external"] is False
+
+    def test_regulation_co2_term_can_clear_its_own_floor(self):
+        """Every CO2 term must be able to out-command the floor that follows it.
+
+        Regression guard for a bug class this repo has now hit twice: a
+        threshold set in one pipeline stage nullified by a guard in a later one.
+        The additive term is bounded by co2_gain * (100 - co2_break); if that
+        ceiling sits at or below the regulator's floor, the arbiter forces the
+        command up to the floor and CO2 changes nothing anywhere in the
+        profile's range (docs/notes/chat-log.md 2026-07-22). Gain, break and
+        floor are one calibration — this asserts they were re-derived together.
+        """
+        from config import DEVICE_CONFIG
+
+        for name, rcfg in DEVICE_CONFIG["regulation"]["regulators"].items():
+            if "co2_gain" not in rcfg:
+                continue
+            ceiling = rcfg["co2_gain"] * (100.0 - rcfg["co2_break"])
+            assert ceiling > rcfg["floor"], "{}: CO2 term tops out at {} under a floor of {}".format(
+                name, ceiling, rcfg["floor"]
+            )
+
+    def test_regulation_co2_term_partial_block_raises(self):
+        """A CO2 gain without its break/external siblings raises ValueError."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        del config.DEVICE_CONFIG["regulation"]["regulators"]["circulation"]["co2_break"]
+        try:
+            with pytest.raises(ValueError, match="CO2 term needs all of"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_regulation_co2_term_on_non_surface_regulator_raises(self):
+        """The term is added to a surface output, so a tod regulator cannot take it."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        light = config.DEVICE_CONFIG["regulation"]["regulators"]["growlight"]
+        light.update({"co2_gain": 1.0, "co2_break": 50.0, "external": False})
+        try:
+            with pytest.raises(ValueError, match="requires driven='surface'"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_regulation_exhaust_without_co2_term_raises(self):
+        """The exhaust is the primary CO2 actuator — losing the term is a regression."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        for key in ("co2_gain", "co2_break", "external"):
+            del config.DEVICE_CONFIG["regulation"]["regulators"]["exhaust"][key]
+        try:
+            with pytest.raises(ValueError, match="must carry the CO2 term keys"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_regulation_co2_break_out_of_range_raises(self):
+        """co2_break outside 0-100 raises ValueError."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["regulators"]["circulation"]["co2_break"] = 140.0
+        try:
+            with pytest.raises(ValueError, match="co2_break"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
     def test_regulation_cubensis_co2_is_fruiting_grade(self):
         """Fruiting needs continuous FAE — the IDEAL stays well under colonization levels."""
         from config import DEVICE_CONFIG

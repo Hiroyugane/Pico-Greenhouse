@@ -1051,6 +1051,30 @@ DEVICE_CONFIG = {
                     hy_lo1=1.0,
                     by_lo1=40.0,
                 ),
+                # CO2 enters additively here for the same reason it does on the
+                # exhaust: no surface takes CO2 as a dimension, so the additive
+                # term is the only path from a CO2 reading to an actuator.
+                #
+                # Venting alone does not clear a fruiting chamber. The exhaust
+                # pulls from one point; without mixing, the stale air sits in
+                # the dead zones between the blocks and the CO2 sensor reads a
+                # room that is only locally fresh. So the circulation pair ramps
+                # with CO2 too, and the two run together above the deadband.
+                #
+                # Gain and break are ONE calibration with the floor below.
+                # Against the cubensis fruiting anchors (0 / 600 / 2000 ppm):
+                #   deadband ends    co2_dev 55  →   740 ppm
+                #   clears floor 30  co2_dev 70  →  1160 ppm
+                #   saturates 100    co2_dev 105 →  never on its own (the
+                #                    temp/RH surface makes up the rest)
+                # Below 1160 ppm the floor already runs the pair at 30 whenever
+                # any of its dimensions is past the minor edge, so the ramp only
+                # becomes the binding term where the air is genuinely stale.
+                "co2_gain": 2.0,
+                "co2_break": 55.0,
+                # No external gating: outside air quality decides whether
+                # VENTING helps, not whether stirring the tent helps.
+                "external": False,
                 "adapter": {
                     "type": "pwm_pair",
                     "center_ch": 0,
@@ -1397,14 +1421,30 @@ def _validate_regulation(reg_cfg, pins_cfg, top_mode):
                 raise ValueError("{}.light_level_day must be 0-100".format(rctx))
             if not isinstance(rcfg.get("dimmable"), bool):
                 raise ValueError("{}.dimmable must be a bool".format(rctx))
-        if rname == "exhaust":
-            if not isinstance(rcfg.get("co2_gain"), (int, float)) or rcfg["co2_gain"] < 0:
+        # CO2 additive term — optional, and available to any surface regulator
+        # (the exhaust and the circulation pair ship with it). The three keys
+        # are one block: a gain without a break, or either without the external
+        # flag, would leave the engine reading a key that is not there.
+        co2_keys = ("co2_gain", "co2_break", "external")
+        if any(key in rcfg for key in co2_keys):
+            missing = [key for key in co2_keys if key not in rcfg]
+            if missing:
+                raise ValueError("{}: CO2 term needs all of {} (missing {})".format(rctx, co2_keys, missing))
+            if driven != "surface":
+                raise ValueError("{}: CO2 term requires driven='surface'".format(rctx))
+            if not isinstance(rcfg["co2_gain"], (int, float)) or isinstance(rcfg["co2_gain"], bool):
+                raise ValueError("{}.co2_gain must be a number".format(rctx))
+            if rcfg["co2_gain"] < 0:
                 raise ValueError("{}.co2_gain must be >= 0".format(rctx))
-            cb = rcfg.get("co2_break")
+            cb = rcfg["co2_break"]
             if not isinstance(cb, (int, float)) or isinstance(cb, bool) or not (0 <= cb <= 100):
                 raise ValueError("{}.co2_break must be 0-100".format(rctx))
-            if not isinstance(rcfg.get("external"), bool):
+            if not isinstance(rcfg["external"], bool):
                 raise ValueError("{}.external must be a bool".format(rctx))
+        elif rname == "exhaust":
+            # The exhaust is the primary CO2 actuator; losing the term there is
+            # a silent regression, not a configuration choice.
+            raise ValueError("{}: must carry the CO2 term keys {}".format(rctx, co2_keys))
         _validate_reg_adapter(rcfg.get("adapter"), rname, pins_cfg)
 
     conflicts = reg_cfg.get("conflicts")

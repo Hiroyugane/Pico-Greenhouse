@@ -8,6 +8,7 @@
 # injected callbacks so the engine stays hardware-decoupled and testable.
 
 import time
+from array import array
 
 import uasyncio as asyncio
 
@@ -112,7 +113,6 @@ class RegulationEngine:
         # Regulator indices used by the derived/tod/exhaust paths.
         self._i_heater = reg_names.index("heater")
         self._i_follower = reg_names.index("heater_follower")
-        self._i_exhaust = reg_names.index("exhaust")
         self._i_growlight = reg_names.index("growlight")
         self._co2_idx = dim_order.index("co2")
 
@@ -120,10 +120,20 @@ class RegulationEngine:
         self._follower_gain = float(follower["follower_gain"])
         self._follower_floor = float(follower["follower_floor"])
 
-        exhaust = regulators["exhaust"]
-        self._co2_gain = float(exhaust["co2_gain"])
-        self._co2_break = float(exhaust["co2_break"])
-        self._exhaust_external = bool(exhaust["external"])
+        # CO2 additive term + external-effectiveness multiplier, per regulator.
+        # Any surface regulator carrying a co2_gain takes the term; CO2 is not a
+        # surface dimension, so this is the only path by which it reaches an
+        # actuator. Held as parallel per-index sequences so the tick path does a
+        # subscript instead of a dict lookup.
+        self._co2_active = tuple("co2_gain" in regulators[name] for name in reg_names)
+        self._ext_active = tuple(bool(regulators[name].get("external", False)) for name in reg_names)
+        self._co2_gain = array("f", [0.0] * n)
+        self._co2_break = array("f", [0.0] * n)
+        for i, name in enumerate(reg_names):
+            if self._co2_active[i]:
+                self._co2_gain[i] = float(regulators[name]["co2_gain"])
+                self._co2_break[i] = float(regulators[name]["co2_break"])
+        self._any_external = any(self._ext_active)
 
         self._light_level_day = float(regulators["growlight"]["light_level_day"])
 
@@ -135,8 +145,6 @@ class RegulationEngine:
         self._ext_min_rh = float(ext["min_factor_rh"])
 
         # Preallocated per-tick buffers.
-        from array import array
-
         self._dev = array("f", [50.0] * len(dim_order))
         self._sev = array("f", [0.0] * len(dim_order))
         self._target = array("f", [0.0] * n)
@@ -149,7 +157,7 @@ class RegulationEngine:
     # -- external-effectiveness multiplier (exhaust only) ------------------
 
     def _external_mult(self, temp_in, hum_in):
-        if not (self._ext_enabled and self._exhaust_external and self._external_read):
+        if not (self._ext_enabled and self._any_external and self._external_read):
             return 1.0
         ext = self._external_read()
         if not ext:
@@ -169,15 +177,18 @@ class RegulationEngine:
                 continue
             dx, dy = self._surface_dims[i]
             val = evaluate(params, dev[dx], dev[dy])
-            if i == self._i_exhaust:
-                over = dev[self._co2_idx] - self._co2_break
+            if self._co2_active[i]:
+                over = dev[self._co2_idx] - self._co2_break[i]
                 if over > 0.0:
-                    val += self._co2_gain * over
+                    val += self._co2_gain[i] * over
+            if self._ext_active[i]:
                 val *= ext_mult
-                if val < 0.0:
-                    val = 0.0
-                elif val > 100.0:
-                    val = 100.0
+            # evaluate() already returns 0..100; this bounds the CO2 term and
+            # the external multiplier, which are applied on top of it.
+            if val < 0.0:
+                val = 0.0
+            elif val > 100.0:
+                val = 100.0
             target[i] = val
 
         # heater_follower derives from the organic heater command.

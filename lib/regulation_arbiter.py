@@ -152,7 +152,10 @@ class RegulationArbiter:
             driven = r["driven"]
             if driven == "surface":
                 idxs = [dim_order.index(d) for d in r["dims"]]
-                if name == "exhaust" and co2_idx not in idxs:
+                # A regulator that takes the CO2 additive term is driven by CO2
+                # even though no surface has it as an axis, so its band (and
+                # therefore its floor and slew rate) must see that severity.
+                if "co2_gain" in r and co2_idx not in idxs:
                     idxs.append(co2_idx)
                 reg_dims.append(tuple(idxs))
             elif driven == "follower":

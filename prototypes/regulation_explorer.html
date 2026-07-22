@@ -1,0 +1,729 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pi Greenhouse — regulation surface explorer</title>
+<style>
+
+:root {
+  color-scheme: light;
+  --surface-1: #fcfcfb;
+  --page: #f9f9f7;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --muted: #898781;
+  --grid-line: #e1e0d9;
+  --baseline: #c3c2b7;
+  --border: rgba(11,11,11,0.10);
+  --seq-100: #cde2fb; --seq-200: #9ec5f4; --seq-300: #6da7ec; --seq-400: #3987e5;
+  --seq-500: #256abf; --seq-600: #184f95; --seq-700: #0d366b;
+  --status-good: #0ca30c;
+  --status-warning: #fab219;
+  --status-serious: #ec835a;
+  --status-critical: #d03b3b;
+  --accent: #2a78d6;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --page: #0d0d0d;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --grid-line: #2c2c2a;
+    --baseline: #383835;
+    --border: rgba(255,255,255,0.10);
+    --accent: #3987e5;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-1: #1a1a19;
+  --page: #0d0d0d;
+  --text-primary: #ffffff;
+  --text-secondary: #c3c2b7;
+  --grid-line: #2c2c2a;
+  --baseline: #383835;
+  --border: rgba(255,255,255,0.10);
+  --accent: #3987e5;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 20px 24px 48px;
+  background: var(--page); color: var(--text-primary);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 14px; line-height: 1.5;
+}
+h1 { font-size: 19px; margin: 0 0 2px; font-weight: 600; }
+h2 { font-size: 13px; margin: 0 0 8px; font-weight: 600; letter-spacing: .02em; }
+.sub { color: var(--text-secondary); font-size: 13px; margin: 0 0 18px; max-width: 105ch; }
+.controls {
+  display: flex; flex-wrap: wrap; gap: 18px 26px; align-items: flex-end;
+  background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
+  padding: 14px 18px; margin-bottom: 18px;
+}
+.ctl { display: flex; flex-direction: column; gap: 5px; }
+.ctl label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.ctl select {
+  font: inherit; padding: 5px 8px; border-radius: 6px;
+  border: 1px solid var(--baseline); background: var(--surface-1); color: var(--text-primary);
+}
+.ctl input[type=range] { width: 210px; accent-color: var(--accent); }
+.ctl .readout { font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.ctl.disabled { opacity: .45; }
+.ctl.disabled input { cursor: not-allowed; }
+.layout { display: flex; gap: 22px; align-items: flex-start; flex-wrap: wrap; }
+.chartcard, .panel {
+  background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: 10px; padding: 16px 18px;
+}
+.chartcard { flex: 1 1 560px; min-width: 460px; }
+.side { flex: 0 1 420px; min-width: 330px; display: flex; flex-direction: column; gap: 16px; }
+/* The x tick labels are rotated vertical, so the TICK track is the tall one and
+   the axis-title track is the short one — not the other way round. */
+.gridwrap { display: grid; grid-template-columns: 22px 86px 1fr; grid-template-rows: 1fr 86px 22px; }
+.ylab, .xlab {
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; color: var(--text-secondary); text-align: center;
+}
+.ylab { grid-column: 1; grid-row: 1; writing-mode: vertical-rl; transform: rotate(180deg); }
+.yticks { grid-column: 2; grid-row: 1; display: flex; flex-direction: column-reverse; }
+.ytick, .xtick {
+  flex: 1; display: flex; align-items: center; justify-content: flex-end;
+  font-size: 9px; color: var(--muted); font-variant-numeric: tabular-nums;
+  padding-right: 4px; white-space: nowrap;
+}
+.xticks { grid-column: 3; grid-row: 2; display: flex; }
+.xtick { justify-content: flex-start; padding: 4px 0 0; writing-mode: vertical-rl; }
+.xlab { grid-column: 3; grid-row: 3; }
+#heat {
+  grid-column: 3; grid-row: 1;
+  display: grid;
+  grid-template-columns: repeat(21, 1fr); grid-template-rows: repeat(21, 1fr);
+  aspect-ratio: 1; gap: 0; border: 1px solid var(--baseline);
+}
+.cell { position: relative; cursor: pointer; }
+.cell:hover { outline: 2px solid var(--text-primary); outline-offset: -2px; z-index: 3; }
+.cell.sel { outline: 3px solid var(--text-primary); outline-offset: -3px; z-index: 4; }
+.cell.band::after {
+  content: ""; position: absolute; inset: 0;
+  background: repeating-linear-gradient(45deg,
+    rgba(255,255,255,.85) 0 2px, rgba(0,0,0,0) 2px 5px);
+}
+.cell.escalate { box-shadow: inset 0 0 0 1.5px var(--status-critical); z-index: 2; }
+.cell.conflict::before {
+  content: ""; position: absolute; inset: 0;
+  background: repeating-linear-gradient(135deg,
+    var(--status-warning) 0 1.5px, rgba(0,0,0,0) 1.5px 6px);
+}
+.legendrow { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 14px; }
+.ramp { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text-secondary); }
+.rampbar { display: flex; height: 10px; width: 190px; border-radius: 3px; overflow: hidden; }
+.rampbar span { flex: 1; }
+.key { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-secondary); }
+.swatch { width: 15px; height: 15px; border-radius: 3px; border: 1px solid var(--baseline); position: relative; }
+.swatch.band { background: var(--seq-400); }
+.swatch.band::after {
+  content: ""; position: absolute; inset: 0;
+  background: repeating-linear-gradient(45deg, rgba(255,255,255,.85) 0 2px, rgba(0,0,0,0) 2px 5px);
+}
+.swatch.esc { box-shadow: inset 0 0 0 2px var(--status-critical); background: transparent; }
+.swatch.cfl { background: repeating-linear-gradient(135deg, var(--status-warning) 0 2px, transparent 2px 6px); }
+table.kv { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+table.kv td { padding: 3px 0; vertical-align: top; }
+table.kv td:first-child { color: var(--text-secondary); padding-right: 12px; white-space: nowrap; }
+table.kv td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+table.kv tr.sect td { padding-top: 11px; color: var(--muted); font-size: 10.5px;
+  text-transform: uppercase; letter-spacing: .06em; }
+.tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 6px 0 2px; }
+.tile { border: 1px solid var(--border); border-radius: 8px; padding: 8px 9px; }
+.tile .t { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.tile .v { font-size: 19px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.tile .u { font-size: 11px; color: var(--muted); font-weight: 400; }
+.stage { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: center;
+  font-size: 12.5px; padding: 5px 0; border-bottom: 1px solid var(--grid-line); }
+.stage:last-child { border-bottom: none; }
+.stage .n { color: var(--text-secondary); }
+.stage .v { font-variant-numeric: tabular-nums; font-weight: 600; }
+.stage.final { font-size: 15px; }
+.stage.final .v { font-size: 22px; color: var(--accent); }
+.stage .note { grid-column: 1 / -1; font-size: 11px; color: var(--muted); }
+.bars { margin: 10px 0 4px; }
+.barrow { display: grid; grid-template-columns: 74px 1fr 52px; gap: 8px; align-items: center;
+  font-size: 11.5px; margin-bottom: 5px; }
+.bartrack { height: 12px; background: var(--grid-line); border-radius: 3px; overflow: hidden; }
+.barfill { height: 100%; border-radius: 3px; }
+.barval { text-align: right; font-variant-numeric: tabular-nums; }
+.note { font-size: 11.5px; color: var(--muted); }
+.warn { font-size: 11.5px; color: var(--text-secondary); border-left: 3px solid var(--status-warning);
+  padding: 4px 0 4px 9px; margin: 9px 0 0; }
+.empty { color: var(--muted); font-size: 12.5px; padding: 10px 0; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+
+</style>
+</head>
+<body>
+<h1>Regulation surface explorer
+<span style="font-weight:400;color:var(--muted);font-size:14px">3.5-D</span></h1>
+<p class="sub">Every cell is coloured by the <strong>final effective actuator output</strong> &mdash;
+the command after the surface (or follower / time-of-day driver), the CO&#8322; additive term, the
+external-effectiveness multiplier, the floor, the conflict rules, and the device adapter.
+Click a cell to see the raw surface value beside that final duty. Slew limiting, the emergency
+vector and the latch are temporal and cannot be drawn per cell; escalating cells are outlined and
+the forced vectors are listed in the panel. Generated from <code>config.py</code> &mdash; read-only.</p>
+
+<div class="controls">
+  <div class="ctl">
+    <label for="reg">Regulator</label>
+    <select id="reg"></select>
+  </div>
+  <div class="ctl">
+    <label for="prof">Species profile</label>
+    <select id="prof"></select>
+  </div>
+  <div class="ctl">
+    <label for="tod">Time of day (blend b)</label>
+    <input type="range" id="tod" min="0" max="1" step="0.05" value="1">
+    <span class="readout" id="todOut"></span>
+  </div>
+  <div class="ctl" id="co2Ctl">
+    <label for="co2">CO&#8322; deviation</label>
+    <input type="range" id="co2" min="0" max="100" step="1" value="50">
+    <span class="readout" id="co2Out"></span>
+  </div>
+</div>
+
+<div class="layout">
+  <div class="chartcard">
+    <h2 id="chartTitle"></h2>
+    <p class="note" id="chartNote"></p>
+    <div class="gridwrap">
+      <div class="ylab" id="ylab"></div>
+      <div class="yticks" id="yticks"></div>
+      <div id="heat"></div>
+      <div class="xticks" id="xticks"></div>
+      <div class="xlab" id="xlab"></div>
+    </div>
+    <div class="legendrow">
+      <div class="ramp">
+        <span>0</span>
+        <div class="rampbar" id="rampbar"></div>
+        <span>100 % duty</span>
+      </div>
+      <div class="key"><span class="swatch band"></span> hysteresis band (history-dependent)</div>
+      <div class="key"><span class="swatch esc"></span> would escalate (emergency / latch)</div>
+      <div class="key"><span class="swatch cfl"></span> conflict rule fires</div>
+    </div>
+  </div>
+
+  <div class="side">
+    <div class="panel">
+      <h2>Cell detail</h2>
+      <div id="detail"><p class="empty">Click a cell in the grid.</p></div>
+    </div>
+    <div class="panel">
+      <h2 id="aggTitle">Regulator</h2>
+      <div id="agg"></div>
+    </div>
+  </div>
+</div>
+<script id="regdata" type="application/json">{"grid":[0,5,10,15,20,25,30,35,40,45,50,55,60,65,70,75,80,85,90,95,100],"dimOrder":["temp","humidity","co2"],"dimUnits":{"temp":"\u00b0C","humidity":"%RH","co2":"ppm"},"dimLabels":{"temp":"temperature","humidity":"humidity","co2":"CO\u2082"},"regNames":["heater","heater_follower","cooler","humidifier","exhaust","circulation","growlight"],"regulators":{"heater":{"driven":"surface","dims":["temp","humidity"],"bandDims":["temp","humidity"],"adapter":{"type":"heater","pin_key":"heater_mosfet","window_s":600,"min_on_s":30,"min_off_s":30},"slewNormal":20.0,"slewFast":50.0,"floor":0.0,"emergencyValue":0.0,"safeState":0.0,"raw":[[100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0],[84.50000047683716,84.50000047683716,84.50000047683716,84.50000047683716,84.50000047683716,84.50000047683716,84.50000047683716,84.50000047683716,84.50000047683716,84.50000047683716,84.50000047683716,84.50000047683716,84.50000047683716,87.88000065645203,91.26000083606691,94.64000101568178,98.02000119529664,100.0,100.0,100.0,100.0],[69.00000035762787,69.00000035762787,69.00000035762787,69.00000035762787,69.00000035762787,69.00000035762787,69.00000035762787,69.00000035762787,69.00000035762787,69.00000035762787,69.00000035762787,69.00000035762787,69.00000035762787,71.76000050302595,74.52000064842403,77.28000079382211,80.04000093922019,82.80000108461827,85.56000123001635,88.32000137541444,91.08000152081252],[53.50000023841858,53.50000023841858,53.50000023841858,53.50000023841858,53.50000023841858,53.50000023841858,53.50000023841858,53.50000023841858,53.50000023841858,53.50000023841858,53.50000023841858,53.50000023841858,53.50000023841858,55.64000034959986,57.78000046078115,59.92000057196245,62.060000683143734,64.20000079432502,66.34000090550632,68.48000101668761,70.62000112786889],[38.00000011920929,38.00000011920929,38.00000011920929,38.00000011920929,38.00000011920929,38.00000011920929,38.00000011920929,38.00000011920929,38.00000011920929,38.00000011920929,38.00000011920929,38.00000011920929,38.00000011920929,39.52000019617379,41.04000027313828,42.56000035010278,44.08000042706728,45.600000504031776,47.120000580996276,48.640000657960776,50.16000073492527],[22.5,22.5,22.5,22.5,22.5,22.5,22.5,22.5,22.5,22.5,22.5,22.5,22.5,23.400000042747706,24.300000085495412,25.200000128243115,26.10000017099082,27.000000213738527,27.900000256486233,28.80000029923394,29.700000341981646],[15.0,15.0,15.0,15.0,15.0,15.0,15.0,15.0,15.0,15.0,15.0,15.0,15.0,15.60000002849847,16.20000005699694,16.800000085495412,17.400000113993883,18.000000142492354,18.600000170990825,19.200000199489295,19.800000227987766],[7.5,7.5,7.5,7.5,7.5,7.5,7.5,7.5,7.5,7.5,7.5,7.5,7.5,7.800000014249235,8.10000002849847,8.400000042747706,8.700000056996942,9.000000071246177,9.300000085495412,9.600000099744648,9.900000113993883],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]]},"heater_follower":{"driven":"follower","dims":["temp","humidity"],"bandDims":["temp","humidity"],"adapter":{"type":"pwm","pca9685_ch":2},"slewNormal":30.0,"slewFast":60.0,"floor":0.0,"emergencyValue":0.0,"safeState":0.0,"raw":[[80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0,80.0],[67.60000038146973,67.60000038146973,67.60000038146973,67.60000038146973,67.60000038146973,67.60000038146973,67.60000038146973,67.60000038146973,67.60000038146973,67.60000038146973,67.60000038146973,67.60000038146973,67.60000038146973,70.30400052516163,73.00800066885353,75.71200081254543,78.41600095623733,80.0,80.0,80.0,80.0],[55.200000286102295,55.200000286102295,55.200000286102295,55.200000286102295,55.200000286102295,55.200000286102295,55.200000286102295,55.200000286102295,55.200000286102295,55.200000286102295,55.200000286102295,55.200000286102295,55.200000286102295,57.40800040242076,59.61600051873923,61.82400063505769,64.03200075137616,66.24000086769462,68.44800098401309,70.65600110033155,72.86400121665001],[42.80000019073486,42.80000019073486,42.80000019073486,42.80000019073486,42.80000019073486,42.80000019073486,42.80000019073486,42.80000019073486,42.80000019073486,42.80000019073486,42.80000019073486,42.80000019073486,42.80000019073486,44.51200027967989,46.22400036862493,47.93600045756996,49.64800054651499,51.36000063546002,53.07200072440506,54.78400081335009,56.496000902295116],[30.40000009536743,30.40000009536743,30.40000009536743,30.40000009536743,30.40000009536743,30.40000009536743,30.40000009536743,30.40000009536743,30.40000009536743,30.40000009536743,30.40000009536743,30.40000009536743,30.40000009536743,31.616000156939034,32.83200021851063,34.04800028008223,35.264000341653826,36.480000403225425,37.696000464797024,38.91200052636862,40.12800058794022],[18.0,18.0,18.0,18.0,18.0,18.0,18.0,18.0,18.0,18.0,18.0,18.0,18.0,18.720000034198165,19.44000006839633,20.160000102594495,20.88000013679266,21.600000170990825,22.32000020518899,23.040000239387155,23.76000027358532],[12.0,12.0,12.0,12.0,12.0,12.0,12.0,12.0,12.0,12.0,12.0,12.0,12.0,12.480000022798777,12.960000045597553,13.44000006839633,13.920000091195107,14.400000113993883,14.88000013679266,15.360000159591436,15.840000182390213],[6.0,6.0,6.0,6.0,6.0,6.0,6.0,6.0,6.0,6.0,6.0,6.0,6.0,6.240000011399388,6.480000022798777,6.720000034198165,6.960000045597553,7.200000056996942,7.44000006839633,7.680000079795718,7.9200000911951065],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]],"followerGain":0.8,"followerFloor":0.0},"cooler":{"driven":"surface","dims":["temp","humidity"],"bandDims":["temp","humidity"],"adapter":{"type":"relay","pin_key":"relay_cooler","on_above":60.0,"off_below":40.0,"min_on_s":120,"min_off_s":300},"slewNormal":100.0,"slewFast":100.0,"floor":0.0,"emergencyValue":null,"safeState":null,"raw":[[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[7.5,7.5,7.5,7.5,7.5,7.5,7.5,7.5,7.5,7.5,7.5,7.5,7.5,7.874999991618097,8.249999983236194,8.62499997485429,8.999999966472387,9.374999958090484,9.749999949708581,10.124999941326678,10.499999932944775],[15.0,15.0,15.0,15.0,15.0,15.0,15.0,15.0,15.0,15.0,15.0,15.0,15.0,15.749999983236194,16.499999966472387,17.24999994970858,17.999999932944775,18.74999991618097,19.499999899417162,20.249999882653356,20.99999986588955],[22.5,22.5,22.5,22.5,22.5,22.5,22.5,22.5,22.5,22.5,22.5,22.5,22.5,23.62499997485429,24.74999994970858,25.874999924562868,26.99999989941716,28.12499987427145,29.24999984912574,30.37499982398003,31.49999979883432],[38.00000011920929,38.00000011920929,38.00000011920929,38.00000011920929,38.00000011920929,38.00000011920929,38.00000011920929,38.00000011920929,38.00000011920929,38.00000011920929,38.00000011920929,38.00000011920929,38.00000011920929,39.900000082701446,41.8000000461936,43.70000000968575,45.59999997317791,47.499999936670065,49.39999990016222,51.299999863654364,53.19999982714653],[53.50000023841858,53.50000023841858,53.50000023841858,53.50000023841858,53.50000023841858,53.50000023841858,53.50000023841858,53.50000023841858,53.50000023841858,53.50000023841858,53.50000023841858,53.50000023841858,53.50000023841858,56.175000190548595,58.85000014267862,61.52500009480863,64.20000004693865,66.87499999906868,69.5499999511987,72.22499990332871,74.89999985545873],[69.00000035762787,69.00000035762787,69.00000035762787,69.00000035762787,69.00000035762787,69.00000035762787,69.00000035762787,69.00000035762787,69.00000035762787,69.00000035762787,69.00000035762787,69.00000035762787,69.00000035762787,72.45000029839575,75.90000023916363,79.35000017993153,82.80000012069941,86.25000006146729,89.70000000223517,93.14999994300305,96.59999988377093],[84.50000047683716,84.50000047683716,84.50000047683716,84.50000047683716,84.50000047683716,84.50000047683716,84.50000047683716,84.50000047683716,84.50000047683716,84.50000047683716,84.50000047683716,84.50000047683716,84.50000047683716,88.72500040624291,92.95000033564865,97.17500026505441,100.0,100.0,100.0,100.0,100.0],[100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0]]},"humidifier":{"driven":"surface","dims":["humidity","temp"],"bandDims":["humidity","temp"],"adapter":{"type":"relay","pin_key":"relay_humidifier","on_above":23.5,"off_below":5.9,"min_on_s":30,"min_off_s":30},"slewNormal":100.0,"slewFast":100.0,"floor":0.0,"emergencyValue":0.0,"safeState":0.0,"raw":[[75.0,77.5,80.0,82.5,85.0,87.5,90.0,92.5,95.0,97.5,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0],[65.0,67.5,70.0,72.5,75.0,77.5,80.0,82.5,85.0,87.5,90.0,92.5,95.0,97.5,100.0,100.0,100.0,100.0,100.0,100.0,100.0],[55.00000000000001,57.49999999999999,60.0,62.5,65.0,67.5,70.0,72.5,75.0,77.5,80.0,82.5,85.0,87.5,90.0,92.5,95.0,97.5,100.0,100.0,100.0],[45.0,47.5,50.0,52.5,55.00000000000001,57.49999999999999,60.0,62.5,65.0,67.5,70.0,72.5,75.0,77.5,80.0,82.5,85.0,87.5,90.0,92.5,95.0],[35.0,37.5,40.0,42.5,45.0,47.5,50.0,52.5,55.00000000000001,57.49999999999999,60.0,62.5,65.0,67.5,70.0,72.5,75.0,77.5,80.0,82.5,85.0],[25.0,27.500000000000004,30.0,32.5,35.0,37.5,40.0,42.5,45.0,47.5,50.0,52.5,55.00000000000001,57.49999999999999,60.0,62.5,65.0,67.5,70.0,72.5,75.0],[15.0,17.5,20.0,22.5,25.0,27.500000000000004,30.0,32.5,35.0,37.5,40.0,42.5,45.0,47.5,50.0,52.5,55.00000000000001,57.49999999999999,60.0,62.5,65.0],[5.0,7.5,10.0,12.5,15.0,17.5,20.0,22.5,25.0,27.500000000000004,30.0,32.5,35.0,37.5,40.0,42.5,45.0,47.5,50.0,52.5,55.00000000000001],[0.0,0.0,0.0,2.5,5.0,7.5,10.0,12.5,15.0,17.5,20.0,22.5,25.0,27.500000000000004,30.0,32.5,35.0,37.5,40.0,42.5,45.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,2.5,5.0,7.5,10.0,12.5,15.0,17.5,20.0,22.5,25.0,27.500000000000004,30.0,32.5,35.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,2.5,5.0,7.5,10.0,12.5,15.0,17.5,20.0,22.5,25.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,2.5,5.0,7.5,10.0,12.5,15.0,17.5,20.0,22.5,25.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,2.5,5.0,7.5,10.0,12.5,15.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,2.5,5.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]]},"exhaust":{"driven":"surface","dims":["temp","humidity"],"bandDims":["temp","humidity","co2"],"adapter":{"type":"pwm","pca9685_ch":4},"slewNormal":25.0,"slewFast":60.0,"floor":10.0,"emergencyValue":100.0,"safeState":100.0,"raw":[[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,7.5,15.0,22.5,38.00000011920929,53.50000023841858,69.00000035762787,84.50000047683716,100.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,7.5,15.0,22.5,38.00000011920929,53.50000023841858,69.00000035762787,84.50000047683716,100.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,7.5,15.0,22.5,38.00000011920929,53.50000023841858,69.00000035762787,84.50000047683716,100.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,7.5,15.0,22.5,38.00000011920929,53.50000023841858,69.00000035762787,84.50000047683716,100.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,7.5,15.0,22.5,38.00000011920929,53.50000023841858,69.00000035762787,84.50000047683716,100.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,7.5,15.0,22.5,38.00000011920929,53.50000023841858,69.00000035762787,84.50000047683716,100.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,7.5,15.0,22.5,38.00000011920929,53.50000023841858,69.00000035762787,84.50000047683716,100.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,7.5,15.0,22.5,38.00000011920929,53.50000023841858,69.00000035762787,84.50000047683716,100.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,7.5,15.0,22.5,38.00000011920929,53.50000023841858,69.00000035762787,84.50000047683716,100.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,7.5,15.0,22.5,38.00000011920929,53.50000023841858,69.00000035762787,84.50000047683716,100.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,7.5,15.0,22.5,38.00000011920929,53.50000023841858,69.00000035762787,84.50000047683716,100.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,7.5,15.0,22.5,38.00000011920929,53.50000023841858,69.00000035762787,84.50000047683716,100.0],[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,7.5,15.0,22.5,38.00000011920929,53.50000023841858,69.00000035762787,84.50000047683716,100.0],[7.5,7.5,7.5,7.5,7.5,7.5,7.5,7.5,7.5,7.5,7.5,7.5,7.5,15.0,22.5,30.0,45.50000011920929,61.000000238418586,76.50000035762787,92.00000047683716,100.0],[15.0,15.0,15.0,15.0,15.0,15.0,15.0,15.0,15.0,15.0,15.0,15.0,15.0,22.5,30.0,37.5,53.00000011920929,68.50000023841858,84.00000035762787,99.50000047683716,100.0],[22.5,22.5,22.5,22.5,22.5,22.5,22.5,22.5,22.5,22.5,22.5,22.5,22.5,30.0,37.5,45.0,60.50000011920928,76.00000023841858,91.50000035762787,100.0,100.0],[38.00000011920929,38.00000011920929,38.00000011920929,38.00000011920929,38.00000011920929,38.00000011920929,38.00000011920929,38.00000011920929,38.00000011920929,38.00000011920929,38.00000011920929,38.00000011920929,38.00000011920929,45.50000011920929,53.00000011920929,60.50000011920928,76.00000023841858,91.50000035762787,100.0,100.0,100.0],[53.50000023841858,53.50000023841858,53.50000023841858,53.50000023841858,53.50000023841858,53.50000023841858,53.50000023841858,53.50000023841858,53.50000023841858,53.50000023841858,53.50000023841858,53.50000023841858,53.50000023841858,61.000000238418586,68.50000023841858,76.00000023841858,91.50000035762787,100.0,100.0,100.0,100.0],[69.00000035762787,69.00000035762787,69.00000035762787,69.00000035762787,69.00000035762787,69.00000035762787,69.00000035762787,69.00000035762787,69.00000035762787,69.00000035762787,69.00000035762787,69.00000035762787,69.00000035762787,76.50000035762787,84.00000035762787,91.50000035762787,100.0,100.0,100.0,100.0,100.0],[84.50000047683716,84.50000047683716,84.50000047683716,84.50000047683716,84.50000047683716,84.50000047683716,84.50000047683716,84.50000047683716,84.50000047683716,84.50000047683716,84.50000047683716,84.50000047683716,84.50000047683716,92.00000047683716,99.50000047683716,100.0,100.0,100.0,100.0,100.0,100.0],[100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0]],"co2Gain":2.5,"co2Break":55.0,"external":true},"circulation":{"driven":"surface","dims":["temp","humidity"],"bandDims":["temp","humidity"],"adapter":{"type":"pwm_pair","center_ch":0,"wall_ch":1,"center_scale":1.0,"wall_scale":0.8},"slewNormal":30.0,"slewFast":60.0,"floor":30.0,"emergencyValue":100.0,"safeState":100.0,"raw":[[80.0,75.0,70.0,65.0,60.0,55.00000000000001,50.0,45.0,40.0,40.0,40.0,40.0,40.0,45.0,50.0,55.00000000000001,60.0,65.0,70.0,75.0,80.0],[75.0,70.0,65.0,60.0,55.00000000000001,50.0,45.0,40.0,35.0,35.0,35.0,35.0,35.0,40.0,45.0,50.0,55.00000000000001,60.0,65.0,70.0,75.0],[70.0,65.0,60.0,55.00000000000001,50.0,45.0,40.0,35.0,30.0,30.0,30.0,30.0,30.0,35.0,40.0,45.0,50.0,55.00000000000001,60.0,65.0,70.0],[65.0,60.0,55.00000000000001,50.0,45.0,40.0,35.0,30.0,25.0,25.0,25.0,25.0,25.0,30.0,35.0,40.0,45.0,50.0,55.00000000000001,60.0,65.0],[60.0,55.00000000000001,50.0,45.0,40.0,35.0,30.0,25.0,20.0,20.0,20.0,20.0,20.0,25.0,30.0,35.0,40.0,45.0,50.0,55.00000000000001,60.0],[55.00000000000001,50.0,45.0,40.0,35.0,30.0,25.0,20.0,15.0,15.0,15.0,15.0,15.0,20.0,25.0,30.0,35.0,40.0,45.0,50.0,55.00000000000001],[50.0,45.0,40.0,35.0,30.0,25.0,20.0,15.0,10.0,10.0,10.0,10.0,10.0,15.0,20.0,25.0,30.0,35.0,40.0,45.0,50.0],[45.0,40.0,35.0,30.0,25.0,20.0,15.0,10.0,5.0,5.0,5.0,5.0,5.0,10.0,15.0,20.0,25.0,30.0,35.0,40.0,45.0],[40.0,35.0,30.0,25.0,20.0,15.0,10.0,5.0,0.0,0.0,0.0,0.0,0.0,5.0,10.0,15.0,20.0,25.0,30.0,35.0,40.0],[40.0,35.0,30.0,25.0,20.0,15.0,10.0,5.0,0.0,0.0,0.0,0.0,0.0,5.0,10.0,15.0,20.0,25.0,30.0,35.0,40.0],[40.0,35.0,30.0,25.0,20.0,15.0,10.0,5.0,0.0,0.0,0.0,0.0,0.0,5.0,10.0,15.0,20.0,25.0,30.0,35.0,40.0],[40.0,35.0,30.0,25.0,20.0,15.0,10.0,5.0,0.0,0.0,0.0,0.0,0.0,5.0,10.0,15.0,20.0,25.0,30.0,35.0,40.0],[40.0,35.0,30.0,25.0,20.0,15.0,10.0,5.0,0.0,0.0,0.0,0.0,0.0,5.0,10.0,15.0,20.0,25.0,30.0,35.0,40.0],[45.0,40.0,35.0,30.0,25.0,20.0,15.0,10.0,5.0,5.0,5.0,5.0,5.0,10.0,15.0,20.0,25.0,30.0,35.0,40.0,45.0],[50.0,45.0,40.0,35.0,30.0,25.0,20.0,15.0,10.0,10.0,10.0,10.0,10.0,15.0,20.0,25.0,30.0,35.0,40.0,45.0,50.0],[55.00000000000001,50.0,45.0,40.0,35.0,30.0,25.0,20.0,15.0,15.0,15.0,15.0,15.0,20.0,25.0,30.0,35.0,40.0,45.0,50.0,55.00000000000001],[60.0,55.00000000000001,50.0,45.0,40.0,35.0,30.0,25.0,20.0,20.0,20.0,20.0,20.0,25.0,30.0,35.0,40.0,45.0,50.0,55.00000000000001,60.0],[65.0,60.0,55.00000000000001,50.0,45.0,40.0,35.0,30.0,25.0,25.0,25.0,25.0,25.0,30.0,35.0,40.0,45.0,50.0,55.00000000000001,60.0,65.0],[70.0,65.0,60.0,55.00000000000001,50.0,45.0,40.0,35.0,30.0,30.0,30.0,30.0,30.0,35.0,40.0,45.0,50.0,55.00000000000001,60.0,65.0,70.0],[75.0,70.0,65.0,60.0,55.00000000000001,50.0,45.0,40.0,35.0,35.0,35.0,35.0,35.0,40.0,45.0,50.0,55.00000000000001,60.0,65.0,70.0,75.0],[80.0,75.0,70.0,65.0,60.0,55.00000000000001,50.0,45.0,40.0,40.0,40.0,40.0,40.0,45.0,50.0,55.00000000000001,60.0,65.0,70.0,75.0,80.0]]},"growlight":{"driven":"tod","dims":["temp","humidity"],"bandDims":[],"adapter":{"type":"growlight","pin_key":"relay_growlight","dac_i2c_address":96,"dac_max_pct":91,"on_above":50.0,"off_below":40.0,"min_on_s":60,"min_off_s":60},"slewNormal":100.0,"slewFast":100.0,"floor":0.0,"emergencyValue":0.0,"safeState":0.0,"raw":null,"lightLevelDay":80.0,"dimmable":false}},"profiles":{"cubensis":{"category":"mushroom","day":{"temp":{"at_0":16.0,"at_50":24.0,"at_100":30.0},"humidity":{"at_0":75.0,"at_50":92.0,"at_100":100.0},"co2":{"at_0":0.0,"at_50":600.0,"at_100":2000.0}},"night":{"temp":{"at_0":15.0,"at_50":23.0,"at_100":29.0},"humidity":{"at_0":75.0,"at_50":92.0,"at_100":100.0},"co2":{"at_0":0.0,"at_50":600.0,"at_100":2000.0}}},"oyster":{"category":"mushroom","day":{"temp":{"at_0":10.0,"at_50":18.0,"at_100":26.0},"humidity":{"at_0":70.0,"at_50":87.0,"at_100":98.0},"co2":{"at_0":0.0,"at_50":600.0,"at_100":2000.0}},"night":{"temp":{"at_0":10.0,"at_50":17.0,"at_100":25.0},"humidity":{"at_0":70.0,"at_50":87.0,"at_100":98.0},"co2":{"at_0":0.0,"at_50":700.0,"at_100":2000.0}}},"lions_mane":{"category":"mushroom","day":{"temp":{"at_0":12.0,"at_50":20.0,"at_100":28.0},"humidity":{"at_0":80.0,"at_50":92.0,"at_100":100.0},"co2":{"at_0":0.0,"at_50":700.0,"at_100":2000.0}},"night":{"temp":{"at_0":12.0,"at_50":19.0,"at_100":27.0},"humidity":{"at_0":80.0,"at_50":92.0,"at_100":100.0},"co2":{"at_0":0.0,"at_50":800.0,"at_100":2000.0}}},"seedling":{"category":"plant","day":{"temp":{"at_0":16.0,"at_50":24.0,"at_100":32.0},"humidity":{"at_0":50.0,"at_50":70.0,"at_100":95.0},"co2":{"at_0":350.0,"at_50":800.0,"at_100":1600.0}},"night":{"temp":{"at_0":14.0,"at_50":20.0,"at_100":28.0},"humidity":{"at_0":50.0,"at_50":70.0,"at_100":95.0},"co2":{"at_0":350.0,"at_50":800.0,"at_100":1600.0}}},"cannabis":{"category":"plant","day":{"temp":{"at_0":18.0,"at_50":26.0,"at_100":32.0},"humidity":{"at_0":35.0,"at_50":55.0,"at_100":75.0},"co2":{"at_0":400.0,"at_50":1000.0,"at_100":1600.0}},"night":{"temp":{"at_0":15.0,"at_50":20.0,"at_100":28.0},"humidity":{"at_0":35.0,"at_50":55.0,"at_100":75.0},"co2":{"at_0":400.0,"at_50":800.0,"at_100":1400.0}}},"bellpepper":{"category":"plant","day":{"temp":{"at_0":16.0,"at_50":24.0,"at_100":32.0},"humidity":{"at_0":45.0,"at_50":65.0,"at_100":85.0},"co2":{"at_0":400.0,"at_50":800.0,"at_100":1500.0}},"night":{"temp":{"at_0":12.0,"at_50":18.0,"at_100":26.0},"humidity":{"at_0":45.0,"at_50":65.0,"at_100":85.0},"co2":{"at_0":400.0,"at_50":800.0,"at_100":1500.0}}}},"activeProfile":"cubensis","edgeMinor":20.0,"edgeConflict":30.0,"edgeEmergency":40.0,"edgeLatch":50.0,"escalation":{"temp":{"high":true,"low":false},"humidity":{"high":true,"low":false},"co2":{"high":false,"low":false}},"latch":{"enter_ticks":3,"release_max":30,"release_ticks":3,"min_s":300},"conflicts":[{"when":[["humidity","above",30.0],["temp","above",30.0]],"force":{"humidifier":0.0},"prefer":{"exhaust":60.0,"cooler":100.0}}],"tickS":30,"externalSensor":{"enabled":false,"fullDeltaC":3.0,"minFactor":0.2,"fullDeltaRh":10.0,"minFactorRh":0.4}}</script>
+<script>
+
+"use strict";
+const D = JSON.parse(document.getElementById("regdata").textContent);
+const G = D.grid, N = G.length;
+const SEQ = ["#cde2fb","#b7d3f6","#9ec5f4","#86b6ef","#6da7ec","#5598e7","#3987e5",
+             "#2a78d6","#256abf","#1c5cab","#184f95","#104281","#0d366b"];
+
+const el = id => document.getElementById(id);
+const fmt = (v, d) => (v === null || v === undefined) ? "—" : Number(v).toFixed(d === undefined ? 1 : d);
+
+let state = {
+  reg: "exhaust",
+  profile: D.activeProfile,
+  b: 1.0,
+  co2dev: 50,
+  sel: null
+};
+
+/* ---------- deviation <-> physical ---------------------------------- */
+
+function anchors(dim) {
+  const p = D.profiles[state.profile], b = state.b;
+  const day = p.day[dim], night = p.night[dim];
+  return {
+    a0:   night.at_0   + b * (day.at_0   - night.at_0),
+    a50:  night.at_50  + b * (day.at_50  - night.at_50),
+    a100: night.at_100 + b * (day.at_100 - night.at_100)
+  };
+}
+function devToPhys(dev, a) {
+  return dev <= 50 ? a.a0 + (dev / 50) * (a.a50 - a.a0)
+                   : a.a50 + ((dev - 50) / 50) * (a.a100 - a.a50);
+}
+function physLabel(dev, dim) {
+  const a = anchors(dim), v = devToPhys(dev, a);
+  const dp = dim === "co2" ? 0 : 1;
+  return v.toFixed(dp) + " " + D.dimUnits[dim];
+}
+// Render a conflict rule's when-clause in the operator's language, so the
+// explanation stays true if a second rule is ever added to config.py.
+function describeWhen(when) {
+  return when.map(([dim, op, thresh]) =>
+    `${D.dimLabels[dim]} ≥ ${thresh} ${op} ideal`).join(" and ");
+}
+
+/* ---------- pipeline (mirrors engine + arbiter + adapters) ---------- */
+
+const severity = d => Math.abs(d - 50);
+const clamp = v => v < 0 ? 0 : (v > 100 ? 100 : v);
+
+// Deviations for one cell, keyed by dimension name. The two grid axes are the
+// selected regulator's own dims; CO2 always comes from the slider.
+function cellDevs(reg, xi, yi) {
+  const R = D.regulators[reg];
+  const devs = { co2: state.co2dev };
+  devs[R.dims[0]] = G[xi];
+  devs[R.dims[1]] = G[yi];
+  return devs;
+}
+
+// The external-effectiveness multiplier is always 1.0 here. With the sensor
+// disabled that is exactly what the engine does. With it ENABLED the engine
+// would derive the factor from a live outside reading, which a static plot has
+// no way to supply — so the plot shows the un-gated command and says so.
+function externalMult(reg) {
+  return 1.0;
+}
+// Worst case the device could apply, for the caveat text.
+function externalMultRange() {
+  return D.externalSensor.minFactor * D.externalSensor.minFactorRh;
+}
+
+function organicCommand(reg, xi, yi) {
+  const R = D.regulators[reg];
+  if (R.driven === "tod") return clamp(state.b * R.lightLevelDay);
+  return R.raw[xi][yi];
+}
+
+function pipeline(reg, xi, yi) {
+  const R = D.regulators[reg];
+  const devs = cellDevs(reg, xi, yi);
+  const raw = organicCommand(reg, xi, yi);
+
+  // Stage 2b — CO2 additive term (exhaust only) then the external multiplier.
+  let co2Term = 0, extMult = 1.0, val = raw;
+  if (reg === "exhaust") {
+    const over = devs.co2 - R.co2Break;
+    if (over > 0) co2Term = R.co2Gain * over;
+    val = raw + co2Term;
+    extMult = externalMult(reg);
+    val = clamp(val * extMult);
+  }
+  const afterCo2 = val;
+
+  // Stage 3 — floor, forced when the regulator's own band severity reaches the
+  // minor edge. Slew is skipped (temporal); out starts at the organic target.
+  let regSev = 0;
+  for (const d of R.bandDims) regSev = Math.max(regSev, severity(devs[d]));
+  let floored = val, floorFired = false;
+  if (R.bandDims.length && regSev >= D.edgeMinor && val < R.floor) {
+    floored = R.floor; floorFired = true;
+  }
+
+  // Stage 4 — conflict rules, gated on GLOBAL severity reaching the conflict
+  // edge. Applied after the floor, matching the arbiter's ordering.
+  let gmax = 0;
+  for (const d of D.dimOrder) if (devs[d] !== undefined) gmax = Math.max(gmax, severity(devs[d]));
+  // A rule can apply to this cell without moving the value (a `prefer` whose
+  // max is already met). Those cells are still marked — the rule IS live there
+  // — with the panel spelling out that it changed nothing.
+  let out = floored, conflictFired = false, conflictWhy = "", conflictWhen = "";
+  if (gmax >= D.edgeConflict) {
+    for (const rule of D.conflicts) {
+      let ok = true;
+      for (const [dim, op, thresh] of rule.when) {
+        const d = devs[dim];
+        if (d === undefined) { ok = false; break; }
+        if (op === "above" ? (d - 50 < thresh) : (50 - d < thresh)) { ok = false; break; }
+      }
+      if (!ok) continue;
+      if (reg in rule.force) {
+        conflictFired = true;
+        conflictWhy = out === rule.force[reg] ? "forced (already at value)" : "forced";
+        conflictWhen = describeWhen(rule.when);
+        out = rule.force[reg];
+      }
+      if (reg in rule.prefer) {
+        conflictFired = true;
+        conflictWhen = describeWhen(rule.when);
+        if (out < rule.prefer[reg]) { out = rule.prefer[reg]; conflictWhy = "preferred (max)"; }
+        else conflictWhy = "preferred (max) — already higher, no change";
+      }
+    }
+  }
+  const command = out;
+
+  // Escalation — which cells WOULD fire the emergency / latch vectors. Only
+  // the directions marked in config.escalation count, so this is deliberately
+  // not the same as the global severity above.
+  let esc = 0;
+  for (const d of D.dimOrder) {
+    const dv = devs[d];
+    if (dv === undefined) continue;
+    const allowed = dv > 50 ? D.escalation[d].high : (dv < 50 ? D.escalation[d].low : false);
+    if (allowed) esc = Math.max(esc, severity(dv));
+  }
+  // Escalation is a property of the DEVIATIONS, not of the regulator: the
+  // arbiter applies the emergency / safe vectors to every regulator whose hold
+  // mask is set, regardless of its band dims. So the growlight gets the overlay
+  // too — its command is ToD-driven and flat, but an emergency still forces it
+  // to its emergency_value, and that varies across the temp/humidity grid.
+
+  // Stage 5 — the adapter.
+  const ad = adapt(R, command);
+
+  return {
+    raw, co2Term, extMult, afterCo2, floored, floorFired, regSev, gmax,
+    command, conflictFired, conflictWhy, conflictWhen, devs,
+    esc, escEmergency: esc >= D.edgeEmergency,
+    escLatch: esc >= D.edgeLatch,
+    ...ad
+  };
+}
+
+// Adapter transforms. Relay-backed actuators have no prior state in a static
+// grid, so the band between off_below and on_above is reported as undetermined
+// rather than guessed.
+function adapt(R, command) {
+  const a = R.adapter;
+  if (a.type === "pwm") {
+    const duty = clamp(command);
+    return { kind: "pwm", duty, state: duty > 0 ? "on" : "off" };
+  }
+  if (a.type === "pwm_pair") {
+    return {
+      kind: "pwm_pair", duty: clamp(command * a.center_scale),
+      center: clamp(command * a.center_scale), wall: clamp(command * a.wall_scale),
+      state: command > 0 ? "on" : "off"
+    };
+  }
+  if (a.type === "heater") {
+    const duty = clamp(command);
+    return { kind: "heater", duty, state: duty > 0 ? "on" : "off" };
+  }
+  // relay + growlight (relay-only mode) share the hysteresis comparison.
+  // The comparisons are the adapter's own: strictly ABOVE on_above switches on,
+  // strictly BELOW off_below switches off. A command sitting exactly on either
+  // threshold holds, so it belongs in the undetermined band, not in ON.
+  const dimmable = a.type === "growlight" && R.dimmable;
+  if (command > a.on_above) {
+    const duty = dimmable ? Math.min(command, a.dac_max_pct) : 100;
+    return { kind: a.type, duty, state: "on" };
+  }
+  if (command < a.off_below) return { kind: a.type, duty: 0, state: "off" };
+  return { kind: a.type, duty: null, state: "band" };
+}
+
+/* ---------- colour ---------------------------------------------------- */
+
+function colourFor(r) {
+  if (r.state === "band") return SEQ[6];
+  if (r.duty === null) return SEQ[0];
+  const i = Math.min(SEQ.length - 1, Math.max(0, Math.round(r.duty / 100 * (SEQ.length - 1))));
+  return SEQ[i];
+}
+
+/* ---------- render ---------------------------------------------------- */
+
+function buildControls() {
+  const reg = el("reg");
+  reg.innerHTML = D.regNames.map(n => `<option value="${n}">${n}</option>`).join("");
+  reg.value = state.reg;
+  const prof = el("prof");
+  prof.innerHTML = Object.keys(D.profiles)
+    .map(n => `<option value="${n}">${n} (${D.profiles[n].category})</option>`).join("");
+  prof.value = state.profile;
+  el("rampbar").innerHTML = SEQ.map(c => `<span style="background:${c}"></span>`).join("");
+
+  reg.onchange = () => { state.reg = reg.value; state.sel = null; render(); };
+  prof.onchange = () => { state.profile = prof.value; render(); };
+  el("tod").oninput = e => { state.b = parseFloat(e.target.value); render(); };
+  el("co2").oninput = e => { state.co2dev = parseInt(e.target.value, 10); render(); };
+}
+
+function render() {
+  const reg = state.reg, R = D.regulators[reg];
+  const isExhaust = reg === "exhaust";
+
+  // CO2 slider is only wired to the exhaust — grey it out everywhere else.
+  const cc = el("co2Ctl");
+  cc.classList.toggle("disabled", !isExhaust);
+  el("co2").disabled = !isExhaust;
+  el("co2Out").textContent = "dev " + state.co2dev + " — " + physLabel(state.co2dev, "co2")
+    + (isExhaust ? "" : " — no effect on " + reg);
+
+  el("todOut").textContent = "b = " + state.b.toFixed(2) + " — "
+    + (state.b >= 1 ? "full day" : state.b <= 0 ? "full night" : "transition");
+
+  // Axes.
+  const dx = R.dims[0], dy = R.dims[1];
+  el("xlab").textContent = D.dimLabels[dx] + " deviation → (" + D.dimUnits[dx] + ")";
+  el("ylab").textContent = D.dimLabels[dy] + " deviation → (" + D.dimUnits[dy] + ")";
+  el("xticks").innerHTML = G.map(v =>
+    `<div class="xtick">${v} · ${physLabel(v, dx)}</div>`).join("");
+  el("yticks").innerHTML = G.map(v =>
+    `<div class="ytick">${v} · ${physLabel(v, dy)}</div>`).join("");
+
+  el("chartTitle").textContent = reg + " — final effective duty";
+  el("chartNote").textContent = chartNote(R, reg);
+
+  // Cells. Row 1 of the CSS grid is the TOP row, so y descends down the DOM.
+  const heat = el("heat");
+  const frag = document.createDocumentFragment();
+  const results = [];
+  for (let yi = N - 1; yi >= 0; yi--) {
+    for (let xi = 0; xi < N; xi++) {
+      const r = pipeline(reg, xi, yi);
+      results.push(r);
+      const c = document.createElement("div");
+      c.className = "cell"
+        + (r.state === "band" ? " band" : "")
+        + (r.escEmergency ? " escalate" : "")
+        + (r.conflictFired ? " conflict" : "")
+        + (state.sel && state.sel[0] === xi && state.sel[1] === yi ? " sel" : "");
+      c.style.background = colourFor(r);
+      c.title = `${D.dimLabels[dx]} dev ${G[xi]} · ${D.dimLabels[dy]} dev ${G[yi]}\n`
+        + `raw ${fmt(r.raw)} → final ${r.duty === null ? "history-dependent" : fmt(r.duty) + "%"}`;
+      c.onclick = () => { state.sel = [xi, yi]; render(); };
+      frag.appendChild(c);
+    }
+  }
+  heat.replaceChildren(frag);
+
+  renderAgg(reg, R, results);
+  renderDetail(reg, R);
+}
+
+function chartNote(R, reg) {
+  if (R.driven === "tod") {
+    return "No surface: the grow light is driven by the time-of-day blend alone, so the grid is "
+      + "uniform. The axes are drawn only as a frame — move the ToD slider to change the value.";
+  }
+  if (R.driven === "follower") {
+    return "No surface of its own: the command is the heater's organic command × "
+      + R.followerGain + " + " + R.followerFloor + ", so the shape follows the heater.";
+  }
+  if (reg === "exhaust") {
+    return "PWM duty as commanded (pre-inversion — the PCA9685 invert flag lives in the output "
+      + "driver and does not change this number). The CO₂ slider adds its term on top of this "
+      + "surface.";
+  }
+  if (R.adapter.type === "pwm" || R.adapter.type === "pwm_pair") {
+    return "PWM duty as commanded (pre-inversion — the PCA9685 invert flag lives in the output "
+      + "driver and does not change this number).";
+  }
+  if (R.adapter.type === "heater") {
+    return "Time-proportioned over a " + R.adapter.window_s + " s window, so the plotted duty is the "
+      + "average — the MOSFET itself is on/off.";
+  }
+  return "Relay actuator: the output is binary. Cells above on_above are ON; below off_below "
+    + "are OFF; the hatched band in between — thresholds included — depends on the previous state.";
+}
+
+function renderAgg(reg, R, results) {
+  el("aggTitle").textContent = reg + " — config & sampled grid";
+  const a = R.adapter;
+
+  const raws = results.map(r => r.raw);
+  const det = results.filter(r => r.duty !== null).map(r => r.duty);
+  const bandCount = results.filter(r => r.state === "band").length;
+  const escCount = results.filter(r => r.escEmergency).length;
+  const latchCount = results.filter(r => r.escLatch).length;
+  const cflCount = results.filter(r => r.conflictFired).length;
+  const stat = arr => arr.length
+    ? { min: Math.min(...arr), max: Math.max(...arr), mean: arr.reduce((s, v) => s + v, 0) / arr.length }
+    : { min: null, max: null, mean: null };
+  const sr = stat(raws), sf = stat(det);
+
+  let h = `<div class="tiles">
+    <div class="tile"><div class="t">final min</div><div class="v">${fmt(sf.min)}<span class="u">%</span></div></div>
+    <div class="tile"><div class="t">final mean</div><div class="v">${fmt(sf.mean)}<span class="u">%</span></div></div>
+    <div class="tile"><div class="t">final max</div><div class="v">${fmt(sf.max)}<span class="u">%</span></div></div>
+    <div class="tile"><div class="t">cells</div><div class="v">${results.length}</div></div>
+  </div>
+  <table class="kv">
+    <tr class="sect"><td colspan="2">Raw surface (sampled)</td></tr>
+    <tr><td>min / mean / max</td><td>${fmt(sr.min)} / ${fmt(sr.mean)} / ${fmt(sr.max)}</td></tr>`;
+
+  if (bandCount) {
+    h += `<tr><td>history-dependent cells</td><td>${bandCount} (excluded from final stats)</td></tr>`;
+  }
+  h += `<tr><td>cells that would escalate</td><td>${escCount} emergency / ${latchCount} latch</td></tr>
+    <tr><td>cells hit by a conflict rule</td><td>${cflCount}</td></tr>
+
+    <tr class="sect"><td colspan="2">Arbitration (config.py)</td></tr>
+    <tr><td>driven</td><td>${R.driven}</td></tr>
+    <tr><td>floor</td><td>${fmt(R.floor)} (forced at severity ≥ ${fmt(D.edgeMinor, 0)})</td></tr>
+    <tr><td>emergency_value</td><td>${R.emergencyValue === null ? "None — free" : fmt(R.emergencyValue)}</td></tr>
+    <tr><td>safe_state</td><td>${R.safeState === null ? "None — free" : fmt(R.safeState)}</td></tr>
+    <tr><td>slew_normal / slew_fast</td><td>${fmt(R.slewNormal)} / ${fmt(R.slewFast)} per tick</td></tr>
+    <tr><td>band dims</td><td>${R.bandDims.length ? R.bandDims.join(", ") : "— (band 0)"}</td></tr>
+
+    <tr class="sect"><td colspan="2">Adapter — ${a.type}</td></tr>`;
+
+  if (a.pin_key) h += `<tr><td>pin_key</td><td><code>${a.pin_key}</code></td></tr>`;
+  if (a.pca9685_ch !== undefined) h += `<tr><td>PCA9685 channel</td><td>${a.pca9685_ch}</td></tr>`;
+  if (a.center_ch !== undefined) {
+    h += `<tr><td>channels</td><td>center ch${a.center_ch} × ${a.center_scale}, `
+      + `wall ch${a.wall_ch} × ${a.wall_scale}</td></tr>`;
+  }
+  if (a.on_above !== undefined) {
+    h += `<tr><td>on_above / off_below</td><td>${fmt(a.on_above)} / ${fmt(a.off_below)}</td></tr>`;
+  }
+  if (a.window_s !== undefined) h += `<tr><td>window_s</td><td>${a.window_s} s</td></tr>`;
+  if (a.min_on_s !== undefined) {
+    h += `<tr><td>min_on_s / min_off_s</td><td>${a.min_on_s} s / ${a.min_off_s} s</td></tr>`;
+  }
+  if (a.dac_max_pct !== undefined) {
+    h += `<tr><td>dac_max_pct</td><td>${a.dac_max_pct} % `
+      + `${R.dimmable ? "(applied)" : "(unused — relay-only mode)"}</td></tr>`;
+  }
+
+  if (reg === "exhaust") {
+    const ca = anchors("co2");
+    const devDead = R.co2Break;
+    // co2_gain of 0 is a legal config value and disables the term entirely.
+    const devFloor = R.co2Gain > 0 ? R.co2Break + R.floor / R.co2Gain : null;
+    const devSat = R.co2Gain > 0 ? Math.min(100, R.co2Break + 100 / R.co2Gain) : null;
+    const ppmAt = d => d === null || d > 100
+      ? "never within this profile's range" : `dev ${fmt(d)} · ${devToPhys(d, ca).toFixed(0)} ppm`;
+    h += `<tr class="sect"><td colspan="2">CO₂ term (exhaust only)</td></tr>
+      <tr><td>co2_gain / co2_break</td><td>${fmt(R.co2Gain, 2)} / ${fmt(R.co2Break)}</td></tr>
+      <tr><td>deadband ends</td><td>${ppmAt(devDead)}</td></tr>
+      <tr><td>term clears the floor (${fmt(R.floor)})</td><td>${ppmAt(devFloor)}</td></tr>
+      <tr><td>term saturates (100)</td><td>${ppmAt(devSat)}</td></tr>
+      <tr><td>external multiplier</td><td>${D.externalSensor.enabled
+        ? "enabled — NOT modelled (needs a live outside reading); device range ×"
+          + fmt(externalMultRange(), 2) + "–1.00"
+        : "sensor disabled — constant 1.0"}</td></tr>`;
+  }
+  h += `</table>`;
+
+  h += `<p class="warn">Not drawn per cell: slew limiting (${fmt(R.slewNormal)} / ${fmt(R.slewFast)} per
+    ${D.tickS} s tick) needs the previous command, and emergency / latch need
+    ${D.latch.enter_ticks} consecutive ticks past the escalation edge. Escalation is gated to
+    ${Object.keys(D.escalation).filter(d => D.escalation[d].high || D.escalation[d].low)
+      .map(d => D.dimLabels[d] + (D.escalation[d].high ? " high" : "") + (D.escalation[d].low ? " low" : ""))
+      .join(", ") || "nothing"} — outlined cells are where that gated severity reaches
+    ${fmt(D.edgeEmergency, 0)}.</p>`;
+  el("agg").innerHTML = h;
+}
+
+function renderDetail(reg, R) {
+  if (!state.sel) { el("detail").innerHTML = `<p class="empty">Click a cell in the grid.</p>`; return; }
+  const [xi, yi] = state.sel;
+  const r = pipeline(reg, xi, yi);
+  const dx = R.dims[0], dy = R.dims[1];
+  const finalTxt = r.duty === null ? "history" : fmt(r.duty) + "%";
+
+  const bar = (label, value, colour) => {
+    const w = value === null ? 0 : Math.max(0, Math.min(100, value));
+    return `<div class="barrow"><span>${label}</span>
+      <div class="bartrack"><div class="barfill" style="width:${w}%;background:${colour}"></div></div>
+      <span class="barval">${value === null ? "—" : fmt(value)}</span></div>`;
+  };
+
+  let h = `<table class="kv">
+    <tr><td>${D.dimLabels[dx]} deviation</td><td>${G[xi]} · ${physLabel(G[xi], dx)}</td></tr>
+    <tr><td>${D.dimLabels[dy]} deviation</td><td>${G[yi]} · ${physLabel(G[yi], dy)}</td></tr>
+    <tr><td>CO₂ deviation</td><td>${state.co2dev} · ${physLabel(state.co2dev, "co2")}</td></tr>
+    <tr><td>severity (this regulator / global)</td><td>${fmt(r.regSev)} / ${fmt(r.gmax)}</td></tr>
+  </table>
+  <div class="bars">
+    ${bar("raw surface", r.raw, "var(--seq-300)")}
+    ${reg === "exhaust" ? bar("+ CO₂ term", r.afterCo2, "var(--seq-400)") : ""}
+    ${bar("after floor/conflict", r.command, "var(--seq-500)")}
+    ${bar("final duty", r.duty, "var(--accent)")}
+  </div>
+  <div class="stage"><span class="n">raw surface output</span><span class="v">${fmt(r.raw)}</span></div>`;
+
+  if (reg === "exhaust") {
+    h += `<div class="stage"><span class="n">CO₂ term (gain ${fmt(R.co2Gain, 2)} ×
+      relu(dev − ${fmt(R.co2Break)}))</span>
+      <span class="v">${r.co2Term > 0 ? "+" + fmt(r.co2Term) : "0.0"}</span>
+      ${r.co2Term === 0
+        ? `<span class="note">inside the CO₂ deadband — the term contributes nothing here</span>`
+        : ""}
+      </div>
+      <div class="stage"><span class="n">× external multiplier</span><span class="v">${fmt(r.extMult, 2)}</span>
+      <span class="note">${D.externalSensor.enabled
+        ? `external sensor ENABLED in config: the device derives this from a live outside reading and `
+          + `could scale the command as low as ×${fmt(externalMultRange(), 2)}. A static plot has no `
+          + `outside reading, so this shows the un-gated command.`
+        : `external sensor disabled in config — the engine uses a constant 1.0`}</span>
+      </div>`;
+  }
+
+  h += `<div class="stage"><span class="n">after floor${r.floorFired ? " — <strong>floor applied</strong>" : ""}</span>
+      <span class="v">${fmt(r.floored)}</span>
+      ${r.floorFired
+        ? `<span class="note">severity ${fmt(r.regSev)} ≥ ${fmt(D.edgeMinor, 0)} forced the
+           command up to the floor of ${fmt(R.floor)}</span>`
+        : ""}
+    </div>
+    <div class="stage"><span class="n">after conflict rules${r.conflictFired
+      ? " — <strong>" + r.conflictWhy + "</strong>" : ""}</span>
+      <span class="v">${fmt(r.command)}</span>
+      ${r.conflictFired ? `<span class="note">${r.conflictWhen}</span>` : ""}
+    </div>`;
+
+  // Adapter stage — say what the device actually does with that command.
+  let adNote = "";
+  if (r.kind === "pwm_pair") {
+    adNote = `center ch${R.adapter.center_ch} ${fmt(r.center)} % · wall ch${R.adapter.wall_ch} ${fmt(r.wall)} % `
+      + `(grid is coloured by the center channel)`;
+  } else if (r.kind === "heater") {
+    adNote = `time-proportioned: ${fmt(r.duty)} % of a ${R.adapter.window_s} s window, `
+      + `bounded by min_on_s ${R.adapter.min_on_s} s / min_off_s ${R.adapter.min_off_s} s`;
+  } else if (r.state === "band") {
+    adNote = `command ${fmt(r.command)} sits inside the hysteresis band `
+      + `(${fmt(R.adapter.off_below)}–${fmt(R.adapter.on_above)}, inclusive): the relay stays wherever it already was. `
+      + `min_on_s ${R.adapter.min_on_s} s / min_off_s ${R.adapter.min_off_s} s also gate the transition.`;
+  } else if (r.kind === "relay" || r.kind === "growlight") {
+    adNote = `command ${fmt(r.command)} is ${r.state === "on" ? "above on_above " + fmt(R.adapter.on_above)
+      : "below off_below " + fmt(R.adapter.off_below)} — relay ${r.state.toUpperCase()}`
+      + (r.kind === "growlight" && !R.dimmable
+        ? `; relay-only mode, so dac_max_pct ${R.adapter.dac_max_pct} % is unused` : "");
+  } else {
+    adNote = `PWM duty passes straight through to channel ${R.adapter.pca9685_ch}`;
+  }
+
+  h += `<div class="stage final"><span class="n">FINAL effective duty</span><span class="v">${finalTxt}</span>
+      <span class="note">${adNote}</span></div>`;
+
+  const delta = r.duty === null ? null : r.duty - r.raw;
+  if (delta !== null && Math.abs(delta) >= 0.05) {
+    h += `<p class="warn">Raw ${fmt(r.raw)} → final ${fmt(r.duty)}: a difference of
+      ${delta > 0 ? "+" : ""}${fmt(delta)} points. The organic surface is <strong>not</strong> what
+      the actuator does here.</p>`;
+  }
+  if (r.escEmergency) {
+    h += `<p class="warn">This cell would escalate: gated severity ${fmt(r.esc)} ≥
+      ${fmt(D.edgeEmergency, 0)}${r.escLatch ? ` (and ≥ the latch edge ${fmt(D.edgeLatch, 0)})` : ""},
+      held for ${D.latch.enter_ticks} ticks. The forced vector would then set this regulator to
+      <strong>${R.emergencyValue === null ? "free (keeps its organic command)" : fmt(R.emergencyValue) + " %"}</strong>
+      in emergency and <strong>${R.safeState === null ? "free" : fmt(R.safeState) + " %"}</strong> under latch,
+      overriding everything above.</p>`;
+  }
+  el("detail").innerHTML = h;
+}
+
+buildControls();
+render();
+
+</script>
+</body>
+</html>

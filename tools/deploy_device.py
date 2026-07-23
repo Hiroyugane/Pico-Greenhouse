@@ -201,6 +201,56 @@ def _display(path: Path) -> str:
         return str(path)
 
 
+def device_lib_files(*, mpremote: str = "mpremote") -> list[str]:
+    """Filenames currently in the device's /lib, or [] if it cannot be listed."""
+    result = _run_mpremote(["fs", "ls", ":lib"], mpremote=mpremote)
+    if result.returncode != 0:
+        return []
+    names = []
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        # "<size> <name>" rows; the header line ("ls :lib") has no size.
+        if len(parts) == 2 and parts[0].isdigit():
+            names.append(parts[1].rstrip("/"))
+    return names
+
+
+def stale_shadows(device_files: list[str], entries: list[tuple[Path, str]], frozen: list[str]) -> list[str]:
+    """Device /lib files that shadow a frozen module or are no longer shipped.
+
+    This is not housekeeping — it is correctness. Imports try ``lib.<mod>``
+    first, so a leftover ``lib/event_logger.mpy`` from a pre-freeze deploy wins
+    over the frozen copy and the freeze silently buys nothing for that module.
+    Nothing warns you: it imports, it runs, and only the heap figure is wrong.
+    """
+    shipped = {remote.split("/", 1)[1] for _src, remote in entries if remote.startswith("lib/")}
+    frozen_stems = set(frozen)
+    stale = []
+    for name in device_files:
+        if name in shipped:
+            continue
+        stem = name.rsplit(".", 1)[0]
+        if stem in frozen_stems or name.endswith((".py", ".mpy")):
+            stale.append(name)
+    return stale
+
+
+def prune(names: list[str], *, mpremote: str = "mpremote", dry_run: bool = False) -> int:
+    """Delete the given files from the device's /lib. Returns the count removed."""
+    removed = 0
+    for name in names:
+        if dry_run:
+            print(f"  rm     :lib/{name}")
+            removed += 1
+            continue
+        result = _run_mpremote(["fs", "rm", f":lib/{name}"], mpremote=mpremote)
+        if result.returncode != 0:
+            raise DeployError(f"could not remove :lib/{name} - {result.stderr.strip() or result.stdout.strip()}")
+        print(f"  removed lib/{name}")
+        removed += 1
+    return removed
+
+
 def _run_mpremote(args: list[str], *, mpremote: str) -> subprocess.CompletedProcess:
     return subprocess.run([mpremote, *args], capture_output=True, text=True)
 
@@ -245,6 +295,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--mpy-cross", default=None, help="mpy-cross to compile with (default: firmware's, then PATH)")
     parser.add_argument("--mpremote", default="mpremote", help="mpremote executable")
     parser.add_argument("--dry-run", action="store_true", help="List what would be sent; touch nothing")
+    parser.add_argument(
+        "--prune",
+        action="store_true",
+        help="Delete /lib files that shadow a frozen module or are no longer shipped",
+    )
     parser.add_argument("--allow-abi-mismatch", action="store_true", help="Skip the ABI check (you had better be sure)")
     args = parser.parse_args(argv)
 
@@ -281,6 +336,29 @@ def main(argv: list[str] | None = None) -> int:
                 mpy_cross=mpy_cross,
                 expected_abi=None if args.allow_abi_mismatch else abi,
             )
+        except DeployError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+
+    # Stale shadows are a correctness problem, not clutter: lib-first imports
+    # mean a leftover pre-freeze copy wins over the frozen module and the
+    # freeze silently buys nothing. Always report; delete only when asked.
+    try:
+        on_device = device_lib_files(mpremote=args.mpremote)
+        stale = stale_shadows(on_device, entries, frozen)
+    except DeployError:
+        stale = []
+    if stale:
+        print(f"\nstale on device: {len(stale)} file(s) in /lib that are no longer shipped")
+        for name in stale:
+            marker = "  <- SHADOWS A FROZEN MODULE" if name.rsplit(".", 1)[0] in frozen else ""
+            print(f"  lib/{name}{marker}")
+        if not args.prune:
+            print("Re-run with --prune to remove them (a shadow silently negates the freeze).")
+    if stale and args.prune:
+        print()
+        try:
+            prune(stale, mpremote=args.mpremote, dry_run=args.dry_run)
         except DeployError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1

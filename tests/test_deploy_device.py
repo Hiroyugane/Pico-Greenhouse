@@ -13,9 +13,12 @@ from tools.deploy_device import (  # noqa: E402
     DeployError,
     compile_set,
     deploy_set,
+    device_lib_files,
     mpy_abi_of,
+    prune,
     push,
     remote_dirs,
+    stale_shadows,
 )
 
 
@@ -219,3 +222,92 @@ class TestCli:
 
 def _uf2_unused():  # pragma: no cover - keeps struct import meaningful if extended
     return struct
+
+
+class TestStaleShadows:
+    """A leftover pre-freeze copy in /lib wins over the frozen module.
+
+    Nothing warns you when it happens: the module imports, the app runs, and
+    the only symptom is a heap figure that did not improve.
+    """
+
+    ENTRIES = [(Path("a"), "config.py"), (Path("b"), "lib/relay.mpy")]
+
+    def test_flags_a_shadow_of_a_frozen_module(self):
+        stale = stale_shadows(["event_logger.mpy", "relay.mpy"], self.ENTRIES, ["event_logger"])
+        assert stale == ["event_logger.mpy"]
+
+    def test_flags_a_module_no_longer_shipped(self):
+        stale = stale_shadows(["heater.mpy", "relay.mpy"], self.ENTRIES, [])
+        assert stale == ["heater.mpy"]
+
+    def test_keeps_everything_currently_shipped(self):
+        assert stale_shadows(["relay.mpy"], self.ENTRIES, ["event_logger"]) == []
+
+    def test_ignores_non_module_files(self):
+        assert stale_shadows(["notes.txt"], self.ENTRIES, []) == []
+
+
+class TestDeviceLibFiles:
+    def test_parses_an_mpremote_listing(self, monkeypatch):
+        def fake_run(args, *, mpremote):
+            class Result:
+                returncode = 0
+                stdout = "ls :lib\n        3793 event_logger.mpy\n         722 relay.mpy\n"
+                stderr = ""
+
+            return Result()
+
+        monkeypatch.setattr(deploy_device, "_run_mpremote", fake_run)
+        assert device_lib_files() == ["event_logger.mpy", "relay.mpy"]
+
+    def test_empty_when_lib_is_absent(self, monkeypatch):
+        def fake_run(args, *, mpremote):
+            class Result:
+                returncode = 1
+                stdout = ""
+                stderr = "no such directory"
+
+            return Result()
+
+        monkeypatch.setattr(deploy_device, "_run_mpremote", fake_run)
+        assert device_lib_files() == []
+
+
+class TestPrune:
+    def test_removes_each_file(self, monkeypatch):
+        calls = []
+
+        def fake_run(args, *, mpremote):
+            calls.append(args)
+
+            class Result:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+
+            return Result()
+
+        monkeypatch.setattr(deploy_device, "_run_mpremote", fake_run)
+        assert prune(["event_logger.mpy"]) == 1
+        assert calls == [["fs", "rm", ":lib/event_logger.mpy"]]
+
+    def test_dry_run_deletes_nothing(self, monkeypatch, capsys):
+        calls = []
+        monkeypatch.setattr(deploy_device, "_run_mpremote", lambda args, *, mpremote: calls.append(args))
+        assert prune(["event_logger.mpy"], dry_run=True) == 1
+        assert calls == []
+        assert "rm" in capsys.readouterr().out
+
+    def test_failure_raises(self, monkeypatch):
+        def fake_run(args, *, mpremote):
+            class Result:
+                returncode = 1
+                stdout = ""
+                stderr = "read-only"
+
+            return Result()
+
+        monkeypatch.setattr(deploy_device, "_run_mpremote", fake_run)
+        with pytest.raises(DeployError, match="could not remove"):
+            prune(["event_logger.mpy"])

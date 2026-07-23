@@ -19,9 +19,9 @@ from tools.gen_fw_info import (  # noqa: E402
 )
 
 
-def _fake_checkout(tmp_path: Path, define: str = "#define MPY_VERSION (6)") -> Path:
-    header = tmp_path / "py" / "mpconfig.h"
-    header.parent.mkdir(parents=True)
+def _fake_checkout(tmp_path: Path, define: str = "#define MPY_VERSION (6)", where: str = "py/persistentcode.h") -> Path:
+    header = tmp_path / where
+    header.parent.mkdir(parents=True, exist_ok=True)
     header.write_text(f"/* header */\n{define}\n#define MPY_SUB_VERSION (3)\n")
     return tmp_path
 
@@ -43,6 +43,19 @@ class TestReadMpyAbi:
         header.write_text("/* nothing useful here */\n")
         with pytest.raises(FwInfoError, match="no MPY_VERSION"):
             read_mpy_abi(tmp_path)
+
+    def test_reads_it_from_persistentcode_header(self, tmp_path):
+        """Where v1.28.0 keeps it — this is what broke the first real build."""
+        assert read_mpy_abi(_fake_checkout(tmp_path, where="py/persistentcode.h")) == 6
+
+    def test_falls_back_to_mpconfig_for_older_trees(self, tmp_path):
+        """Older releases defined it in py/mpconfig.h; both layouts must work."""
+        assert read_mpy_abi(_fake_checkout(tmp_path, where="py/mpconfig.h")) == 6
+
+    def test_prefers_persistentcode_when_both_exist(self, tmp_path):
+        _fake_checkout(tmp_path, define="#define MPY_VERSION 6", where="py/persistentcode.h")
+        _fake_checkout(tmp_path, define="#define MPY_VERSION 5", where="py/mpconfig.h")
+        assert read_mpy_abi(tmp_path) == 6
 
 
 class TestFields:

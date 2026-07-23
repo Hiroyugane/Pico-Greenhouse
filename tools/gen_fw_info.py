@@ -40,9 +40,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT = PROJECT_ROOT / "build" / "frozen" / "fw_info.py"
 DEFAULT_SOURCE_NAME = "upstream"
 
-# py/mpconfig.h carries `#define MPY_VERSION (6)` (parenthesised in some
-# releases, bare in others).
+# `#define MPY_VERSION (6)` — parenthesised in some releases, bare in others.
 _MPY_VERSION_RE = re.compile(r"^\s*#define\s+MPY_VERSION\s+\(?\s*(\d+)\s*\)?", re.MULTILINE)
+
+# Where that define lives has moved between releases: v1.28.0 keeps it in
+# py/persistentcode.h, older trees in py/mpconfig.h. Search both rather than
+# betting on one — a wrong ABI is worse than a failed build.
+_ABI_HEADERS = ("py/persistentcode.h", "py/mpconfig.h")
 
 
 class FwInfoError(Exception):
@@ -56,13 +60,18 @@ def read_mpy_abi(mpy_tree: Path) -> int:
     file it emits, and the same one a running firmware exposes as the low byte
     of ``sys.implementation._mpy``.
     """
-    header = mpy_tree / "py" / "mpconfig.h"
-    if not header.is_file():
-        raise FwInfoError(f"not a MicroPython checkout: {header} not found")
-    match = _MPY_VERSION_RE.search(header.read_text(encoding="utf-8", errors="replace"))
-    if match is None:
-        raise FwInfoError(f"no MPY_VERSION define found in {header}")
-    return int(match.group(1))
+    searched = []
+    for relative in _ABI_HEADERS:
+        header = mpy_tree / relative
+        searched.append(str(header))
+        if not header.is_file():
+            continue
+        match = _MPY_VERSION_RE.search(header.read_text(encoding="utf-8", errors="replace"))
+        if match is not None:
+            return int(match.group(1))
+    if not any((mpy_tree / relative).is_file() for relative in _ABI_HEADERS):
+        raise FwInfoError(f"not a MicroPython checkout: none of {', '.join(searched)} found")
+    raise FwInfoError(f"no MPY_VERSION define found in any of: {', '.join(searched)}")
 
 
 def _git_output(args: list[str], cwd: Path) -> str | None:

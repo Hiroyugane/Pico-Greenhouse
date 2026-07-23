@@ -269,6 +269,15 @@ $archiveUf2 = Join-Path $BuildDir "firmware-$fwVersion.uf2"
 Copy-Item $builtUf2 $targetUf2 -Force
 Copy-Item $builtUf2 $archiveUf2 -Force
 
+# A build can succeed and still be stock: if FROZEN_MANIFEST never reached the
+# port, make produces a perfectly good firmware with nothing frozen, and the
+# only symptom is a heap number that did not move. Check the image itself.
+Write-Step 'Verify the freeze took'
+$verifyArgs = @((Join-Path $PSScriptRoot 'verify_frozen_uf2.py'), $targetUf2, '--expect-version', $fwVersion)
+if ($FreezeTier2) { $verifyArgs += '--tier2' }
+& $Python $verifyArgs
+if ($LASTEXITCODE -ne 0) { throw 'freeze verification failed - do not flash this image' }
+
 $note = [ordered]@{
     firmware_version = $fwVersion
     mpy_abi          = [int]$mpyAbi

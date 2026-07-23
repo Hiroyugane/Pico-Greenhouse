@@ -16,7 +16,7 @@
 #   tools/build_firmware.sh
 #   tools/build_firmware.sh --repin
 #   tools/build_firmware.sh --freeze-only 'sdcard.py,ds3231.py'
-#   tools/build_firmware.sh --freeze-tier2
+#   tools/build_firmware.sh --tier1-only
 #   tools/build_firmware.sh --mpy-dir /path/to/micropython --jobs 8
 #
 # BEFORE FLASHING (plan section 3.1, non-negotiable):
@@ -41,7 +41,7 @@ FROZEN_DIR="$BUILD_DIR/frozen"
 MPY_DIR="${MPY_DIR:-$HOME/micropython}"
 REF_OVERRIDE=""
 REPIN=0
-FREEZE_TIER2=0
+TIER1_ONLY=0
 FREEZE_ONLY=""
 JOBS="$(nproc 2>/dev/null || echo 4)"
 
@@ -51,7 +51,7 @@ while [ $# -gt 0 ]; do
         --board)        BOARD="$2"; shift 2 ;;
         --ref)          REF_OVERRIDE="$2"; shift 2 ;;
         --repin)        REPIN=1; shift ;;
-        --freeze-tier2) FREEZE_TIER2=1; shift ;;
+        --tier1-only)   TIER1_ONLY=1; shift ;;
         --freeze-only)  FREEZE_ONLY="$2"; shift 2 ;;
         --jobs)         JOBS="$2"; shift 2 ;;
         -h|--help)      sed -n '2,30p' "${BASH_SOURCE[0]}"; exit 0 ;;
@@ -175,7 +175,7 @@ echo "firmware version: $FW_VERSION   (.mpy ABI $MPY_ABI)"
 step "Build ports/rp2 (BOARD=$BOARD)"
 export PG_REPO_DIR="$REPO_ROOT"
 export PG_FW_INFO_DIR="$FROZEN_DIR"
-if [ "$FREEZE_TIER2" = "1" ]; then export PG_FREEZE_TIER2=1; else unset PG_FREEZE_TIER2 || true; fi
+if [ "$TIER1_ONLY" = "1" ]; then export PG_FREEZE_TIER1_ONLY=1; else unset PG_FREEZE_TIER1_ONLY || true; fi
 if [ -n "$FREEZE_ONLY" ]; then export PG_FREEZE_ONLY="$FREEZE_ONLY"; else unset PG_FREEZE_ONLY || true; fi
 
 make -C "$MPY_DIR/ports/rp2" BOARD="$BOARD" FROZEN_MANIFEST="$MANIFEST_FILE" "-j$JOBS"
@@ -195,7 +195,7 @@ cp -f "$BUILT_UF2" "$ARCHIVE_UF2"
 # only symptom is a heap number that did not move. Check the image itself.
 step "Verify the freeze took"
 VERIFY_ARGS=(--expect-version "$FW_VERSION")
-[ "$FREEZE_TIER2" = "1" ] && VERIFY_ARGS+=(--tier2)
+[ "$TIER1_ONLY" = "1" ] && VERIFY_ARGS+=(--tier1-only)
 python3 "$SCRIPT_DIR/verify_frozen_uf2.py" "$TARGET_UF2" "${VERIFY_ARGS[@]}"
 
 python3 - "$BUILD_DIR/firmware-build.json" <<PYEOF
@@ -205,7 +205,7 @@ json.dump({
     "mpy_abi": int("$MPY_ABI"),
     "mpy_source": "$SOURCE_NAME@$TARGET_REF@$MPY_COMMIT",
     "board": "$BOARD",
-    "freeze_tier2": bool($FREEZE_TIER2),
+    "tier1_only": bool($TIER1_ONLY),
     "freeze_only": "$FREEZE_ONLY",
     "mpy_cross": "$MPY_CROSS",
     "built_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),

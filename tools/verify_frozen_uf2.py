@@ -20,7 +20,7 @@ Usage:
     python tools/verify_frozen_uf2.py build/firmware.uf2
     python tools/verify_frozen_uf2.py build/firmware.uf2 --expect-version pg-fw-2026.07-2c8353d
     python tools/verify_frozen_uf2.py build/firmware.uf2 --compare-stock build/rollback/stock.uf2
-    python tools/verify_frozen_uf2.py build/firmware.uf2 --tier2
+    python tools/verify_frozen_uf2.py build/firmware.uf2 --tier1-only
 
 Exit code 0 = the image matches the manifest; 1 = it does not (do not flash).
 
@@ -85,7 +85,7 @@ def uf2_payload(path: Path) -> bytes:
     return bytes(out)
 
 
-def frozen_module_names(manifest_path: Path | None = None, *, tier2: bool = False) -> list[str]:
+def frozen_module_names(manifest_path: Path | None = None, *, tier1_only: bool = False) -> list[str]:
     """The module basenames the freeze manifest declares, without executing it.
 
     The manifest is a MicroPython manifest file — executing it needs the
@@ -109,7 +109,7 @@ def frozen_module_names(manifest_path: Path | None = None, *, tier2: bool = Fals
         raise VerifyError(f"no TIER1 tuple found in {manifest_path}")
 
     collected: list[str] = list(tiers["TIER1"])
-    if tier2:
+    if not tier1_only:
         collected.extend(tiers.get("TIER2", ()))
     return [name[:-3] if name.endswith(".py") else name for name in collected]
 
@@ -138,7 +138,11 @@ def verify(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("uf2", help="Path to the built firmware .uf2")
-    parser.add_argument("--tier2", action="store_true", help="Also require the Tier-2 plumbing set")
+    parser.add_argument(
+        "--tier1-only",
+        action="store_true",
+        help="Expect only the Tier-1 set (matches PG_FREEZE_TIER1_ONLY)",
+    )
     parser.add_argument("--expect-version", default=None, help="Require this FIRMWARE_VERSION string in the image")
     parser.add_argument("--compare-stock", default=None, help="Also report the size delta against a stock .uf2")
     parser.add_argument("--manifest", default=None, help="Freeze manifest to read the tier lists from")
@@ -150,7 +154,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    expected = frozen_module_names(Path(args.manifest) if args.manifest else None, tier2=args.tier2)
+    expected = frozen_module_names(Path(args.manifest) if args.manifest else None, tier1_only=args.tier1_only)
     missing, leaked, notes = verify(image, expected=expected, expect_version=args.expect_version)
 
     print(f"image      : {args.uf2}")

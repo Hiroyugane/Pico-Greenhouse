@@ -59,7 +59,10 @@ def print_raw(pin: int = 28) -> int:
 
     Usage on the Pico::
 
-        from lib.soil_logger import print_raw
+        try:
+            from lib.soil_logger import print_raw
+        except ImportError:  # frozen into the firmware as a top-level module
+            from soil_logger import print_raw
         print_raw()
     """
     if machine is None:
@@ -140,7 +143,10 @@ class SoilLogger:
     # ------------------------------------------------------------------ filename
 
     def _update_filename_for_date(self) -> None:
-        from lib.sensor_paths import daily_csv_path
+        try:
+            from lib.sensor_paths import daily_csv_path
+        except ImportError:  # frozen into the firmware as a top-level module
+            from sensor_paths import daily_csv_path
 
         try:
             year, month, day = self.time_provider.now_date_tuple()[:3]

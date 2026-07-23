@@ -16,9 +16,20 @@ import time
 from machine import SPI, Pin
 
 from config import DEVICE_CONFIG
-from lib import boot_log, ds3231
-from lib.i2c_guard import RecoverableI2C
-from lib.sd_integration import is_mounted, mount_sd
+
+try:
+    from lib import boot_log, ds3231
+except ImportError:  # frozen into the firmware as top-level modules
+    import boot_log
+    import ds3231
+try:
+    from lib.i2c_guard import RecoverableI2C
+except ImportError:  # frozen into the firmware as a top-level module
+    from i2c_guard import RecoverableI2C
+try:
+    from lib.sd_integration import is_mounted, mount_sd
+except ImportError:  # frozen into the firmware as a top-level module
+    from sd_integration import is_mounted, mount_sd
 
 # Patchable flag: False when running on the Pico, True on host/CPython.
 _IS_HOST = getattr(sys.implementation, "name", "") != "micropython"
@@ -496,7 +507,10 @@ class HardwareFactory:
             self.errors.append("PCA9685 init skipped: I2C bus not initialized")
             return False
         try:
-            from lib.pca9685 import PCA9685
+            try:
+                from lib.pca9685 import PCA9685
+            except ImportError:  # frozen into the firmware as a top-level module
+                from pca9685 import PCA9685
 
             self.pca9685 = PCA9685(
                 i2c=self.i2c1,

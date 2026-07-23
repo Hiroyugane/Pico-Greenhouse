@@ -151,9 +151,16 @@ class TestPush:
         assert calls[0][:3] == ["fs", "mkdir", ":lib"]
         assert calls[1][:2] == ["fs", "cp"]
 
-    def test_existing_directory_is_not_an_error(self, monkeypatch):
-        """Every deploy after the first hits EEXIST; that is the normal case."""
-        self._recorder(monkeypatch, mkdir_rc=1, mkdir_msg="OSError: [Errno 17] EEXIST")
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "OSError: [Errno 17] EEXIST",
+            "mpremote: mkdir: lib: File exists.",  # what mpremote 1.28 actually prints
+        ],
+    )
+    def test_existing_directory_is_not_an_error(self, monkeypatch, message):
+        """Every deploy after the first hits this; the wording varies by version."""
+        self._recorder(monkeypatch, mkdir_rc=1, mkdir_msg=message)
         assert push([(Path("a"), "lib/relay.mpy")]) == 1
 
     def test_other_mkdir_failures_do_raise(self, monkeypatch):

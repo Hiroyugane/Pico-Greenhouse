@@ -187,6 +187,12 @@ def remote_dirs(entries: list[tuple[Path, str]]) -> list[str]:
     return sorted(dirs, key=lambda item: item.count("/"))
 
 
+def _already_exists(message: str) -> bool:
+    """True when an mpremote mkdir failed only because the directory is there."""
+    lowered = message.lower()
+    return "eexist" in lowered or "file exists" in lowered
+
+
 def _display(path: Path) -> str:
     """Repo-relative path for logging, or the full path when it lies outside."""
     try:
@@ -210,10 +216,12 @@ def push(
         if dry_run:
             print(f"  mkdir  :{directory}")
             continue
-        # Tolerate EEXIST: mpremote has no mkdir -p and an existing directory
-        # is the normal case on every deploy after the first.
+        # Tolerate "already there": mpremote has no mkdir -p, and an existing
+        # directory is the normal case on every deploy after the first. The
+        # wording varies by mpremote version — it reports "File exists" on
+        # 1.28 and "EEXIST" elsewhere — so match both rather than one.
         result = _run_mpremote(["fs", "mkdir", f":{directory}"], mpremote=mpremote)
-        if result.returncode != 0 and "EEXIST" not in (result.stderr + result.stdout):
+        if result.returncode != 0 and not _already_exists(result.stderr + result.stdout):
             raise DeployError(f"could not create :{directory} - {result.stderr.strip() or result.stdout.strip()}")
 
     copied = 0

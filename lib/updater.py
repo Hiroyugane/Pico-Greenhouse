@@ -437,7 +437,10 @@ class Updater:
         # Mirror to Pico internal flash (/boot.log) so the same entries
         # survive an SD card that's read-OK / write-flaky mid-update.
         try:
-            from lib import boot_log
+            try:
+                from lib import boot_log
+            except ImportError:  # frozen into the firmware as top-level modules
+                import boot_log
 
             boot_log.write("[updater] " + line)
         except Exception:
@@ -559,7 +562,10 @@ class Updater:
         the SD-side updates.log append silently fails mid-run.
         """
         try:
-            from lib import boot_log
+            try:
+                from lib import boot_log
+            except ImportError:  # frozen into the firmware as top-level modules
+                import boot_log
 
             boot_log.write("[updater.crumb] " + message)
         except Exception:

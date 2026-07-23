@@ -13,7 +13,10 @@
 # resilience is delegated to BufferManager/WriteQueueManager; write_row is
 # best-effort and never raises into the health loop.
 
-from lib.sensor_paths import daily_csv_path
+try:
+    from lib.sensor_paths import daily_csv_path
+except ImportError:  # frozen into the firmware as a top-level module
+    from sensor_paths import daily_csv_path
 
 
 class MetricsLogger:

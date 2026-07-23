@@ -59,7 +59,7 @@ def _exec_manifest(monkeypatch, **env):
     """Run the manifest with recording stubs; returns the recorder."""
     monkeypatch.setenv("PG_REPO_DIR", env.pop("PG_REPO_DIR", "/repo"))
     monkeypatch.setenv("PG_FW_INFO_DIR", env.pop("PG_FW_INFO_DIR", "/repo/build/frozen"))
-    for key in ("PG_FREEZE_TIER2", "PG_FREEZE_ONLY"):
+    for key in ("PG_FREEZE_TIER1_ONLY", "PG_FREEZE_ONLY"):
         monkeypatch.delenv(key, raising=False)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
@@ -71,25 +71,28 @@ def _exec_manifest(monkeypatch, **env):
 
 
 def _frozen_files(recorder):
-    files = []
-    for _name, package_files, _base in recorder.packages:
-        files.extend(package_files)
-    return files
+    """Frozen module filenames, excluding the generated fw_info."""
+    return [name for name, _base in recorder.modules if name != "fw_info.py"]
 
 
 class TestDefaultScope:
-    def test_freezes_the_tier1_set_as_the_lib_package(self, monkeypatch):
-        recorder = _exec_manifest(monkeypatch)
-        assert len(recorder.packages) == 1
-        name, files, base_path = recorder.packages[0]
-        assert name == "lib"
-        assert base_path == "/repo"
-        assert "sdcard.py" in files
-        assert "i2c_guard.py" in files
+    def test_freezes_as_top_level_modules_not_a_lib_package(self, monkeypatch):
+        """A package cannot be split across frozen and filesystem.
 
-    def test_tier2_is_not_frozen_by_default(self, monkeypatch):
-        """Blocked on the next-rev migration closing — see plan 2.2."""
-        assert "hardware_factory.py" not in _frozen_files(_exec_manifest(monkeypatch))
+        Freezing package("lib", ...) produced a firmware that contained every
+        module and could import none of them: sys.path is ['', '.frozen',
+        '/lib'], so the filesystem /lib directory (which must exist, for the
+        mutable modules) claims the name `lib` first and the frozen package is
+        never consulted. Top-level names sidestep that entirely.
+        """
+        recorder = _exec_manifest(monkeypatch)
+        assert recorder.packages == [], "no package() call may reintroduce the shadowing bug"
+        assert ("sdcard.py", "/repo/lib") in recorder.modules
+        assert ("i2c_guard.py", "/repo/lib") in recorder.modules
+
+    def test_tier2_is_frozen_by_default(self, monkeypatch):
+        """Operator decision 2026-07-23, after P0.5 measured the heap 97.5% full."""
+        assert "hardware_factory.py" in _frozen_files(_exec_manifest(monkeypatch))
 
     @pytest.mark.parametrize("module_name", NEVER_FREEZE)
     def test_decision_modules_are_never_frozen(self, monkeypatch, module_name):
@@ -99,6 +102,12 @@ class TestDefaultScope:
     def test_fw_info_is_frozen_from_the_generated_directory(self, monkeypatch):
         recorder = _exec_manifest(monkeypatch)
         assert ("fw_info.py", "/repo/build/frozen") in recorder.modules
+
+    def test_frozen_modules_come_from_the_lib_source_directory(self, monkeypatch):
+        """Sources still live in lib/ in the repo; only the frozen NAME is top-level."""
+        recorder = _exec_manifest(monkeypatch)
+        bases = {base for name, base in recorder.modules if name != "fw_info.py"}
+        assert bases == {"/repo/lib"}
 
     def test_keeps_the_port_board_manifest(self, monkeypatch):
         """Dropping it would take asyncio with it, and the whole task model."""
@@ -112,27 +121,27 @@ class TestDefaultScope:
             assert (lib_dir / name).is_file(), f"{name} is frozen but not present in lib/"
 
 
-class TestTier2OptIn:
-    def test_tier2_flag_adds_the_plumbing_set(self, monkeypatch):
-        files = _frozen_files(_exec_manifest(monkeypatch, PG_FREEZE_TIER2="1"))
-        assert "hardware_factory.py" in files
-        assert "sdcard.py" in files, "tier 2 must extend tier 1, not replace it"
+class TestTier1OnlyOptOut:
+    def test_flag_restricts_to_tier1(self, monkeypatch):
+        files = _frozen_files(_exec_manifest(monkeypatch, PG_FREEZE_TIER1_ONLY="1"))
+        assert "sdcard.py" in files
+        assert "hardware_factory.py" not in files
 
-    def test_tier2_still_excludes_co2_logger(self, monkeypatch):
+    def test_default_scope_extends_tier1_rather_than_replacing_it(self, monkeypatch):
+        files = _frozen_files(_exec_manifest(monkeypatch))
+        assert "sdcard.py" in files and "hardware_factory.py" in files
+
+    def test_co2_logger_is_excluded_from_every_scope(self, monkeypatch):
         """Its sense half is stable; the hysteresis override it also carries is not."""
-        assert "co2_logger.py" not in _frozen_files(_exec_manifest(monkeypatch, PG_FREEZE_TIER2="1"))
-
-    def test_every_tier2_module_exists_in_lib(self, monkeypatch):
-        lib_dir = MANIFEST.resolve().parents[1] / "lib"
-        for name in _frozen_files(_exec_manifest(monkeypatch, PG_FREEZE_TIER2="1")):
-            assert (lib_dir / name).is_file(), f"{name} is frozen but not present in lib/"
+        assert "co2_logger.py" not in _frozen_files(_exec_manifest(monkeypatch))
+        assert "co2_logger.py" not in _frozen_files(_exec_manifest(monkeypatch, PG_FREEZE_TIER1_ONLY="1"))
 
 
 class TestFreezeOnly:
     def test_subset_selection_replaces_the_tier(self, monkeypatch):
         """The P0.5 loop freezes the coldest modules first and re-measures."""
         files = _frozen_files(_exec_manifest(monkeypatch, PG_FREEZE_ONLY="sdcard.py, ds3231.py"))
-        assert files == ["sdcard.py", "ds3231.py"]
+        assert sorted(files) == ["ds3231.py", "sdcard.py"]
 
     def test_unknown_module_name_is_a_hard_error(self, monkeypatch):
         with pytest.raises(SystemExit, match="unknown modules"):
@@ -188,7 +197,7 @@ class TestBuildScript:
         """Both set the same env vars — the manifest hard-errors without them."""
         ps1 = self.SCRIPT.read_text(encoding="utf-8")
         sh = self.SH_SCRIPT.read_text(encoding="utf-8")
-        for name in ("PG_REPO_DIR", "PG_FW_INFO_DIR", "PG_FREEZE_TIER2", "PG_FREEZE_ONLY"):
+        for name in ("PG_REPO_DIR", "PG_FW_INFO_DIR", "PG_FREEZE_TIER1_ONLY", "PG_FREEZE_ONLY"):
             assert name in ps1, f"{name} missing from the PowerShell builder"
             assert name in sh, f"{name} missing from the shell builder"
 

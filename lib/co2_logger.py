@@ -112,7 +112,10 @@ class CO2Logger:
     # ------------------------------------------------------------------ filename
 
     def _update_filename_for_date(self) -> None:
-        from lib.sensor_paths import daily_csv_path
+        try:
+            from lib.sensor_paths import daily_csv_path
+        except ImportError:  # frozen into the firmware as a top-level module
+            from sensor_paths import daily_csv_path
 
         try:
             year, month, day = self.time_provider.now_date_tuple()[:3]

@@ -145,7 +145,10 @@ class TempHumidityLogger:
 
         Builds <sensor_root>/<sensor_type>/YYYY/<sensor_type>_YYYY-MM-DD.csv.
         """
-        from lib.sensor_paths import daily_csv_path
+        try:
+            from lib.sensor_paths import daily_csv_path
+        except ImportError:  # frozen into the firmware as a top-level module
+            from sensor_paths import daily_csv_path
 
         try:
             date_tuple = self.time_provider.now_date_tuple()

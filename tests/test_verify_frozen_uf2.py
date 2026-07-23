@@ -79,9 +79,10 @@ class TestFrozenModuleNames:
         assert "sdcard" in names and "i2c_guard" in names
         assert all(not name.endswith(".py") for name in names)
 
-    def test_tier2_is_opt_in(self):
-        assert "hardware_factory" not in frozen_module_names()
-        assert "hardware_factory" in frozen_module_names(tier2=True)
+    def test_tier2_is_included_by_default(self):
+        """Operator decision 2026-07-23; --tier1-only opts back out."""
+        assert "hardware_factory" in frozen_module_names()
+        assert "hardware_factory" not in frozen_module_names(tier1_only=True)
 
     def test_survives_parentheses_inside_the_tier_comments(self, tmp_path):
         """A text-slicing extractor got this wrong; ast does not."""
@@ -90,7 +91,8 @@ class TestFrozenModuleNames:
             'TIER1 = (\n    # boot-critical (see main.py Step 0) and cold\n    "boot_log.py",\n    "buzzer.py",\n)\n'
             'TIER2 = (\n    "event_logger.py",\n)\n'
         )
-        assert frozen_module_names(manifest) == ["boot_log", "buzzer"]
+        assert frozen_module_names(manifest, tier1_only=True) == ["boot_log", "buzzer"]
+        assert frozen_module_names(manifest) == ["boot_log", "buzzer", "event_logger"]
 
     def test_missing_tier1_is_an_error(self, tmp_path):
         manifest = tmp_path / "freeze_manifest.py"

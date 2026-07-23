@@ -40,8 +40,16 @@ import uasyncio as asyncio
 from machine import ADC, UART, WDT, Pin
 
 from config import _REG_DIMENSIONS, _REG_NAMES, DEVICE_CONFIG, validate_config
-from lib import boot_log, version
-from lib.hardware_factory import HardwareFactory
+from lib import version  # mutable: ships in the OTA payload, stays on the filesystem
+
+try:
+    from lib import boot_log
+except ImportError:  # frozen into the firmware as a top-level module
+    import boot_log
+try:
+    from lib.hardware_factory import HardwareFactory
+except ImportError:  # frozen into the firmware as a top-level module
+    from hardware_factory import HardwareFactory
 from lib.updater import run_pending_update
 
 # --- Step 0: boot-time OTA check (device only) ----------------------------
@@ -93,18 +101,33 @@ def _feed_boot_wdt():
 
 
 _feed_boot_wdt()
-from lib.buffer_manager import BufferManager
-from lib.buzzer import BuzzerController
+try:
+    from lib.buffer_manager import BufferManager
+except ImportError:  # frozen into the firmware as a top-level module
+    from buffer_manager import BufferManager
+try:
+    from lib.buzzer import BuzzerController
+except ImportError:  # frozen into the firmware as a top-level module
+    from buzzer import BuzzerController
 from lib.co2_logger import CO2Logger
 
 _feed_boot_wdt()
-from lib.event_logger import EventLogger
+try:
+    from lib.event_logger import EventLogger
+except ImportError:  # frozen into the firmware as a top-level module
+    from event_logger import EventLogger
 from lib.fan_controllers import AlwaysOnFanController
 from lib.fan_output import NullFanOutput, Pca9685FanOutput, RelayFanOutput
 
 _feed_boot_wdt()
-from lib.led_button import LEDButtonHandler, ServiceReminder
-from lib.metrics_logger import MetricsLogger
+try:
+    from lib.led_button import LEDButtonHandler, ServiceReminder
+except ImportError:  # frozen into the firmware as a top-level module
+    from led_button import LEDButtonHandler, ServiceReminder
+try:
+    from lib.metrics_logger import MetricsLogger
+except ImportError:  # frozen into the firmware as a top-level module
+    from metrics_logger import MetricsLogger
 
 _feed_boot_wdt()
 from lib.oled_display import OLEDDisplay
@@ -123,13 +146,29 @@ from lib.regulation_engine import RegulationEngine
 
 _feed_boot_wdt()
 from lib.relay import RelayController
-from lib.sht31 import SHT31
-from lib.status_manager import SD_MOUNT_FAILED, SD_MOUNTED, SD_NO_CARD, StatusManager
+
+try:
+    from lib.sht31 import SHT31
+except ImportError:  # frozen into the firmware as a top-level module
+    from sht31 import SHT31
+try:
+    from lib.status_manager import SD_MOUNT_FAILED, SD_MOUNTED, SD_NO_CARD, StatusManager
+except ImportError:  # frozen into the firmware as a top-level module
+    from status_manager import SD_MOUNT_FAILED, SD_MOUNTED, SD_NO_CARD, StatusManager
 
 _feed_boot_wdt()
-from lib.temp_humidity_logger import TempHumidityLogger
-from lib.time_provider import RTCTimeProvider
-from lib.write_queue_manager import WriteQueueManager
+try:
+    from lib.temp_humidity_logger import TempHumidityLogger
+except ImportError:  # frozen into the firmware as a top-level module
+    from temp_humidity_logger import TempHumidityLogger
+try:
+    from lib.time_provider import RTCTimeProvider
+except ImportError:  # frozen into the firmware as a top-level module
+    from time_provider import RTCTimeProvider
+try:
+    from lib.write_queue_manager import WriteQueueManager
+except ImportError:  # frozen into the firmware as a top-level module
+    from write_queue_manager import WriteQueueManager
 
 _feed_boot_wdt()
 
@@ -656,7 +695,10 @@ async def main():
     if is_plant_mode:
         # Plant-mode-only import: keeps the SoilLogger bytecode off the heap
         # in mushroom mode, where no soil probe is constructed.
-        from lib.soil_logger import SoilLogger
+        try:
+            from lib.soil_logger import SoilLogger
+        except ImportError:  # frozen into the firmware as a top-level module
+            from soil_logger import SoilLogger
 
         try:
             soil_adc = ADC(Pin(DEVICE_CONFIG["pins"]["adc_input"]))
@@ -779,7 +821,10 @@ async def main():
             # the hardware is present, so `dimmable` alone decides — not the
             # plant/mushroom mode. Import stays local so the MCP4725 bytecode
             # never reaches the heap on a relay-only build.
-            from lib.mcp4725 import MCP4725
+            try:
+                from lib.mcp4725 import MCP4725
+            except ImportError:  # frozen into the firmware as a top-level module
+                from mcp4725 import MCP4725
 
             try:
                 grow_dac = MCP4725(i2c=hardware.get_i2c(), address=gl_cfg["dac_i2c_address"])

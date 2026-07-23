@@ -44,9 +44,9 @@
 .PARAMETER Repin
     Re-resolve the newest final upstream release and rewrite the lockfile.
 
-.PARAMETER FreezeTier2
-    Also freeze the Tier-2 plumbing set. Blocked on the next-rev migration
-    closing (plan 2.2) - do not use casually.
+.PARAMETER Tier1Only
+    Restrict the freeze to the Tier-1 set. Tier-2 is frozen by default since
+    2026-07-23 (operator decision after P0.5 measured the heap 97.5% full).
 
 .PARAMETER FreezeOnly
     Comma-separated module filenames to freeze instead of the whole tier. The
@@ -66,7 +66,7 @@ param(
     [string]$Board = 'RPI_PICO',
     [string]$Ref,
     [switch]$Repin,
-    [switch]$FreezeTier2,
+    [switch]$Tier1Only,
     [string]$FreezeOnly,
     [int]$Jobs = 0
 )
@@ -253,7 +253,7 @@ Write-Host "firmware version: $fwVersion   (.mpy ABI $mpyAbi)"
 Write-Step "Build ports/rp2 (BOARD=$Board)"
 $env:PG_REPO_DIR = $RepoRoot
 $env:PG_FW_INFO_DIR = $FrozenDir
-if ($FreezeTier2) { $env:PG_FREEZE_TIER2 = '1' } else { Remove-Item Env:\PG_FREEZE_TIER2 -ErrorAction SilentlyContinue }
+if ($Tier1Only) { $env:PG_FREEZE_TIER1_ONLY = '1' } else { Remove-Item Env:\PG_FREEZE_TIER1_ONLY -ErrorAction SilentlyContinue }
 if ($FreezeOnly) { $env:PG_FREEZE_ONLY = $FreezeOnly } else { Remove-Item Env:\PG_FREEZE_ONLY -ErrorAction SilentlyContinue }
 
 & make -C (Join-Path $MicroPythonDir 'ports/rp2') BOARD=$Board FROZEN_MANIFEST=$ManifestFile "-j$Jobs"
@@ -274,7 +274,7 @@ Copy-Item $builtUf2 $archiveUf2 -Force
 # only symptom is a heap number that did not move. Check the image itself.
 Write-Step 'Verify the freeze took'
 $verifyArgs = @((Join-Path $PSScriptRoot 'verify_frozen_uf2.py'), $targetUf2, '--expect-version', $fwVersion)
-if ($FreezeTier2) { $verifyArgs += '--tier2' }
+if ($Tier1Only) { $verifyArgs += '--tier1-only' }
 & $Python $verifyArgs
 if ($LASTEXITCODE -ne 0) { throw 'freeze verification failed - do not flash this image' }
 
@@ -283,7 +283,7 @@ $note = [ordered]@{
     mpy_abi          = [int]$mpyAbi
     mpy_source       = "$SourceName@$targetRef@$mpyCommit"
     board            = $Board
-    freeze_tier2     = [bool]$FreezeTier2
+    tier1_only       = [bool]$Tier1Only
     freeze_only      = $FreezeOnly
     mpy_cross        = $MpyCross
     built_at         = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')

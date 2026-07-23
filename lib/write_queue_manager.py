@@ -22,7 +22,10 @@ except ImportError:
     TYPE_CHECKING = False
 
 if TYPE_CHECKING:
-    from lib.event_logger import EventLogger
+    try:
+        from lib.event_logger import EventLogger
+    except ImportError:  # frozen into the firmware as a top-level module
+        from event_logger import EventLogger
 
 
 class WriteQueueManager:

@@ -108,8 +108,8 @@ or `run fwbuild`. What happens, and what to watch:
 4. **`mpy-cross` built from that same tree.** This is the load-bearing step —
    see §5.
 5. **`fw_info.py` generated** into `build/frozen/`, carrying
-   `FIRMWARE_VERSION`, `MPY_ABI` (read out of the tree's `py/mpconfig.h`, never
-   typed by hand), `MPY_SOURCE` (`upstream@tag@commit`), and `FROZEN_AT`.
+   `FIRMWARE_VERSION`, `MPY_ABI` (read out of the tree's `py/persistentcode.h`,
+   or `py/mpconfig.h` on older trees — never typed by hand), `MPY_SOURCE` (`upstream@tag@commit`), and `FROZEN_AT`.
 6. **`make -C ports/rp2 BOARD=RPI_PICO FROZEN_MANIFEST=tools/freeze_manifest.py`**.
 7. **Artifacts** — `build/firmware.uf2`, a version-stamped copy
    `build/firmware-<FIRMWARE_VERSION>.uf2`, and `build/firmware-build.json`
@@ -137,9 +137,30 @@ or `run fwbuild`. What happens, and what to watch:
 
 | Flag | Effect |
 |---|---|
-| *(none)* | Tier-1 only: vendored drivers, device drivers, `boot_log`, `i2c_guard`, `sensor_paths`, `buzzer` |
-| `-FreezeOnly 'sdcard.py,ds3231.py'` | just those — the P0.5 "coldest first, re-measure" loop |
-| `-FreezeTier2` | adds the stable plumbing set. **Blocked until the next-rev migration closes** (plan §2.2) |
+| *(none)* | **Tier-1 + Tier-2 — 21 modules.** Drivers, boot plumbing, and the stable storage/status layer |
+| `--tier1-only` / `-Tier1Only` | Just the ten coldest (drivers, `boot_log`, `i2c_guard`, `sensor_paths`, `buzzer`) |
+| `--freeze-only 'sdcard.py,ds3231.py'` | Exactly those — the P0.5 "coldest first, re-measure" loop |
+
+Tier-2 joined the default scope on 2026-07-23, by operator decision after P0.5
+measured the heap 97.5 % full. The cost is real: a change to any of those
+modules is now a firmware rebuild and a reflash, not an OTA drop.
+
+**The frozen set is frozen as top-level modules, not as a `lib` package.** A
+package cannot be split between frozen and filesystem — `sys.path` is
+`['', '.frozen', '/lib']`, so a filesystem `/lib` claims the name `lib` first
+and the frozen package is never consulted. Every import site therefore reads:
+
+```python
+try:
+    from lib.sht31 import SHT31
+except ImportError:      # frozen into the firmware as a top-level module
+    from sht31 import SHT31
+```
+
+`lib` first, deliberately: host and test behaviour stay identical to a
+filesystem checkout (`host_shims/` has its own `sht31` simulator that a
+frozen-first order would start picking up), and only the device takes the
+second branch.
 
 `co2_logger.py` is excluded from every scope on purpose: its sensing half is
 stable, but it still carries the binary hysteresis override that the 0-100 CO₂
@@ -165,8 +186,15 @@ is the path that also works when the firmware is too broken to talk.)
 
 ### Re-deploy the application afterwards
 
-**A firmware flash wipes the filesystem.** `main.py`, `config.py`, and every
-non-frozen `lib/` module must be sent again:
+**A firmware flash does *not* wipe the filesystem** — measured 2026-07-23:
+after flashing, `config.mpy`, `main.py` and the whole of `/lib` were still
+there. The MicroPython image and the littlefs filesystem occupy different
+flash regions, and the image is far short of the filesystem's start. (An
+earlier revision of this runbook claimed the opposite. It is wrong; a
+`flash_nuke.uf2` is what erases the filesystem.)
+
+That makes the re-deploy step *more* important, not less, because stale files
+survive a firmware change:
 
 ```bash
 run deploy          # or: python tools/deploy_device.py
@@ -188,6 +216,14 @@ deploy is no longer a matter of copying a couple of files:
 - It **checks the bytecode ABI against the firmware** before writing anything,
   so a payload compiled by the wrong `mpy-cross` is refused here rather than
   discovered as an import failure on a board with no REPL.
+
+- It **prunes stale shadows** (`--prune`). This is the one that bites: imports
+  try `lib.<mod>` first, so a leftover `lib/event_logger.mpy` from a
+  pre-freeze deploy wins over the frozen module. The app runs perfectly and
+  the freeze buys nothing for that module — no error, no warning, and the only
+  symptom is a heap figure that did not move. On the first real flash, eleven
+  of twenty-one frozen modules were shadowed exactly this way. The deploy
+  always *reports* them; `--prune` deletes them.
 
 Reset or power-cycle the board afterwards to run the new code.
 

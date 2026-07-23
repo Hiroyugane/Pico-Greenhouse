@@ -154,13 +154,43 @@ class TestEnvironmentContract:
 
 
 class TestBuildScript:
-    """The PowerShell builder is not runnable here (no ARM toolchain), but a
-    syntax error in it must not wait until someone has installed one."""
+    """The builders take minutes to fail for real reasons (clone, submodules,
+    compile). A syntax error in one must not cost that round trip."""
 
     SCRIPT = MANIFEST.resolve().parent / "build_firmware.ps1"
+    SH_SCRIPT = MANIFEST.resolve().parent / "build_firmware.sh"
 
     def test_script_exists(self):
         assert self.SCRIPT.is_file()
+
+    def test_shell_script_exists(self):
+        assert self.SH_SCRIPT.is_file()
+
+    def test_shell_script_has_lf_endings(self):
+        """CRLF makes bash report 'bad interpreter' and breaks every heredoc.
+
+        The file is executed inside WSL, and git on this machine converts line
+        endings on checkout unless .gitattributes pins it — which it now does.
+        """
+        assert b"\r\n" not in self.SH_SCRIPT.read_bytes()
+
+    def test_shell_script_parses(self):
+        import shutil
+        import subprocess
+
+        bash = shutil.which("bash")
+        if bash is None:
+            pytest.skip("no bash available to syntax-check with")
+        result = subprocess.run([bash, "-n", str(self.SH_SCRIPT)], capture_output=True, text=True, timeout=60)
+        assert result.returncode == 0, result.stderr
+
+    def test_both_builders_agree_on_the_manifest_contract(self):
+        """Both set the same env vars — the manifest hard-errors without them."""
+        ps1 = self.SCRIPT.read_text(encoding="utf-8")
+        sh = self.SH_SCRIPT.read_text(encoding="utf-8")
+        for name in ("PG_REPO_DIR", "PG_FW_INFO_DIR", "PG_FREEZE_TIER2", "PG_FREEZE_ONLY"):
+            assert name in ps1, f"{name} missing from the PowerShell builder"
+            assert name in sh, f"{name} missing from the shell builder"
 
     def test_script_is_pure_ascii(self):
         """Windows PowerShell 5.1 reads a BOM-less UTF-8 .ps1 as ANSI.

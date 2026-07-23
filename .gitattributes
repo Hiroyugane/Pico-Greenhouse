@@ -6,3 +6,8 @@
 *.jpg binary
 *.mpy binary
 *.uf2 binary
+
+# Shell scripts must keep LF: they are executed inside WSL, where a CRLF
+# shebang line makes bash report "bad interpreter" and CRLF heredoc markers
+# never match their terminator.
+*.sh text eol=lf

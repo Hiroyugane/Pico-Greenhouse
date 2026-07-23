@@ -163,9 +163,33 @@ Then: hold BOOTSEL while plugging in the Pico, and copy `build/firmware.uf2`
 onto the mass-storage volume that appears. (`mpremote` works too, but BOOTSEL
 is the path that also works when the firmware is too broken to talk.)
 
-Re-flash the application afterwards — a firmware flash wipes the filesystem,
-so `main.py`, `config.py`, and the non-frozen `lib/` set must be re-deployed
-(`run deploy` / the `flash-mpremote` task).
+### Re-deploy the application afterwards
+
+**A firmware flash wipes the filesystem.** `main.py`, `config.py`, and every
+non-frozen `lib/` module must be sent again:
+
+```bash
+run deploy          # or: python tools/deploy_device.py
+run deployplan      # dry run: prints the plan, touches nothing
+```
+
+[`tools/deploy_device.py`](../../tools/deploy_device.py) exists because the
+deploy is no longer a matter of copying a couple of files:
+
+- It **creates the device directories first.** `mpremote cp` does not, so the
+  first deploy onto a freshly-flashed board fails with
+  `cp: lib/<mod>.py: No such file or directory` — which names the *local*
+  source and reads like the wrong problem. The missing path is on the device.
+- It **ships `.mpy`, not `.py`** (175 KB against 569 KB). Since 2026-07-23 the
+  raw set does not fit the flash at all. `main.py` stays raw because the boot
+  sequence looks for that filename.
+- It **skips the frozen modules.** They are in the firmware; sending them
+  wastes flash and the copy is a silent no-op (§6).
+- It **checks the bytecode ABI against the firmware** before writing anything,
+  so a payload compiled by the wrong `mpy-cross` is refused here rather than
+  discovered as an import failure on a board with no REPL.
+
+Reset or power-cycle the board afterwards to run the new code.
 
 ---
 

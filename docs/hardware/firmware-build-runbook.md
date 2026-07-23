@@ -19,6 +19,12 @@ Do not build a frozen firmware to "see if it helps". The council attached a
 measurement rider to the freeze decision, because freezing permanently costs
 OTA reach and two cheaper variants might already be enough.
 
+> **Measured 2026-07-23 — this gate has been run and the answer was FREEZE.**
+> A could not be deployed (the raw set no longer fits flash), B ran at 97.5 %
+> heap use (~6 KB free), C was not relevant. Neither OTA-preserving variant is
+> viable. Kept below as the procedure to repeat after any change that moves the
+> heap; results live in [`hw-test-log.md`](../test/hw-test-log.md) FW.2.
+
 Measure three variants, each a multi-hour bench soak with
 `diagnostics.mem_trend_log = True` in `config.py`:
 
@@ -46,32 +52,47 @@ Record the three figures and the verdict in
 
 ## 1. One-time toolchain setup
 
-The ARM cross-compiler is the real install cost; everything else is small.
+**Build under WSL, not native Windows.** The RP2 port needs host-side tools
+from the pico-SDK (`pioasm`, `picotool`) that want a Unix-ish C toolchain;
+under WSL that is three apt packages, on native Windows it is an afternoon.
+This machine's build path is **WSL2 / Ubuntu 24.04**.
 
-| Tool | Install | Why |
-|---|---|---|
-| `git` | `winget install --id Git.Git` | clone MicroPython + submodules |
-| `cmake` (≥3.12) | `winget install --id Kitware.CMake` | RP2 port build system |
-| `make` | MSYS2 `pacman -S make`, or `scoop install make` | drives the port build |
-| `arm-none-eabi-gcc` | `winget install --id Arm.GnuArmEmbeddedToolchain` | cross-compiles for RP2040 |
-| Python 3 | already present (`.venv`) | build scripts, `manifest.py` |
+```bash
+wsl --install -d Ubuntu          # only if no distribution exists yet
+```
 
-`pico-sdk` and `tinyusb` are **not** installed by hand — the build script
-fetches them as MicroPython submodules.
+```bash
+sudo apt-get install -y --no-install-recommends \
+    build-essential cmake ninja-build \
+    gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib \
+    pkg-config libusb-1.0-0-dev
+```
 
-`tools/build_firmware.ps1` checks all of these before doing anything and lists
-every missing one at once with its install hint. A build that fails preflight
-has changed nothing.
+`pico-sdk`, `tinyusb`, `mbedtls`, and `picotool` are **not** installed by hand
+— the build script fetches them as MicroPython submodules on first run.
 
-The MicroPython tree is **not vendored into this repo**. It is cloned to a
-sibling path (`..\micropython` by default) and pinned by ref.
+Both builders check every tool before doing anything and list all the missing
+ones at once. A build that fails preflight has changed nothing.
+
+| Builder | Use when |
+|---|---|
+| [`tools/build_firmware.sh`](../../tools/build_firmware.sh) | **the normal path** — run inside WSL |
+| [`tools/build_firmware.ps1`](../../tools/build_firmware.ps1) | native-Windows path, kept for a machine with a full MSYS2/Arm toolchain |
+
+They implement the same steps and set the same manifest environment contract; a
+test asserts they stay in agreement.
+
+The MicroPython tree is **not vendored into this repo**. The shell builder
+clones it to `$HOME/micropython` **inside the Linux filesystem** on purpose:
+building on a 9p-mounted NTFS path (`/mnt/l/...`) is roughly an order of
+magnitude slower. Override with `--mpy-dir`.
 
 ---
 
 ## 2. Build
 
 ```bash
-powershell -File tools/build_firmware.ps1
+wsl -d Ubuntu -- bash /mnt/<drive>/<path-to-repo>/tools/build_firmware.sh
 ```
 
 or `run fwbuild`. What happens, and what to watch:
@@ -94,6 +115,23 @@ or `run fwbuild`. What happens, and what to watch:
    `build/firmware-<FIRMWARE_VERSION>.uf2`, and `build/firmware-build.json`
    recording the ref, ABI, freeze scope, and mpy-cross path. `build/` is
    gitignored.
+8. **Freeze verification** — [`tools/verify_frozen_uf2.py`](../../tools/verify_frozen_uf2.py)
+   reassembles the UF2 blocks into the flash image and checks that every module
+   the manifest names is present, that `fw_info` and the expected
+   `FIRMWARE_VERSION` are in there, and that **no** forbidden decision module
+   leaked in. A non-zero exit fails the build.
+
+   > **Why this step exists.** A build can succeed and still be *stock*: if
+   > `FROZEN_MANIFEST` never reaches the port, or `PG_REPO_DIR` points
+   > somewhere unexpected, `make` produces a perfectly good firmware with
+   > nothing frozen. Every symptom is then a runtime one — modules still
+   > import (from the filesystem), nothing crashes, and the only clue is a
+   > `mem_trend` number that did not move after a flash-and-soak cycle. Run it
+   > by hand against any image whose provenance you are unsure of:
+   >
+   > ```bash
+   > python tools/verify_frozen_uf2.py build/firmware.uf2 --compare-stock build/rollback/RPI_PICO-20260406-v1.28.0.uf2
+   > ```
 
 ### Controlling the freeze scope
 
@@ -177,8 +215,9 @@ The system now fails safe rather than silently:
   `verify_fail … mpy_abi mismatch: payload=N firmware=M`. Live code is
   untouched and the payload stays in place so it can be rebuilt.
 - Raw-`.py` payloads carry no stamp and skip the check — they recompile
-  on-device under whatever firmware is present. **Across an ABI bump, prefer a
-  raw payload.**
+  on-device under whatever firmware is present. Note this is now only useful
+  for a **partial** drop: since 2026-07-23 the full raw `.py` app set does not
+  fit the flash filesystem, so it is not a whole-app fallback (see §7 step 5).
 - `updater.enforce_mpy_abi = False` forces a payload through when you know the
   stamp itself is wrong.
 
@@ -227,10 +266,16 @@ build.
 4. Bench-soak on device per §4, comparing `post_alloc_b` against the prior
    baseline.
 5. **If `MPY_ABI` changed, every field unit's `config.mpy` / `lib/*.mpy` is
-   now stale.** Ship a raw-`.py` payload (recompiles on-device) or rebuild the
-   compiled payload with the new `mpy-cross`. The ABI guard turns a stale
-   payload into a logged refusal instead of a boot failure, but it does not
-   deliver the fix for you.
+   now stale.** Rebuild the compiled payload with the new `mpy-cross` and
+   redeploy. The ABI guard turns a stale payload into a logged refusal instead
+   of a boot failure, but it does not deliver the fix for you.
+
+   > ⚠ **The raw-`.py` fallback no longer exists.** Earlier revisions of this
+   > runbook said "ship a raw-`.py` payload, it recompiles on-device". The
+   > 2026-07-23 P0.5 measurement found the raw set **no longer fits the Pico's
+   > flash filesystem** — that is why variant A could not even be deployed. A
+   > full-app raw payload is therefore not a recovery option; rebuilding the
+   > compiled payload, or reflashing plus redeploying, is.
 6. **Communicate it.** A `chat-log.md` entry plus a memory file recording the
    new ABI, which modules were re-frozen, and — stated explicitly — whether
    operators must **reflash** (frozen behaviour changed) or can **OTA**

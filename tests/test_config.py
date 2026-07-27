@@ -1627,11 +1627,12 @@ class TestDiagnosticsConfig:
 
         assert isinstance(DEVICE_CONFIG["diagnostics"]["mem_trend_log"], bool)
 
-    def test_metrics_log_off_by_default(self):
-        """diagnostics.metrics_log defaults to False (heap headroom for the I2C error path)."""
+    def test_metrics_log_on_by_default(self):
+        """diagnostics.metrics_log defaults to True since the firmware freeze
+        reclaimed ~83 KB of heap (2026-07-27) — the post-freeze soak needs the CSV."""
         from config import DEVICE_CONFIG
 
-        assert DEVICE_CONFIG["diagnostics"]["metrics_log"] is False
+        assert DEVICE_CONFIG["diagnostics"]["metrics_log"] is True
 
     def test_metrics_log_non_bool_raises(self):
         """diagnostics.metrics_log with non-bool raises ValueError."""

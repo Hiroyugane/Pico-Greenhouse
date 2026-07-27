@@ -119,8 +119,9 @@
         },
         {
             "label": "build-mpy",
+            "detail": "Compile config.py + the non-frozen lib/ set to build/ (frozen modules live in the firmware)",
             "type": "shell",
-            "command": "$ErrorActionPreference = 'Stop'; if (-not (Get-Command mpy-cross -ErrorAction SilentlyContinue)) { Write-Error 'mpy-cross not found in PATH. Install mpy-cross and retry.'; exit 1 }; $buildRoot = 'build'; $buildLib = Join-Path $buildRoot 'lib'; if (Test-Path $buildLib) { Remove-Item $buildLib -Recurse -Force }; Remove-Item (Join-Path $buildRoot 'config.mpy') -Force -ErrorAction SilentlyContinue; Remove-Item (Join-Path $buildRoot 'main.py') -Force -ErrorAction SilentlyContinue; New-Item -ItemType Directory -Path $buildLib -Force | Out-Null; Copy-Item main.py (Join-Path $buildRoot 'main.py') -Force; & mpy-cross config.py -o (Join-Path $buildRoot 'config.mpy'); if ($LASTEXITCODE -ne 0) { Write-Error 'Failed compiling config.py'; exit $LASTEXITCODE }; $libSources = Get-ChildItem lib -File -Filter *.py | Where-Object { $_.Name -ne '__init__.py' }; if (-not $libSources) { Write-Error 'No runtime Python modules found under lib/ to compile.'; exit 1 }; foreach ($src in $libSources) { $outFile = Join-Path $buildLib ($src.BaseName + '.mpy'); & mpy-cross $src.FullName -o $outFile; if ($LASTEXITCODE -ne 0) { Write-Error ('Failed compiling ' + $src.Name); exit $LASTEXITCODE } }; Write-Host ('build-mpy complete: config.py and ' + $libSources.Count + ' lib modules compiled to ' + $buildRoot)",
+            "command": "$ErrorActionPreference = 'Stop'; if (-not (Get-Command mpy-cross -ErrorAction SilentlyContinue)) { Write-Error 'mpy-cross not found in PATH. Install mpy-cross and retry.'; exit 1 }; $frozen = @(& python tools/verify_frozen_uf2.py --list-frozen); if ($LASTEXITCODE -ne 0) { Write-Error 'Could not read the freeze manifest (tools/verify_frozen_uf2.py --list-frozen failed).'; exit 1 }; $buildRoot = 'build'; $buildLib = Join-Path $buildRoot 'lib'; if (Test-Path $buildLib) { Remove-Item $buildLib -Recurse -Force }; Remove-Item (Join-Path $buildRoot 'config.mpy') -Force -ErrorAction SilentlyContinue; Remove-Item (Join-Path $buildRoot 'main.py') -Force -ErrorAction SilentlyContinue; New-Item -ItemType Directory -Path $buildLib -Force | Out-Null; Copy-Item main.py (Join-Path $buildRoot 'main.py') -Force; & mpy-cross config.py -o (Join-Path $buildRoot 'config.mpy'); if ($LASTEXITCODE -ne 0) { Write-Error 'Failed compiling config.py'; exit $LASTEXITCODE }; $libSources = Get-ChildItem lib -File -Filter *.py | Where-Object { $_.Name -ne '__init__.py' -and $_.BaseName -notin $frozen }; if (-not $libSources) { Write-Error 'No runtime Python modules found under lib/ to compile.'; exit 1 }; foreach ($src in $libSources) { $outFile = Join-Path $buildLib ($src.BaseName + '.mpy'); & mpy-cross $src.FullName -o $outFile; if ($LASTEXITCODE -ne 0) { Write-Error ('Failed compiling ' + $src.Name); exit $LASTEXITCODE } }; Write-Host ('build-mpy complete: config.py and ' + $libSources.Count + ' lib modules compiled to ' + $buildRoot + ' (' + $frozen.Count + ' frozen modules skipped - they live in the firmware)')",
             "options": {
                 "cwd": "${workspaceFolder}"
             },
@@ -132,15 +133,14 @@
         },
         {
             "label": "flash-mpremote",
-            "detail": "Compile runtime artifacts, then flash only main.py, config.py, and lib/ (auto-toggles MicroPico)",
+            "detail": "Run the quality gate, then deploy via tools/deploy_device.py — compiles, skips frozen modules, ABI-checks, reports stale shadows (auto-toggles MicroPico)",
             "type": "shell",
-            "command": ". .vscode\\micropico-port.ps1; Disconnect-MicroPico; if (-not (Test-Path 'build/main.py') -or -not (Test-Path 'build/config.mpy') -or -not (Test-Path 'build/lib')) { Write-Error 'Missing build artifacts. Run build-mpy first.'; Connect-MicroPico; exit 1 }; $libArtifacts = Get-ChildItem build/lib -File | Where-Object { $_.Extension -in '.mpy', '.py' }; if (-not $libArtifacts) { Write-Error 'No lib artifacts in build/lib to flash.'; Connect-MicroPico; exit 1 }; mpremote fs mkdir /lib *> $null; mpremote fs rm /config.py *> $null; $libCopy = ($libArtifacts | ForEach-Object { '+ fs cp build/lib/' + $_.Name + ' :/lib/' + $_.Name }) -join ' '; Invoke-Expression ('mpremote soft-reset + fs cp build/main.py :main.py + fs cp build/config.mpy :config.mpy ' + $libCopy); $rc=$LASTEXITCODE; Connect-MicroPico; exit $rc",
+            "command": ". .vscode\\micropico-port.ps1; Disconnect-MicroPico; python tools/deploy_device.py; $rc=$LASTEXITCODE; Connect-MicroPico; exit $rc",
             "options": {
                 "cwd": "${workspaceFolder}"
             },
             "dependsOn": [
-                "check",
-                "build-mpy"
+                "check"
             ],
             "dependsOrder": "sequence",
             "presentation": {
@@ -151,16 +151,12 @@
         },
         {
             "label": "flash-mpremote-nocheck",
-            "detail": "Compile runtime artifacts, then flash only main.py, config.py, and lib/ (auto-toggles MicroPico)",
+            "detail": "Deploy via tools/deploy_device.py without the quality gate — compiles, skips frozen modules, ABI-checks, reports stale shadows (auto-toggles MicroPico)",
             "type": "shell",
-            "command": ". .vscode\\micropico-port.ps1; Disconnect-MicroPico; if (-not (Test-Path 'build/main.py') -or -not (Test-Path 'build/config.mpy') -or -not (Test-Path 'build/lib')) { Write-Error 'Missing build artifacts. Run build-mpy first.'; Connect-MicroPico; exit 1 }; $libArtifacts = Get-ChildItem build/lib -File | Where-Object { $_.Extension -in '.mpy', '.py' }; if (-not $libArtifacts) { Write-Error 'No lib artifacts in build/lib to flash.'; Connect-MicroPico; exit 1 }; mpremote fs mkdir /lib *> $null; mpremote fs rm /config.py *> $null; $libCopy = ($libArtifacts | ForEach-Object { '+ fs cp build/lib/' + $_.Name + ' :/lib/' + $_.Name }) -join ' '; Invoke-Expression ('mpremote soft-reset + fs cp build/main.py :main.py + fs cp build/config.mpy :config.mpy ' + $libCopy); $rc=$LASTEXITCODE; Connect-MicroPico; exit $rc",
+            "command": ". .vscode\\micropico-port.ps1; Disconnect-MicroPico; python tools/deploy_device.py; $rc=$LASTEXITCODE; Connect-MicroPico; exit $rc",
             "options": {
                 "cwd": "${workspaceFolder}"
             },
-            "dependsOn": [
-                "build-mpy"
-            ],
-            "dependsOrder": "sequence",
             "presentation": {
                 "reveal": "always",
                 "panel": "shared"

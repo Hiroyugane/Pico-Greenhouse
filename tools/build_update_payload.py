@@ -41,6 +41,14 @@ Vendored drivers (lib/sdcard*, lib/ds3231.py, lib/ssd1306*) are excluded by
 default — they ship with the firmware image and should not be churned by an
 update.
 
+Frozen modules (tools/freeze_manifest.py, both tiers) are excluded too, for
+the same reason deploy_device.py skips them: they live in the firmware, and a
+copy in /lib silently *wins* over the frozen twin (imports resolve lib-first),
+negating the freeze with no error. An OTA payload that ships them would plant
+exactly the stale shadows `deploy_device.py --prune` exists to remove. Use
+`--no-skip-frozen` only when deliberately overriding a frozen module on a
+board whose firmware cannot be reflashed.
+
 With `--compiled`, sources are read from the `build/` tree produced by the
 `build-mpy` VS Code task: `build/main.py` (raw), `build/config.mpy`, and
 `build/lib/*.mpy`. The script does not invoke `mpy-cross` itself; run
@@ -59,6 +67,9 @@ import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from tools.verify_frozen_uf2 import frozen_module_names  # noqa: E402
 
 # Files included from the project root.
 ROOT_FILES = ("main.py", "config.py")
@@ -125,7 +136,7 @@ def _sha256_of(path: Path) -> str:
     return h.hexdigest()
 
 
-def _should_include_lib(name: str) -> bool:
+def _should_include_lib(name: str, frozen: set[str]) -> bool:
     if not name.endswith(".py"):
         return False
     if name == "__init__.py":
@@ -135,10 +146,12 @@ def _should_include_lib(name: str) -> bool:
     for prefix in LIB_EXCLUDE_PREFIXES:
         if name.startswith(prefix):
             return False
+    if name[:-3] in frozen:
+        return False
     return True
 
 
-def _collect_sources() -> list[tuple[str, Path]]:
+def _collect_sources(frozen: set[str]) -> list[tuple[str, Path]]:
     """Return [(relative_path, absolute_path), ...] for everything to ship."""
     sources: list[tuple[str, Path]] = []
     for rel in ROOT_FILES:
@@ -152,12 +165,12 @@ def _collect_sources() -> list[tuple[str, Path]]:
     for entry in sorted(lib_dir.iterdir()):
         if not entry.is_file():
             continue
-        if _should_include_lib(entry.name):
+        if _should_include_lib(entry.name, frozen):
             sources.append((f"lib/{entry.name}", entry))
     return sources
 
 
-def _collect_sources_compiled(build_dir: Path) -> list[tuple[str, Path]]:
+def _collect_sources_compiled(build_dir: Path, frozen: set[str]) -> list[tuple[str, Path]]:
     """Return [(relative_path, absolute_path), ...] from a build-mpy tree."""
     if not build_dir.is_dir():
         raise FileNotFoundError(f"missing build directory: {build_dir} — run the build-mpy task first")
@@ -176,7 +189,7 @@ def _collect_sources_compiled(build_dir: Path) -> list[tuple[str, Path]]:
     lib_dir = build_dir / "lib"
     if not lib_dir.is_dir():
         raise FileNotFoundError(f"missing {lib_dir} — run build-mpy first")
-    lib_files = sorted(f for f in lib_dir.iterdir() if f.is_file() and f.suffix == ".mpy")
+    lib_files = sorted(f for f in lib_dir.iterdir() if f.is_file() and f.suffix == ".mpy" and f.stem not in frozen)
     if not lib_files:
         raise FileNotFoundError(f"no compiled .mpy files in {lib_dir} — run build-mpy first")
     for entry in lib_files:
@@ -334,6 +347,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Ship a compiled payload with no ABI stamp (disables the device-side guard for this payload)",
     )
+    parser.add_argument(
+        "--no-skip-frozen",
+        action="store_true",
+        help="Also ship modules that are frozen in firmware (they will shadow the frozen copies)",
+    )
     args = parser.parse_args(argv)
 
     out_dir = Path(args.out).resolve()
@@ -344,10 +362,11 @@ def main(argv: list[str] | None = None) -> int:
     # collection both pick up the same VERSION / BUILD_TIME.
     _write_build_info(PROJECT_ROOT / "lib" / "build_info.py", version, built_at_iso)
 
+    frozen = set() if args.no_skip_frozen else set(frozen_module_names())
     if args.compiled:
-        sources = _collect_sources_compiled(Path(args.build_dir).resolve())
+        sources = _collect_sources_compiled(Path(args.build_dir).resolve(), frozen)
     else:
-        sources = _collect_sources()
+        sources = _collect_sources(frozen)
     _clean_out_dir(out_dir)
     files_meta = _copy_payload(sources, out_dir)
 
@@ -379,6 +398,8 @@ def main(argv: list[str] | None = None) -> int:
 
     total_bytes = sum(entry["bytes"] for entry in files_meta)
     print(f"version    : {version}")
+    if frozen:
+        print(f"skipping   : {len(frozen)} frozen module(s) - they live in the firmware")
     print(f"mpy_abi    : {mpy_abi if mpy_abi is not None else '(none — raw .py, device guard skipped)'}")
     print(f"files      : {len(files_meta)}")
     print(f"total size : {total_bytes:,} bytes")

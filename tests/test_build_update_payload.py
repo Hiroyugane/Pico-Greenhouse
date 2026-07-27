@@ -187,3 +187,85 @@ class TestCliAbiStamping:
             == 1
         )
         assert "mixes .mpy ABI" in capsys.readouterr().err
+
+
+class TestFrozenModulesSkipped:
+    """A frozen module shipped via OTA becomes a /lib shadow that silently wins
+    over the firmware copy (lib-first imports) — the payload must never plant one."""
+
+    FROZEN = {"event_logger", "sht31"}
+
+    def test_raw_collection_skips_frozen_stems(self, build_module, tmp_path, monkeypatch):
+        monkeypatch.setattr(build_module, "PROJECT_ROOT", tmp_path)
+        (tmp_path / "main.py").write_text("pass\n")
+        (tmp_path / "config.py").write_text("pass\n")
+        lib = tmp_path / "lib"
+        lib.mkdir()
+        for name in ("event_logger.py", "sht31.py", "relay.py"):
+            (lib / name).write_text("pass\n")
+        rels = [rel for rel, _ in build_module._collect_sources(self.FROZEN)]
+        assert "lib/relay.py" in rels
+        assert "lib/event_logger.py" not in rels
+        assert "lib/sht31.py" not in rels
+
+    def test_compiled_collection_skips_frozen_stems(self, build_module, tmp_path):
+        build_dir = tmp_path / "build"
+        (build_dir / "lib").mkdir(parents=True)
+        (build_dir / "main.py").write_text("pass\n")
+        _mpy(build_dir / "config.mpy", 6)
+        for name in ("event_logger.mpy", "relay.mpy"):
+            _mpy(build_dir / "lib" / name, 6)
+        rels = [rel for rel, _ in build_module._collect_sources_compiled(build_dir, self.FROZEN)]
+        assert "lib/relay.mpy" in rels
+        assert "lib/event_logger.mpy" not in rels
+
+    def test_cli_skips_the_real_frozen_set(self, build_module, tmp_path, monkeypatch, capsys):
+        """End-to-end: a build tree polluted with a really-frozen module ships without it."""
+        import json
+
+        monkeypatch.setattr(build_module, "PROJECT_ROOT", tmp_path)
+        build_dir = tmp_path / "build"
+        (build_dir / "lib").mkdir(parents=True)
+        (build_dir / "main.py").write_text("pass\n")
+        _mpy(build_dir / "config.mpy", 6)
+        _mpy(build_dir / "lib" / "relay.mpy", 6)
+        _mpy(build_dir / "lib" / "event_logger.mpy", 6)  # frozen in the real manifest
+        out_dir = tmp_path / "payload"
+        assert (
+            build_module.main(
+                ["--compiled", "--build-dir", str(build_dir), "--out", str(out_dir), "--version", "test-deadbee"]
+            )
+            == 0
+        )
+        paths = {entry["path"] for entry in json.loads((out_dir / "manifest.json").read_text())["files"]}
+        assert "lib/relay.mpy" in paths
+        assert "lib/event_logger.mpy" not in paths
+        assert "frozen module(s)" in capsys.readouterr().out
+
+    def test_no_skip_frozen_ships_everything(self, build_module, tmp_path, monkeypatch):
+        import json
+
+        monkeypatch.setattr(build_module, "PROJECT_ROOT", tmp_path)
+        build_dir = tmp_path / "build"
+        (build_dir / "lib").mkdir(parents=True)
+        (build_dir / "main.py").write_text("pass\n")
+        _mpy(build_dir / "config.mpy", 6)
+        _mpy(build_dir / "lib" / "event_logger.mpy", 6)
+        out_dir = tmp_path / "payload"
+        assert (
+            build_module.main(
+                [
+                    "--compiled",
+                    "--build-dir",
+                    str(build_dir),
+                    "--out",
+                    str(out_dir),
+                    "--version",
+                    "test-deadbee",
+                    "--no-skip-frozen",
+                ]
+            )
+            == 0
+        )
+        paths = {entry["path"] for entry in json.loads((out_dir / "manifest.json").read_text())["files"]}
+        assert "lib/event_logger.mpy" in paths

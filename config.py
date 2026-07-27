@@ -456,8 +456,8 @@ DEVICE_CONFIG = {
     # 2026-07-19 build, leaving no headroom for the I2C error path. Turn on
     # explicitly for a soak run once heap has margin.
     "diagnostics": {
-        "mem_trend_log": False,
-        "metrics_log": False,
+        "mem_trend_log": True,
+        "metrics_log": True,
     },
     # Memory management (MicroPython gc tuning)
     #

@@ -252,7 +252,13 @@ def prune(names: list[str], *, mpremote: str = "mpremote", dry_run: bool = False
 
 
 def _run_mpremote(args: list[str], *, mpremote: str) -> subprocess.CompletedProcess:
-    return subprocess.run([mpremote, *args], capture_output=True, text=True)
+    # A missing binary raises OSError, not a nonzero exit — fold it into
+    # DeployError so best-effort callers (the stale-shadow scan) survive a
+    # host without mpremote and --dry-run needs no device tooling at all.
+    try:
+        return subprocess.run([mpremote, *args], capture_output=True, text=True)
+    except OSError as exc:
+        raise DeployError(f"cannot run {mpremote}: {exc}") from exc
 
 
 def push(

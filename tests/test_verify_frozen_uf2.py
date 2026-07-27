@@ -169,3 +169,24 @@ class TestCli:
         stock = self._write(tmp_path, ["nothing"], name="stock.uf2")
         assert main([str(good), "--compare-stock", str(stock)]) == 0
         assert "vs stock" in capsys.readouterr().out
+
+
+class TestListFrozen:
+    """--list-frozen feeds shell callers (the build-mpy task); bare names only."""
+
+    def test_prints_one_name_per_line_and_exits_zero(self, capsys):
+        assert main(["--list-frozen"]) == 0
+        lines = capsys.readouterr().out.splitlines()
+        assert lines == frozen_module_names()
+
+    def test_honors_tier1_only_and_manifest(self, tmp_path, capsys):
+        manifest = tmp_path / "freeze_manifest.py"
+        manifest.write_text('TIER1 = (\n    "boot_log.py",\n)\nTIER2 = (\n    "event_logger.py",\n)\n')
+        assert main(["--list-frozen", "--manifest", str(manifest), "--tier1-only"]) == 0
+        assert capsys.readouterr().out.splitlines() == ["boot_log"]
+
+    def test_uf2_path_still_required_without_it(self, capsys):
+        with pytest.raises(SystemExit) as excinfo:
+            main([])
+        assert excinfo.value.code == 2
+        assert "required unless --list-frozen" in capsys.readouterr().err

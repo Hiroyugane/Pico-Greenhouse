@@ -137,7 +137,7 @@ def verify(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("uf2", help="Path to the built firmware .uf2")
+    parser.add_argument("uf2", nargs="?", default=None, help="Path to the built firmware .uf2")
     parser.add_argument(
         "--tier1-only",
         action="store_true",
@@ -146,7 +146,27 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expect-version", default=None, help="Require this FIRMWARE_VERSION string in the image")
     parser.add_argument("--compare-stock", default=None, help="Also report the size delta against a stock .uf2")
     parser.add_argument("--manifest", default=None, help="Freeze manifest to read the tier lists from")
+    parser.add_argument(
+        "--list-frozen",
+        action="store_true",
+        help="Print the frozen module names (one per line) and exit; no .uf2 needed",
+    )
     args = parser.parse_args(argv)
+
+    if args.list_frozen:
+        # Machine-readable list for shell callers (the build-mpy VS Code task
+        # filters its compile set with this) — keep it bare names, no header.
+        try:
+            names = frozen_module_names(Path(args.manifest) if args.manifest else None, tier1_only=args.tier1_only)
+        except (OSError, VerifyError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        for name in names:
+            print(name)
+        return 0
+
+    if args.uf2 is None:
+        parser.error("a .uf2 path is required unless --list-frozen is given")
 
     try:
         image = uf2_payload(Path(args.uf2))

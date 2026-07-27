@@ -190,7 +190,16 @@ class TestBuildScript:
         bash = shutil.which("bash")
         if bash is None:
             pytest.skip("no bash available to syntax-check with")
-        result = subprocess.run([bash, "-n", str(self.SH_SCRIPT)], capture_output=True, text=True, timeout=60)
+        # Relative path + cwd, not an absolute Windows path: which() may find
+        # the WSL launcher (system32\bash.exe), whose bash cannot resolve
+        # "L:\..." but does inherit the Windows cwd as /mnt/<drive>/....
+        result = subprocess.run(
+            [bash, "-n", f"tools/{self.SH_SCRIPT.name}"],
+            cwd=self.SH_SCRIPT.parents[1],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
         assert result.returncode == 0, result.stderr
 
     def test_both_builders_agree_on_the_manifest_contract(self):

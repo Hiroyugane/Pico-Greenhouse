@@ -235,12 +235,21 @@ Write-Host 'any other one carries a bytecode ABI this firmware will refuse (plan
 Write-Step 'Generate fw_info.py'
 New-Item -ItemType Directory -Path $FrozenDir -Force | Out-Null
 $FwInfoPath = Join-Path $FrozenDir 'fw_info.py'
-& $Python (Join-Path $PSScriptRoot 'gen_fw_info.py') `
-    --mpy-tree $MicroPythonDir `
-    --ref $targetRef `
-    --commit $mpyCommit `
-    --source-name $SourceName `
-    --out $FwInfoPath
+# FROZEN_MODULES must describe THIS image, not the manifest's full tier lists:
+# the OTA prune sweep deletes /lib files on the strength of it, so the same
+# narrowing flags the freeze manifest reads from the environment are mirrored
+# into the record. Over-claiming here would delete a module with no frozen twin.
+$fwInfoArgs = @(
+    '--mpy-tree', $MicroPythonDir,
+    '--ref', $targetRef,
+    '--commit', $mpyCommit,
+    '--source-name', $SourceName,
+    '--manifest', $ManifestFile,
+    '--out', $FwInfoPath
+)
+if ($Tier1Only) { $fwInfoArgs += '--tier1-only' }
+if ($FreezeOnly) { $fwInfoArgs += @('--freeze-only', $FreezeOnly) }
+& $Python (Join-Path $PSScriptRoot 'gen_fw_info.py') @fwInfoArgs
 if ($LASTEXITCODE -ne 0) { throw 'fw_info generation failed' }
 
 $fwInfoText = Get-Content $FwInfoPath -Raw

@@ -76,6 +76,23 @@ def resolve_firmware():
     return ("dev", _UNKNOWN_ABI, "host", "?")
 
 
+def resolve_frozen_modules():
+    """Names this firmware froze, as a tuple, or ``()`` when unknowable.
+
+    ``()`` means "cannot tell", never "froze nothing" — a stock MicroPython and
+    a pre-2026-07-28 custom image are indistinguishable from here. The updater's
+    prune sweep treats the empty tuple as a refusal to delete rather than as
+    permission to delete everything, which is the only reading that is safe on
+    a board whose ``/lib`` holds the sole copy of a module.
+    """
+    try:
+        import fw_info
+
+        return tuple(str(name) for name in fw_info.FROZEN_MODULES)
+    except Exception:
+        return ()
+
+
 def resolve_app():
     """Return ``(app_version, build_time)`` from the OTA-stamped build_info."""
     try:
@@ -92,7 +109,13 @@ def resolve_app():
 
 
 FIRMWARE_VERSION, MPY_ABI, MPY_SOURCE, FROZEN_AT = resolve_firmware()
+FROZEN_MODULES = resolve_frozen_modules()
 APP_VERSION, BUILD_TIME = resolve_app()
+
+
+def current_frozen_modules():
+    """The frozen module set to prune ``/lib`` shadows against, or ``()``."""
+    return FROZEN_MODULES
 
 
 def current_mpy_abi():

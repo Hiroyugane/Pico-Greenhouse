@@ -137,3 +137,91 @@ class TestCli:
         assert main(["--ref", "v1.24.1", "--out", str(out)]) == 1
         assert "bytecode ABI" in capsys.readouterr().err
         assert not out.exists()
+
+
+class TestFrozenModulesRecord:
+    """FROZEN_MODULES must describe the image being built, never the manifest's full set.
+
+    The OTA prune sweep deletes /lib files on the strength of this record, so a
+    record that over-claims removes a module with no frozen twin.
+    """
+
+    def test_records_the_default_freeze_set(self):
+        from tools.gen_fw_info import resolve_frozen_modules
+
+        modules = resolve_frozen_modules()
+
+        assert "sdcard" in modules
+        assert "sht31" in modules
+        assert "event_logger" in modules, "Tier 2 is part of the default set"
+        assert all(not name.endswith(".py") for name in modules)
+
+    def test_tier1_only_narrows_the_record(self):
+        from tools.gen_fw_info import resolve_frozen_modules
+
+        full = resolve_frozen_modules()
+        tier1 = resolve_frozen_modules(tier1_only=True)
+
+        assert "sht31" in tier1
+        assert "event_logger" not in tier1, "a Tier-2 module is not frozen in a Tier-1 build"
+        assert set(tier1) < set(full)
+
+    def test_freeze_only_narrows_the_record(self):
+        from tools.gen_fw_info import resolve_frozen_modules
+
+        assert resolve_frozen_modules(freeze_only="sht31.py,ds3231.py") == ("sht31", "ds3231")
+
+    def test_freeze_only_accepts_bare_stems(self):
+        from tools.gen_fw_info import resolve_frozen_modules
+
+        assert resolve_frozen_modules(freeze_only="sht31") == ("sht31",)
+
+    def test_freeze_only_rejects_an_unknown_name(self):
+        """A typo in the build invocation must fail the build, not ship a lie."""
+        from tools.gen_fw_info import FwInfoError, resolve_frozen_modules
+
+        with pytest.raises(FwInfoError, match="unknown modules"):
+            resolve_frozen_modules(freeze_only="not_a_module")
+
+    def test_rendered_module_exposes_the_names(self, tmp_path):
+        from tools.gen_fw_info import render
+
+        body = render(
+            firmware_version="pg-fw-2026.07-abc1234",
+            mpy_abi=6,
+            mpy_source="upstream@v1.24.1@8f2c9d1",
+            frozen_at="2026-07-28T10:00:00Z",
+            frozen_modules=("sht31", "event_logger"),
+        )
+        path = tmp_path / "fw_info.py"
+        path.write_text(body)
+        namespace: dict = {}
+        exec(compile(body, str(path), "exec"), namespace)
+
+        assert namespace["FROZEN_MODULES"] == ("sht31", "event_logger")
+
+    def test_an_empty_record_renders_as_an_empty_tuple(self):
+        from tools.gen_fw_info import render
+
+        body = render(
+            firmware_version="v",
+            mpy_abi=6,
+            mpy_source="s",
+            frozen_at="t",
+            frozen_modules=(),
+        )
+        namespace: dict = {}
+        exec(compile(body, "<fw_info>", "exec"), namespace)
+
+        assert namespace["FROZEN_MODULES"] == ()
+
+    def test_build_stamps_the_record(self, monkeypatch):
+        import tools.gen_fw_info as mod
+
+        monkeypatch.setattr(mod, "repo_short_hash", lambda repo_root=None: "abc1234")
+        body = mod.build(mpy_tree=None, ref="v1.24.1", commit="8f2c9d1", mpy_abi=6, tier1_only=True)
+        namespace: dict = {}
+        exec(compile(body, "<fw_info>", "exec"), namespace)
+
+        assert "sht31" in namespace["FROZEN_MODULES"]
+        assert "event_logger" not in namespace["FROZEN_MODULES"]

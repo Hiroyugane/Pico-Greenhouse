@@ -164,3 +164,51 @@ class TestDescribe:
         described = reloaded.describe()
         assert described.startswith("fw=")
         assert "app=" in described
+
+
+class TestResolveFrozenModules:
+    """The record the OTA prune sweep will not delete a /lib file without."""
+
+    def test_reads_the_frozen_record(self, version_module):
+        module = _fake_fw_info()
+        module.FROZEN_MODULES = ("sht31", "event_logger")
+        sys.modules["fw_info"] = module
+        try:
+            assert version_module.resolve_frozen_modules() == ("sht31", "event_logger")
+        finally:
+            sys.modules.pop("fw_info", None)
+
+    def test_a_firmware_without_the_field_reports_unknown(self, version_module):
+        """Pre-2026-07-28 images carry no record; that is 'cannot tell', not 'none'."""
+        sys.modules["fw_info"] = _fake_fw_info()
+        try:
+            assert version_module.resolve_frozen_modules() == ()
+        finally:
+            sys.modules.pop("fw_info", None)
+
+    def test_stock_firmware_reports_unknown(self, version_module):
+        sys.modules.pop("fw_info", None)
+        assert version_module.resolve_frozen_modules() == ()
+
+    def test_names_are_coerced_to_a_tuple_of_str(self, version_module):
+        """A list in the generated module must not leak a mutable into the guard."""
+        module = _fake_fw_info()
+        module.FROZEN_MODULES = ["sht31"]
+        sys.modules["fw_info"] = module
+        try:
+            result = version_module.resolve_frozen_modules()
+            assert result == ("sht31",)
+            assert isinstance(result, tuple)
+        finally:
+            sys.modules.pop("fw_info", None)
+
+    def test_current_frozen_modules_exposes_the_resolved_value(self, version_module):
+        module = _fake_fw_info()
+        module.FROZEN_MODULES = ("sht31",)
+        sys.modules["fw_info"] = module
+        try:
+            reloaded = _reload(version_module)
+            assert reloaded.current_frozen_modules() == ("sht31",)
+        finally:
+            sys.modules.pop("fw_info", None)
+            _reload(version_module)

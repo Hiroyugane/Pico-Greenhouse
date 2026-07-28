@@ -19,6 +19,73 @@
 
 ## Schematic — nets, components, BOM
 
+### [ ] Fans are audibly loud at any speed — the PCA9685 cannot reach inaudible PWM
+
+**Filed:** 2026-07-28 ·
+[chat-log entry](../notes/chat-log.md#2026-07-28--fan-pwm-noise--60-hz-trial-and-the-reopened-25-khz-decision) ·
+[memory: project-fan-pwm-noise-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_fan_pwm_noise_revision.md)
+
+Reopens the **2026-07-06 "no 25 kHz path" rejection** in the
+[fan power-return entry](#-fan-drive-cant-hard-off--move-the-mosfet-into-the-fans-power-return-was-inverting-gate-stage).
+That decision accepted an audible buzz because "silent PWM was its only
+benefit and it isn't wanted here". It is now wanted: the operator reports
+the fans as **loud enough to be a problem**, which is exactly the
+downside that was signed off.
+
+**The constraint.** Since the MOSFET moved into the fan's ground return,
+the PCA9685 chops the motor's own supply current, so the fan radiates a
+tone at the PWM frequency. The PCA9685 is an LED driver with a hard
+**24–1526 Hz** ceiling ([lib/pca9685.py](../../lib/pca9685.py)) and quiet
+fan PWM needs **≥ 20 kHz**. No firmware setting can bridge that — the
+part is the wrong part for the job. Filtering it out is also not
+available: at 12 V / 50 % / 1 kHz, holding ripple under ~0.5 A needs
+several mH per channel, which only becomes a sane inductor once the
+switching is already at 25 kHz.
+
+**Open question to settle first (cheap, no hardware):** the operator
+describes the noise as **constant at any speed**. `set_duty(0)` and
+`set_duty(100)` use the PCA9685 FULL_OFF / FULL_ON flags, so at 100 %
+there is *no switching at all* — a fan that is still noisy at duty 100
+is making **aerodynamic or bearing** noise and none of the options below
+will help it. Resolve via
+[hw-test-log FAN.Q.1](../test/hw-test-log.md) before spending BOM on
+this.
+
+**Options if FAN.Q.1 confirms it is PWM noise** (pick one, not all):
+
+- **A — RP2040 hardware PWM at 25 kHz (cheapest, no new part).** The
+  Pico's own PWM slices reach 25 kHz trivially. Route five GPIOs to the
+  five fan gate stages instead of PCA9685 LED0–LED4; the gate network
+  (150 Ω series + 10 kΩ pull-down) is unchanged. **Pin budget is the
+  catch:** the free GPIOs are GP2 and the reserved relay lines
+  GP21/GP22/GP26/GP27 — exactly five, but GP26/GP27 are already spoken
+  for by the queued **hydroponics second I²C bus** (see "Hydroponics
+  monitoring — 2nd I²C bus" further down this section), so those two
+  collide. Needs a pin-map decision, not just a route.
+- **B — dedicated 25 kHz fan controller (EMC2305).** The part rejected
+  in 2026-07-06. Purpose-built, I²C, five channels, and it brings
+  closed-loop tach RPM control as a bonus. Costs a new IC + footprint
+  and one more I²C address.
+- **C — switch to 4-wire PWM fans and drive the fan's own PWM input.**
+  The fan stays permanently powered at 12 V and its internal controller
+  does the commutation, so the motor current is never chopped — this is
+  the canonical *silent* answer. But it reverses the
+  [power-return fix](#-fan-drive-cant-hard-off--move-the-mosfet-into-the-fans-power-return-was-inverting-gate-stage):
+  a fan whose power is always on cannot be hard-stopped, which is the
+  bug that fix exists to solve. Would need the MOSFET kept in the
+  ground return as an *enable* switch plus a separate 25 kHz PWM line
+  per fan — most wiring, most pins, quietest result.
+- **D — accept it, re-decide the frequency only.** Firmware is already
+  running trial **60 Hz** (below the whine band, a low drone instead of
+  a whine). If FAN.Q.1 says the 60 Hz drone is acceptable, this entry
+  closes with no hardware change at all.
+
+**Acceptance on the new board (only if A/B/C ships):** at every duty the
+regulation engine uses, the fan is inaudible over its own airflow at
+1 m; `set_duty(0)` still brings the rotor to a complete mechanical stop
+(the property the power-return fix bought — do not trade it away for
+quiet).
+
 ### [ ] Regulation matrix needs cooler relay feed, humidifier output, external SHT31
 
 **Filed:** 2026-07-06 ·
@@ -126,12 +193,15 @@ choice; the fix is to change it, not to patch firmware.)
   tach/PWM pins are ignored. A 4-wire fan behaves like a 2-wire fan whose
   speed follows the switched-power duty. `set_duty(0)` = ground open = fan
   **fully dead**; mid-duty = ~proportional speed; 100 % = full.
-- **No 25 kHz path (decided 2026-07-06).** Power is PWM'd directly by the
-  PCA9685 (≤ 1526 Hz), so fans buzz audibly at low duty — **accepted** for
-  a greenhouse. Run the fan channels at the PCA9685 max **1526 Hz** to push
-  the whine as high as possible. A dedicated 25 kHz fan controller (EMC2305)
-  was considered and **rejected** — silent PWM was its only benefit and it
-  isn't wanted here. PCA9685 stays as-is for both fans and the ch5 solenoid.
+- **~~No 25 kHz path (decided 2026-07-06)~~ — REOPENED 2026-07-28.** Power is
+  PWM'd directly by the PCA9685 (≤ 1526 Hz), so fans buzz audibly — the
+  buzz was **accepted** as tolerable for a greenhouse and the plan was to
+  run the channels at the **1526 Hz** ceiling. In service the noise turned
+  out to be the operator's main complaint, so the rejection of a 25 kHz
+  path is reopened — see
+  [Fans are audibly loud at any speed](#-fans-are-audibly-loud-at-any-speed--the-pca9685-cannot-reach-inaudible-pwm).
+  Firmware is meanwhile running the opposite trial (**60 Hz**, below the
+  whine band) rather than 1526 Hz.
 - **Ratings check (fans confirmed ≤ 0.5 A each, 2026-07-06):** the MOSFET
   and flyback now carry full motor current, not a signal. At 0.5 A the
   **AO3400A** (SOT-23, ~5.7 A pulsed) has ample margin — **no FET change**.
@@ -140,15 +210,18 @@ choice; the fix is to change it, not to patch firmware.)
   (e.g. SS34, 3 A / 40 V).
 - **Firmware follow-through (lands with the board):** flip
   `DEVICE_CONFIG["pca9685"]["invert"]` back to **`False`** (non-inverting
-  low-side switch), set `pca9685.freq_hz` to **1526** (minimise whine;
-  solenoid PWM-hold is unaffected by the higher frequency), and correct the
+  low-side switch) — **done**; ~~set `pca9685.freq_hz` to **1526**~~ —
+  **superseded 2026-07-28**, the frequency now runs the 60 Hz sub-audible
+  trial instead (see the reopened 25 kHz entry); and correct the
   "inverting gate stage" wording in the `pca9685` config comment
   ([config.py:290-295](../../config.py#L290-L295)). Keep the `invert` flag +
   validator + test — the solenoid stage may still use it.
 - **Acceptance on the new board:** on a 2/3/4-wire fan, `set_duty(0)` brings
   it to a **complete mechanical stop** (no creep); duty sweep 0→100 raises
   speed **monotonically** (no inversion, `pca9685.invert=False`); confirm the
-  1526 Hz whine is tolerable and the MOSFET + flyback run cool at 0.5 A.
+  MOSFET + flyback run cool at 0.5 A. The "whine is tolerable" half of this
+  acceptance is **withdrawn** — it is not, which is why the 25 kHz question
+  is reopened; noise is judged under FAN.Q, not here.
 - **Verification:** trimmed FAN.1 in `prototypes/next_rev_bringup.py`
   (single channel, hard-stop check) +
   [hw-test-log "Fan power-path switch" checklist](../test/hw-test-log.md).

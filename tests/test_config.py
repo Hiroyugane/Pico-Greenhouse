@@ -343,6 +343,35 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["updater"]["enforce_mpy_abi"] = original
 
+    def test_updater_prune_stale_defaults_on(self):
+        """Flash stops being additive by default — a stale shadow negates the freeze."""
+        from config import DEVICE_CONFIG
+
+        assert DEVICE_CONFIG["updater"]["prune_stale"] is True
+
+    def test_updater_prune_stale_non_bool_raises(self):
+        """updater.prune_stale must be a bool."""
+        import config
+
+        original = config.DEVICE_CONFIG["updater"]["prune_stale"]
+        config.DEVICE_CONFIG["updater"]["prune_stale"] = "yes"
+        try:
+            with pytest.raises(ValueError, match="updater.prune_stale"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["updater"]["prune_stale"] = original
+
+    def test_updater_prune_stale_may_be_disabled(self):
+        """Keeping the pre-2026-07-28 additive behaviour is a valid operator choice."""
+        import config
+
+        original = config.DEVICE_CONFIG["updater"]["prune_stale"]
+        config.DEVICE_CONFIG["updater"]["prune_stale"] = False
+        try:
+            assert config.validate_config() is True
+        finally:
+            config.DEVICE_CONFIG["updater"]["prune_stale"] = original
+
     def test_updater_legacy_update_dirs_non_list_raises(self):
         """updater.legacy_update_dirs must be a list."""
         import config

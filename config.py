@@ -638,6 +638,17 @@ DEVICE_CONFIG = {
         # existed) are unaffected — they recompile on-device. Set False only to
         # force a payload through when you know the ABI stamp is wrong.
         "enforce_mpy_abi": True,
+        # After a successful apply, delete files under the allowed_paths roots
+        # that this payload did not ship. Without it flash is strictly additive:
+        # a lib/<mod>.mpy left over from a pre-freeze deploy keeps shadowing its
+        # frozen twin forever (imports resolve lib-first), so the freeze buys
+        # nothing for that module and nothing warns you. The sweep only ever
+        # deletes inside allowed_paths, only .py/.mpy, and only when the frozen
+        # fw_info.FROZEN_MODULES proves the firmware carries a replacement —
+        # except for same-stem twins of a shipped file (config.py next to a
+        # shipped config.mpy), which are safe to drop regardless. Set False to
+        # keep the pre-2026-07-28 additive behaviour.
+        "prune_stale": True,
         # Legacy update_dir locations checked when the canonical update_dir
         # holds no manifest. Lets payloads dropped at the pre-2026-05-15
         # path (/sd/update) still apply without re-copying. Empty the list
@@ -1737,6 +1748,7 @@ def validate_config():
             "allowed_paths",
             "legacy_update_dirs",
             "enforce_mpy_abi",
+            "prune_stale",
         ],
         "updater_feedback": [
             "enabled",
@@ -2079,6 +2091,8 @@ def validate_config():
             raise ValueError("updater.allowed_paths entries must be non-empty strings")
     if not isinstance(upd_cfg["enforce_mpy_abi"], bool):
         raise ValueError("updater.enforce_mpy_abi must be a bool")
+    if not isinstance(upd_cfg["prune_stale"], bool):
+        raise ValueError("updater.prune_stale must be a bool")
     if not isinstance(upd_cfg["legacy_update_dirs"], list):
         raise ValueError("updater.legacy_update_dirs must be a list")
     for entry in upd_cfg["legacy_update_dirs"]:

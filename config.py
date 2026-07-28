@@ -312,6 +312,19 @@ DEVICE_CONFIG = {
     # i2c_address: A5..A0 strap pins on the PCA9685 select 0x40..0x7F;
     # 0x40 is the default with all straps tied LOW.
     # freq_hz: shared across all 16 channels per datasheet, 24..1526 Hz.
+    # Set to 60 Hz on 2026-07-28 as an audible-noise trial, SUPERSEDING the
+    # 2026-07-06 "run at the 1526 Hz ceiling" plan in
+    # docs/hardware/next-revision.md. Since the fan MOSFET moved into the
+    # motor's ground return, this frequency is the chopping rate of the fan's
+    # own supply current, so the motor radiates a tone at exactly this pitch.
+    # The PCA9685 is an LED driver and cannot reach the ~25 kHz that makes fan
+    # PWM inaudible, so the only choice is WHICH audible tone: 1000-1526 Hz
+    # sits near the ear's most sensitive band (a whine), while 60 Hz drops
+    # below it (a low drone). 60 Hz costs torque smoothness — at low duty the
+    # rotor coasts up to ~16 ms between pulses, so the minimum duty at which a
+    # fan STARTS from rest can rise. The regulation fan floors were
+    # characterised at 1000 Hz and must be re-checked here (hw-test-log
+    # FAN.Q). Revert to 1000 if a fan will not start at its configured floor.
     # invert: the next-rev fan/solenoid MOSFET gate stage is inverting —
     # bench (2026-07-05) showed a PWM ramp-DOWN spun the fans UP and duty 0
     # never fully stopped them, i.e. fan speed tracks (100 - duty). True
@@ -321,7 +334,7 @@ DEVICE_CONFIG = {
     "pca9685": {
         "enabled": True,
         "i2c_address": 0x40,
-        "freq_hz": 1000,
+        "freq_hz": 60,
         "invert": False,
     },
     # Soil Moisture Logger Configuration (GP28 / ADC2, single-probe)

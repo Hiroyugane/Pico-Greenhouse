@@ -699,6 +699,15 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["pca9685"]["i2c_address"] = original
 
+    def test_pca9685_freq_is_the_sub_audible_trial_value(self):
+        """pca9685.freq_hz stays at the 60 Hz noise trial, not back at 1000."""
+        # 2026-07-28: dropped 1000 -> 60 to move the fan tone below the
+        # whine band (chat-log 2026-07-28). Pinned so a revert is deliberate:
+        # the pitch operators hear is exactly this number.
+        from config import DEVICE_CONFIG
+
+        assert DEVICE_CONFIG["pca9685"]["freq_hz"] == 60
+
     def test_pca9685_freq_too_low_raises(self):
         """pca9685.freq_hz below 24 Hz raises ValueError."""
         import config

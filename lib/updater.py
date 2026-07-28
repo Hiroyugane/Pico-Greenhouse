@@ -17,6 +17,10 @@
 #   written. A bad payload never touches live code.
 # - Per-file retry: failed writes retry up to updater.max_retries.
 # - No backup of live code (per design decision 2026-05-15).
+# - Prune: after a successful apply, files under the allowed_paths roots that
+#   the payload did not ship are deleted, so flash stops being additive and a
+#   stale lib/<mod>.mpy cannot go on shadowing its frozen twin. Bounded by four
+#   rules — see Updater.prune().
 # - Post-apply: payload is renamed to <applied_dir>/<version>/, then
 #   machine.reset() is called so the new code runs cleanly.
 
@@ -26,6 +30,10 @@ import json
 import os
 
 MANIFEST_FILENAME = "manifest.json"
+
+# fixed: package structure, not a payload-managed module. The sweep leaves it
+# alone rather than reasoning about whether this MicroPython needs it.
+_PRUNE_NEVER = ("__init__.py",)
 
 # Root that apply() writes into. Defaults to "/" on the Pico (flash root).
 # Tests monkeypatch this to redirect writes into a tmp_path.
@@ -116,6 +124,20 @@ def _sleep_ms(ms):
         pass
 
 
+def _running_frozen_modules():
+    """Module names the running firmware froze, or ``()`` when unknowable.
+
+    Isolated like ``_running_mpy_abi`` so the prune guard can be exercised on
+    the host, where there is no frozen ``fw_info`` to ask.
+    """
+    try:
+        from lib import version
+
+        return tuple(version.current_frozen_modules())
+    except Exception:
+        return ()
+
+
 def _running_mpy_abi():
     """Bytecode ABI of the firmware we are running on, or None if unknowable.
 
@@ -161,6 +183,8 @@ class Updater:
             rejected before any write.
         max_retries (int): Per-file write retry count
         retry_delay_ms (int): Sleep between retries
+        prune_stale (bool): Delete files under the allowed_paths roots that
+            this payload did not ship. See prune() for the safety rules.
         wdt: Optional WDT instance; fed between file copies
     """
 
@@ -178,6 +202,7 @@ class Updater:
         verify_max_retries=3,
         verify_retry_delay_ms=200,
         enforce_mpy_abi=True,
+        prune_stale=False,
     ):
         self.update_dir = update_dir.rstrip("/").rstrip("\\")
         self.applied_dir = applied_dir.rstrip("/").rstrip("\\")
@@ -191,6 +216,7 @@ class Updater:
         self.verify_max_retries = int(verify_max_retries)
         self.verify_retry_delay_ms = int(verify_retry_delay_ms)
         self.enforce_mpy_abi = bool(enforce_mpy_abi)
+        self.prune_stale = bool(prune_stale)
 
     # --- Public API --------------------------------------------------
 
@@ -403,6 +429,143 @@ class Updater:
             self._feed_wdt()
         self._breadcrumb("apply done")
 
+    def prune(self, manifest):
+        """Delete files this payload did not ship. Returns the removed rel-paths.
+
+        Applying a payload is otherwise strictly additive, and on a frozen
+        firmware that is a correctness bug rather than untidiness: imports
+        resolve ``lib.<mod>`` before the bare frozen name, so a ``lib/foo.mpy``
+        left over from a pre-freeze deploy *wins* over the frozen ``foo``. The
+        module still imports and still runs — just the old copy, with the heap
+        saving silently absent. Nothing raises, nothing logs.
+
+        Four rules bound what may be deleted, and every one of them is load
+        bearing:
+
+        1. **Only inside ``allowed_paths``.** The same whitelist that decides
+           what apply() may write decides what prune may unwrite. ``/sd``,
+           ``/local``, ``boot.log`` and every data path are outside it, so they
+           are not merely skipped — they are unreachable.
+        2. **Only ``.py`` / ``.mpy``.** Anything else under those roots was put
+           there by something that is not this updater.
+        3. **A twin of a shipped file is always removable.** ``config.py`` next
+           to a shipped ``config.mpy`` is a second copy of a file the payload
+           owns, so dropping it cannot remove functionality — and it settles a
+           question we would otherwise have to answer, since which of the pair
+           MicroPython prefers is not something this code should have to know.
+        4. **Anything else needs ``fw_info.FROZEN_MODULES``.** Deleting a
+           module whose only copy is in ``/lib`` bricks the import. The frozen
+           record is the one authority that cannot be wrong about this image —
+           a manifest can be built from a repo commit newer than the flashed
+           firmware and claim a freeze that never happened. When the record is
+           absent (stock firmware, pre-2026-07-28 image) the sweep keeps the
+           file and says so; "cannot tell" must never read as permission.
+
+        Never raises: the payload is already live by the time this runs, so a
+        failed unlink is a logged shadow, not a failed update.
+        """
+        if not self.prune_stale:
+            return []
+        shipped = self._shipped_paths(manifest)
+        if not shipped:
+            # An empty ship list would read as "the payload owns nothing here"
+            # and take the whole scope with it. verify_payload already refuses
+            # empty manifests; this is the belt to that suspenders.
+            self._breadcrumb("prune skipped (nothing shipped)")
+            return []
+        frozen = _running_frozen_modules()
+        if not frozen:
+            self._breadcrumb("prune: firmware frozen set unknown, twins only")
+        flash_root = _FLASH_ROOT.rstrip("/").rstrip("\\")
+        removed = []
+        for entry in self.allowed_paths:
+            entry_norm = _norm(entry)
+            if entry_norm.endswith("/"):
+                removed.extend(self._prune_dir(entry_norm, shipped, frozen, flash_root))
+            else:
+                removed.extend(self._prune_twin(entry_norm, shipped, flash_root))
+        self._breadcrumb("prune done removed=%d" % len(removed))
+        return removed
+
+    def _shipped_paths(self, manifest):
+        """Normalized rel-paths the manifest ships, skipping malformed entries."""
+        out = []
+        for entry in manifest.get("files", []):
+            try:
+                rel = entry["path"]
+            except (KeyError, TypeError):
+                continue
+            if isinstance(rel, str) and rel:
+                out.append(_norm(rel))
+        return out
+
+    def _prune_dir(self, root, shipped, frozen, flash_root):
+        """Sweep one directory root (an allowed_paths entry ending in '/')."""
+        rel_dir = root.rstrip("/")
+        abs_dir = (flash_root + "/" + rel_dir) if flash_root else "/" + rel_dir
+        try:
+            names = os.listdir(abs_dir)
+        except OSError:
+            return []
+        shipped_here = set()
+        for rel in shipped:
+            if rel.startswith(root):
+                shipped_here.add(rel[len(root) :].rsplit(".", 1)[0])
+        shipped_set = set(shipped)
+        removed = []
+        for name in names:
+            self._feed_wdt()
+            if name in _PRUNE_NEVER:
+                continue
+            if not (name.endswith(".py") or name.endswith(".mpy")):
+                continue
+            rel = root + name
+            if rel in shipped_set:
+                continue
+            abs_path = abs_dir + "/" + name
+            if _is_dir(abs_path):
+                continue
+            stem = name.rsplit(".", 1)[0]
+            if stem in shipped_here:
+                reason = "twin"
+            elif stem in frozen:
+                reason = "shadow"
+            elif frozen:
+                reason = "orphan"
+            else:
+                self._breadcrumb("prune keep %s (frozen set unknown)" % rel)
+                continue
+            if self._remove_one(abs_path, rel, reason):
+                removed.append(rel)
+        return removed
+
+    def _prune_twin(self, rel, shipped, flash_root):
+        """Remove an exact allowed_paths entry only when a same-stem sibling shipped.
+
+        Deliberately narrower than the directory sweep: at the flash root a
+        not-shipped file is as likely to be something the payload never managed
+        as it is to be stale, and ``main.py`` is not a file to be clever about.
+        Only the ``config.py`` / ``config.mpy`` shape qualifies.
+        """
+        if rel in shipped:
+            return []
+        stem = rel.rsplit(".", 1)[0]
+        if not any(other != rel and other.rsplit(".", 1)[0] == stem for other in shipped):
+            return []
+        abs_path = (flash_root + "/" + rel) if flash_root else "/" + rel
+        if not _exists(abs_path) or _is_dir(abs_path):
+            return []
+        return [rel] if self._remove_one(abs_path, rel, "twin") else []
+
+    def _remove_one(self, abs_path, rel, reason):
+        try:
+            os.remove(abs_path)
+        except OSError as e:
+            self._breadcrumb("prune %s fail %s" % (rel, e))
+            return False
+        self._breadcrumb("prune %s removed (%s)" % (rel, reason))
+        return True
+
     def finalize(self, manifest):
         version = manifest.get("version") or "unknown"
         # Sanitize version for filesystem use (replace slashes/backslashes).
@@ -595,6 +758,22 @@ def _report_unhandled(updater, version, exc):
     updater.log("error", version, detail=detail[:240])
 
 
+def _prune_quietly(updater, manifest):
+    """Run the prune sweep, swallowing anything it throws. Returns removed paths.
+
+    Called only after the new code is already on flash, so a sweep that dies
+    (MemoryError on a long listdir, an SD stall) must not turn a successful
+    update into a failed one. The cost of skipping is a shadow that survives to
+    the next payload; the cost of raising here would be a card that re-runs the
+    whole update every boot.
+    """
+    try:
+        return updater.prune(manifest)
+    except Exception as e:
+        updater.log("prune_fail", str(manifest.get("version", "?")), detail=str(e)[:200])
+        return []
+
+
 def _drive_pending_update(updater, signal_failure, version_out):
     """Run load -> verify -> apply -> finalize for an already-detected payload.
 
@@ -636,19 +815,30 @@ def _drive_pending_update(updater, signal_failure, version_out):
     # Short-circuit: payload content already on flash. Skip the apply (no
     # flash writes), still finalize so the trigger is consumed, play the
     # noop jingle, and let the boot continue without a reset.
+    #
+    # The sweep still runs here, and that is the point: re-dropping the payload
+    # a card already has is the operator's repair procedure for a card that
+    # drifted (pre-freeze shadows, a leftover .py beside a .mpy). Removing a
+    # shadow only takes effect on the next import, so a sweep that actually
+    # deleted something asks for the reset the noop path otherwise skips.
     if updater.is_already_applied(manifest):
+        pruned = _prune_quietly(updater, manifest)
         try:
             updater.finalize(manifest)
         except Exception as e:
             updater.log("noop", version, detail="finalize warn: %s" % str(e)[:200])
         else:
-            updater.log("noop", version, detail="already up to date; files=%d" % len(manifest.get("files", [])))
+            updater.log(
+                "noop",
+                version,
+                detail="already up to date; files=%d pruned=%d" % (len(manifest.get("files", [])), len(pruned)),
+            )
         if updater.feedback is not None:
             try:
                 updater.feedback.already_applied()
             except Exception:
                 pass
-        return False
+        return bool(pruned)
 
     try:
         updater.apply(manifest)
@@ -656,6 +846,11 @@ def _drive_pending_update(updater, signal_failure, version_out):
         updater.log("apply_fail", version, detail=str(e)[:240])
         signal_failure()
         return False
+
+    # Between apply and finalize: the new code is on flash, so the shipped set
+    # is now the truth about what belongs there, and the reset below makes the
+    # removals take effect in one step.
+    pruned = _prune_quietly(updater, manifest)
 
     try:
         updater.finalize(manifest)
@@ -666,7 +861,11 @@ def _drive_pending_update(updater, signal_failure, version_out):
         # /sd/ota/pending manually.
         updater.log("apply_ok", version, detail="finalize warn: %s" % str(e)[:200])
     else:
-        updater.log("apply_ok", version, detail="files=%d" % len(manifest.get("files", [])))
+        updater.log(
+            "apply_ok",
+            version,
+            detail="files=%d pruned=%d" % (len(manifest.get("files", [])), len(pruned)),
+        )
 
     # Apply succeeded — play the success jingle before resetting so the
     # operator hears confirmation while the Pico reboots into the new code.
@@ -730,6 +929,7 @@ def run_pending_update(config, hardware, wdt=None):
         verify_max_retries=upd_cfg.get("verify_max_retries", 3),
         verify_retry_delay_ms=upd_cfg.get("verify_retry_delay_ms", 200),
         enforce_mpy_abi=upd_cfg.get("enforce_mpy_abi", True),
+        prune_stale=upd_cfg.get("prune_stale", False),
     )
 
     if not updater.has_pending_update():

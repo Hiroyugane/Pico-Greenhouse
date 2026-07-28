@@ -1428,3 +1428,267 @@ class TestMpyAbiGuardBootPath:
 
         assert reset_called == [True]
         assert (flash_root / "main.py").exists()
+
+
+class TestPruneStale:
+    """The sweep that stops flash from being append-only.
+
+    Every test here is really one question: can this delete something the
+    board still needs? The rules are checked from the outside â€” by what
+    survives the sweep â€” rather than by asserting on the branch that spared it.
+    """
+
+    def _flash(self, sd_root, layout):
+        """Materialize a flash root from {rel_path: bytes} and return it."""
+        flash_root = sd_root / "flash"
+        flash_root.mkdir(parents=True, exist_ok=True)
+        for rel, content in layout.items():
+            _write(flash_root / rel, content)
+        return flash_root
+
+    def _manifest(self, files):
+        return {"version": "v1", "files": [{"path": rel, "sha256": "x" * 64, "bytes": 1} for rel in files]}
+
+    def _updater(self, updater_factory, monkeypatch, flash_root, frozen=(), **overrides):
+        from lib import updater as upd_mod
+
+        monkeypatch.setattr(upd_mod, "_FLASH_ROOT", str(flash_root), raising=False)
+        monkeypatch.setattr(upd_mod, "_running_frozen_modules", lambda: tuple(frozen))
+        opts = dict(prune_stale=True, allowed_paths=["main.py", "config.py", "config.mpy", "lib/"])
+        opts.update(overrides)
+        return updater_factory(**opts)
+
+    def test_disabled_by_default_removes_nothing(self, sd_root, updater_factory, monkeypatch):
+        flash = self._flash(sd_root, {"lib/gone.mpy": b"x", "lib/relay.py": b"y"})
+        u = self._updater(updater_factory, monkeypatch, flash, frozen=("gone",), prune_stale=False)
+
+        assert u.prune(self._manifest(["lib/relay.py"])) == []
+        assert (flash / "lib/gone.mpy").exists()
+
+    def test_removes_a_shadow_of_a_frozen_module(self, sd_root, updater_factory, monkeypatch):
+        """The bug this exists for: lib/event_logger.mpy beating its frozen twin."""
+        flash = self._flash(sd_root, {"lib/event_logger.mpy": b"stale", "lib/relay.py": b"y"})
+        u = self._updater(updater_factory, monkeypatch, flash, frozen=("event_logger", "sht31"))
+
+        removed = u.prune(self._manifest(["lib/relay.py"]))
+
+        assert removed == ["lib/event_logger.mpy"]
+        assert not (flash / "lib/event_logger.mpy").exists()
+        assert (flash / "lib/relay.py").exists(), "a shipped file is never a candidate"
+
+    def test_keeps_an_unshipped_module_when_the_frozen_set_is_unknown(self, sd_root, updater_factory, monkeypatch):
+        """Stock firmware: /lib may hold the only copy, so 'cannot tell' means keep."""
+        flash = self._flash(sd_root, {"lib/sdcard.py": b"driver", "lib/relay.py": b"y"})
+        u = self._updater(updater_factory, monkeypatch, flash, frozen=())
+
+        assert u.prune(self._manifest(["lib/relay.py"])) == []
+        assert (flash / "lib/sdcard.py").exists()
+
+    def test_removes_an_orphan_once_the_frozen_set_is_known(self, sd_root, updater_factory, monkeypatch):
+        """A module neither shipped nor frozen is one the project dropped."""
+        flash = self._flash(sd_root, {"lib/old_controller.py": b"dead", "lib/relay.py": b"y"})
+        u = self._updater(updater_factory, monkeypatch, flash, frozen=("sht31",))
+
+        assert u.prune(self._manifest(["lib/relay.py"])) == ["lib/old_controller.py"]
+        assert not (flash / "lib/old_controller.py").exists()
+
+    def test_removes_a_twin_even_with_no_frozen_record(self, sd_root, updater_factory, monkeypatch):
+        """lib/relay.py beside a shipped lib/relay.mpy is a second copy, not a module."""
+        flash = self._flash(sd_root, {"lib/relay.py": b"old raw", "lib/relay.mpy": b"new"})
+        u = self._updater(updater_factory, monkeypatch, flash, frozen=())
+
+        assert u.prune(self._manifest(["lib/relay.mpy"])) == ["lib/relay.py"]
+        assert not (flash / "lib/relay.py").exists()
+        assert (flash / "lib/relay.mpy").exists()
+
+    def test_removes_the_root_config_twin(self, sd_root, updater_factory, monkeypatch):
+        flash = self._flash(sd_root, {"config.py": b"old", "config.mpy": b"new", "main.py": b"m"})
+        u = self._updater(updater_factory, monkeypatch, flash, frozen=("sht31",))
+
+        removed = u.prune(self._manifest(["config.mpy", "main.py"]))
+
+        assert removed == ["config.py"]
+        assert (flash / "config.mpy").exists()
+
+    def test_never_removes_a_root_file_with_no_shipped_twin(self, sd_root, updater_factory, monkeypatch):
+        """main.py missing from a manifest is a weird payload, not a licence to delete it."""
+        flash = self._flash(sd_root, {"main.py": b"live", "config.py": b"live"})
+        u = self._updater(updater_factory, monkeypatch, flash, frozen=("sht31",))
+
+        assert u.prune(self._manifest(["lib/relay.py"])) == []
+        assert (flash / "main.py").exists()
+        assert (flash / "config.py").exists()
+
+    def test_never_reaches_outside_allowed_paths(self, sd_root, updater_factory, monkeypatch):
+        """Data paths are unreachable by construction, not merely skipped."""
+        flash = self._flash(
+            sd_root,
+            {
+                "local/fallback.csv": b"rows",
+                "local/orphan.py": b"not ours",
+                "boot.log": b"log",
+                "notes.py": b"stray",
+                "lib/relay.py": b"y",
+            },
+        )
+        u = self._updater(updater_factory, monkeypatch, flash, frozen=("sht31",))
+
+        assert u.prune(self._manifest(["lib/relay.py"])) == []
+        assert (flash / "local/fallback.csv").exists()
+        assert (flash / "local/orphan.py").exists()
+        assert (flash / "boot.log").exists()
+        assert (flash / "notes.py").exists()
+
+    def test_leaves_non_module_files_inside_lib_alone(self, sd_root, updater_factory, monkeypatch):
+        flash = self._flash(sd_root, {"lib/calibration.json": b"{}", "lib/notes.txt": b"hi", "lib/relay.py": b"y"})
+        u = self._updater(updater_factory, monkeypatch, flash, frozen=("sht31",))
+
+        assert u.prune(self._manifest(["lib/relay.py"])) == []
+        assert (flash / "lib/calibration.json").exists()
+        assert (flash / "lib/notes.txt").exists()
+
+    def test_keeps_package_init(self, sd_root, updater_factory, monkeypatch):
+        flash = self._flash(sd_root, {"lib/__init__.py": b"", "lib/relay.py": b"y"})
+        u = self._updater(updater_factory, monkeypatch, flash, frozen=("sht31",))
+
+        assert u.prune(self._manifest(["lib/relay.py"])) == []
+        assert (flash / "lib/__init__.py").exists()
+
+    def test_leaves_subdirectories_alone(self, sd_root, updater_factory, monkeypatch):
+        flash = self._flash(sd_root, {"lib/vendor/thing.py": b"x", "lib/relay.py": b"y"})
+        u = self._updater(updater_factory, monkeypatch, flash, frozen=("sht31",))
+
+        assert u.prune(self._manifest(["lib/relay.py"])) == []
+        assert (flash / "lib/vendor/thing.py").exists()
+
+    def test_an_empty_manifest_sweeps_nothing(self, sd_root, updater_factory, monkeypatch):
+        """An empty ship list must not read as 'the payload owns nothing here'."""
+        flash = self._flash(sd_root, {"lib/relay.py": b"y", "lib/sht31.py": b"z"})
+        u = self._updater(updater_factory, monkeypatch, flash, frozen=("sht31",))
+
+        assert u.prune({"version": "v1", "files": []}) == []
+        assert (flash / "lib/sht31.py").exists()
+
+    def test_a_failed_unlink_is_swallowed_and_the_rest_continue(self, sd_root, updater_factory, monkeypatch):
+        from lib import updater as upd_mod
+
+        flash = self._flash(sd_root, {"lib/aaa.py": b"x", "lib/bbb.py": b"y", "lib/relay.py": b"z"})
+        u = self._updater(updater_factory, monkeypatch, flash, frozen=("sht31",))
+
+        real_remove = upd_mod.os.remove
+
+        def _flaky(path):
+            if str(path).replace("\\", "/").endswith("lib/aaa.py"):
+                raise OSError(5, "EIO")
+            return real_remove(path)
+
+        monkeypatch.setattr(upd_mod.os, "remove", _flaky)
+
+        removed = u.prune(self._manifest(["lib/relay.py"]))
+
+        assert removed == ["lib/bbb.py"]
+        assert (flash / "lib/aaa.py").exists()
+
+
+class TestPruneBootPath:
+    """The sweep as the boot hook drives it."""
+
+    def _cfg(self, sd_root, **overrides):
+        cfg = {
+            "enabled": True,
+            "update_dir": str(sd_root / "update"),
+            "applied_dir": str(sd_root / "applied"),
+            "log_path": str(sd_root / "updates.log"),
+            "max_retries": 3,
+            "retry_delay_ms": 0,
+            "verify_max_retries": 3,
+            "verify_retry_delay_ms": 0,
+            "allowed_paths": ["main.py", "config.py", "lib/"],
+            "enforce_mpy_abi": True,
+            "prune_stale": True,
+        }
+        cfg.update(overrides)
+        return {"updater": cfg}
+
+    class _HW:
+        def is_sd_mounted(self):
+            return True
+
+    def test_apply_prunes_a_shadow_and_records_the_count(self, sd_root, good_payload, monkeypatch):
+        from lib import updater as upd_mod
+
+        flash_root = sd_root / "flash"
+        _write(flash_root / "lib" / "event_logger.mpy", b"stale")
+        monkeypatch.setattr(upd_mod, "_FLASH_ROOT", str(flash_root), raising=False)
+        monkeypatch.setattr(upd_mod, "_running_frozen_modules", lambda: ("event_logger",))
+        monkeypatch.setattr("machine.reset", lambda: None, raising=False)
+
+        upd_mod.run_pending_update(self._cfg(sd_root), self._HW())
+
+        assert not (flash_root / "lib" / "event_logger.mpy").exists()
+        log_text = (sd_root / "updates.log").read_text()
+        assert "apply_ok" in log_text
+        assert "pruned=1" in log_text
+
+    def test_redropping_an_applied_payload_cleans_and_asks_for_a_reset(self, sd_root, good_payload, monkeypatch):
+        """The operator's repair path for a card that drifted."""
+        from lib import updater as upd_mod
+
+        _manifest, files = good_payload
+        flash_root = sd_root / "flash"
+        for rel, content in files:
+            _write(flash_root / rel, content)
+        _write(flash_root / "lib" / "event_logger.mpy", b"stale")
+        monkeypatch.setattr(upd_mod, "_FLASH_ROOT", str(flash_root), raising=False)
+        monkeypatch.setattr(upd_mod, "_running_frozen_modules", lambda: ("event_logger",))
+
+        reset_called = []
+        monkeypatch.setattr("machine.reset", lambda: reset_called.append(True), raising=False)
+
+        upd_mod.run_pending_update(self._cfg(sd_root), self._HW())
+
+        assert not (flash_root / "lib" / "event_logger.mpy").exists()
+        assert reset_called == [True], "a removed shadow only takes effect after a reset"
+        log_text = (sd_root / "updates.log").read_text()
+        assert "noop" in log_text
+        assert "pruned=1" in log_text
+
+    def test_a_clean_redrop_still_does_not_reset(self, sd_root, good_payload, monkeypatch):
+        from lib import updater as upd_mod
+
+        _manifest, files = good_payload
+        flash_root = sd_root / "flash"
+        for rel, content in files:
+            _write(flash_root / rel, content)
+        monkeypatch.setattr(upd_mod, "_FLASH_ROOT", str(flash_root), raising=False)
+        monkeypatch.setattr(upd_mod, "_running_frozen_modules", lambda: ("event_logger",))
+
+        reset_called = []
+        monkeypatch.setattr("machine.reset", lambda: reset_called.append(True), raising=False)
+
+        upd_mod.run_pending_update(self._cfg(sd_root), self._HW())
+
+        assert reset_called == []
+        assert "pruned=0" in (sd_root / "updates.log").read_text()
+
+    def test_a_sweep_that_explodes_does_not_fail_the_update(self, sd_root, good_payload, monkeypatch):
+        from lib import updater as upd_mod
+
+        flash_root = sd_root / "flash"
+        flash_root.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(upd_mod, "_FLASH_ROOT", str(flash_root), raising=False)
+
+        def _boom():
+            raise MemoryError("no room to list a directory")
+
+        monkeypatch.setattr(upd_mod, "_running_frozen_modules", _boom)
+        reset_called = []
+        monkeypatch.setattr("machine.reset", lambda: reset_called.append(True), raising=False)
+
+        upd_mod.run_pending_update(self._cfg(sd_root), self._HW())
+
+        assert reset_called == [True], "the payload is already live; a failed sweep must not undo that"
+        assert (flash_root / "main.py").exists()
+        log_text = (sd_root / "updates.log").read_text()
+        assert "prune_fail" in log_text
+        assert "apply_ok" in log_text

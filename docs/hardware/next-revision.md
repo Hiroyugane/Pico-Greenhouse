@@ -613,7 +613,8 @@ the part already in stock) ·
   MCP6002T-I/SN abs-max V_DD-V_SS = **7.0 V**; the schematic powers it
   from the **12 V rail** (pin 8 to 12 V net). Chip degrades silently
   and will fail; explains any flaky grow-light dim behaviour.
-- **Use the LM358N (DIP-8) already in stock** (10 pcs on hand per
+- **Use the LM358N (DIP-8) already in stock** (10 pcs on hand per the
+  private parts inventory,
   most recent order). V_CC max
   32 V, pin-compatible with the dual op-amp layout the MCP6002 used.
   Not rail-to-rail at the top, which is a feature here: at 12 V
@@ -1246,8 +1247,8 @@ section.
 **Verification:** post-fab eyes-on checklist in
 [hw-test-log.md "SD module swap"](../test/hw-test-log.md).
 
-**Inventory:** see
-[inventory.md → SD card storage](inventory.md) for the new line
+**Inventory:** see the private parts inventory
+for the new line
 item (Adafruit 4682 to order; AZDelivery module not currently
 catalogued).
 

@@ -128,6 +128,20 @@ closed). Same rail as the
 XL4015 buck with its **CC trimpot already maxed**, behind two 1N4002 input
 diodes (~1.6 V drop under load).
 
+> **2026-07-31 field evidence — this fault may have cost a grow:** on
+> 2026-07-28 10:00–13:00 the tent dried to **61.1 %RH** while
+> `cmd_humidifier` sat at **100** (maximum) and the exhaust was on its floor of
+> 5 — full command, no effect, i.e. the GP19 channel had no authority. The
+> operator responded by wiring the humidifier **past the relay onto mains**,
+> which removed the engine's only humidity off-switch and put the regulation
+> engine into a latch deadlock at 100 %RH for 12.3 h with the heater and grow
+> light forced off. Full chain in
+> [chat-log 2026-07-31](../notes/chat-log.md#2026-07-31--field-run-log-analysis-2026-07-27--07-31-sd-card).
+> An unreliable coil driver on this board is not a nuisance — it is the fault
+> that made a human bypass the control system. Verify the reservoir level as
+> the innocent explanation first (hw-test FIELD.1), but treat GP19 as the
+> prime suspect until measured.
+
 - **Quantify the load:** relay-coil bank = N coils × ~70–90 mA hold, plus
   inrush, on top of the Pico + I²C0 draw. Size the 5 V supply for the
   worst-case simultaneously-energised coil count with margin.
@@ -653,6 +667,22 @@ the part already in stock) ·
 > thin. Re-test: hw-test-log **S8.2** (static bench, USB-detached) + **S8.3**
 > (24 h retry soak). The 5 V-TTL assumption below is what this finding
 > contradicts.
+
+> **2026-07-31 field evidence (severity upgrade):** the 2026-07-27 → 07-31 SD
+> run puts numbers on "the margin is thin" —
+> [chat-log](../notes/chat-log.md#2026-07-31--field-run-log-analysis-2026-07-27--07-31-sd-card).
+> **7427 read failures** over 4.5 days (99.8 % of every WARN line the system
+> emitted), at **87.6 / 43.7 / 77.6 / 71.5 / 100 %** failure rate per day, then
+> total silence from **2026-07-30 15:41** onward (1966 consecutive failures,
+> 17.5 h). Worse than the dropouts: **4.3 % of the reads that did parse are
+> physically impossible** (0, 2, 5, 48 ppm; 8320, 8903, 9470 ppm) — framing
+> errors, exactly what an under-threshold V_IH produces — and they reached the
+> actuators unfiltered. With temp and RH both within 10 of ideal (n = 1775) the
+> exhaust command averaged **50.3 at `dev_c > 55` versus 3.6 at `dev_c ≤ 55`**,
+> so the fan was mostly being driven by UART noise. This is no longer "works
+> with thin margin": the link is unusable as-is. Do not close this entry on a
+> firmware plausibility filter alone — the filter suppresses the symptom, the
+> divider is the cause.
 
 - Senseair S8 UART TXD is **5 V TTL** referenced to V+. Pico GPIO
   abs-max is **3.3 V + 0.5 V = 3.8 V**. Current R11 = 100 Ω in series

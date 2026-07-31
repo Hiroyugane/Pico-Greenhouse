@@ -2338,3 +2338,97 @@ class TestRegulationConfig:
                 config.validate_config()
         finally:
             self._restore(snap)
+
+
+class TestCo2FilteringConfig:
+    """Plausibility window, checksum flag, staleness timeout, and the FAE block."""
+
+    @staticmethod
+    def _swap(section, key, value):
+        import config
+
+        cfg = config.DEVICE_CONFIG[section] if isinstance(section, str) else section
+        original = cfg.get(key)
+        cfg[key] = value
+        return cfg, key, original
+
+    def test_defaults_validate(self):
+        import config
+
+        assert config.validate_config() is True
+
+    def test_plausible_window_must_be_ordered(self):
+        import config
+
+        cfg, key, original = self._swap("co2_logger", "plausible_min_ppm", 9000)
+        try:
+            with pytest.raises(ValueError, match="plausible_min_ppm must be <"):
+                config.validate_config()
+        finally:
+            cfg[key] = original
+
+    def test_plausible_ceiling_must_cover_the_active_profile(self):
+        """A window that discards readings the engine acts on is a silent data loss."""
+        import config
+
+        cfg, key, original = self._swap("co2_logger", "plausible_max_ppm", 900)
+        try:
+            with pytest.raises(ValueError, match="must cover the active profile"):
+                config.validate_config()
+        finally:
+            cfg[key] = original
+
+    def test_stale_timeout_must_exceed_the_poll_interval(self):
+        """A timeout under one poll period would mark every reading stale at once."""
+        import config
+
+        cfg, key, original = self._swap("co2_logger", "stale_after_s", 10)
+        try:
+            with pytest.raises(ValueError, match="stale_after_s must exceed interval_s"):
+                config.validate_config()
+        finally:
+            cfg[key] = original
+
+    def test_stale_timeout_zero_disables(self):
+        import config
+
+        cfg, key, original = self._swap("co2_logger", "stale_after_s", 0)
+        try:
+            assert config.validate_config() is True
+        finally:
+            cfg[key] = original
+
+    def test_verify_checksum_must_be_bool(self):
+        import config
+
+        cfg, key, original = self._swap("co2_logger", "verify_checksum", "yes")
+        try:
+            with pytest.raises(ValueError, match="verify_checksum must be a bool"):
+                config.validate_config()
+        finally:
+            cfg[key] = original
+
+    def test_fae_duration_must_fit_inside_the_interval(self):
+        import config
+
+        fae = config.DEVICE_CONFIG["regulation"]["fresh_air_exchange"]
+        original = fae["duration_min"]
+        fae["duration_min"] = fae["interval_min"]
+        try:
+            with pytest.raises(ValueError, match="duration_min must be <"):
+                config.validate_config()
+        finally:
+            fae["duration_min"] = original
+
+    def test_fae_command_must_be_actionable(self):
+        """A zero command would schedule a window that commands nothing."""
+        import config
+
+        fae = config.DEVICE_CONFIG["regulation"]["fresh_air_exchange"]
+        original = fae["command"]
+        fae["command"] = 0.0
+        try:
+            with pytest.raises(ValueError, match="command must be 0-100"):
+                config.validate_config()
+        finally:
+            fae["command"] = original

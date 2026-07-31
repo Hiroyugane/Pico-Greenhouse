@@ -381,6 +381,13 @@ DEVICE_CONFIG = {
     # The override_ppm thresholds drive the logger's is_override_active()
     # advisory flag (shown on the OLED CO2 page); actual venting is the
     # RegulationEngine's job via the CO2 deviation dimension.
+    # A 4.5-day field run (2026-07-27..31) logged 7427 read failures — 99.8 % of
+    # every warning the system emitted — and, worse, 4.3 % of the readings that
+    # DID parse were physically impossible (0, 2, 5, 48 ppm; 8320, 8903, 9470)
+    # and were fed straight to the actuators. Isolated on ticks where temp and
+    # RH were both within 10 of ideal, the exhaust averaged 50.3 when the CO2
+    # term was active against 3.6 when it was not: the fan was mostly being
+    # driven by UART framing errors. See docs/notes/chat-log.md 2026-07-31.
     "co2_logger": {
         "interval_s": 30,  # Poll cadence (seconds)
         "warmup_s": 30,  # Sensor warm-up window where read failures don't escalate
@@ -388,6 +395,28 @@ DEVICE_CONFIG = {
         "override_ppm_on": 2500,  # Trip threshold (ppm)
         "override_ppm_off": 2200,  # Release threshold (ppm), must be < on
         "sensor_type": "co2",  # Folder + filename prefix under paths.sensor_root
+        # Frame integrity. The reply is Modbus RTU (FE 44 02 hi lo crc_lo
+        # crc_hi), so the header and CRC16 reject a misaligned or corrupted
+        # frame DETERMINISTICALLY — which a range check cannot, because a
+        # framing error is free to land on a value inside any plausible window.
+        # This is the primary filter; the window below is the backstop for a
+        # frame that is structurally valid but absurd.
+        "verify_checksum": True,
+        # Plausibility window (ppm), applied after the checksum. 300 is below
+        # outdoor air (~420) so it only ever catches a broken reading, not a
+        # well-ventilated tent. NOTE the ceiling is a FRUITING figure: the
+        # colonization phase legitimately runs several thousand ppm, so raise
+        # this before automating that phase or healthy readings will be
+        # discarded as implausible.
+        "plausible_min_ppm": 300,
+        "plausible_max_ppm": 5000,
+        # Age (seconds) past which the cached reading stops being offered to the
+        # regulation engine. Without this the engine keeps regulating on the
+        # last good value forever: the sensor died at 15:41 on 2026-07-30 and
+        # last_ppm was never invalidated — the only reason the deviation read
+        # neutral afterwards is that an unrelated reboot cleared the cache. 0
+        # disables the timeout.
+        "stale_after_s": 300,
     },
     # Grow light schedule + dimming live under regulation.regulators.growlight
     # (tod-driven, MCP4725 via adapter dac_i2c_address/dac_max_pct).
@@ -724,6 +753,31 @@ DEVICE_CONFIG = {
             "min_factor": 0.2,
             "full_delta_rh": 10.0,
             "min_factor_rh": 0.4,
+        },
+        # Fresh-air exchange fallback, for when the CO2 reading is unavailable.
+        #
+        # A fruiting chamber needs air exchange whether or not the sensor works,
+        # and on this hardware the sensor is GUARANTEED to be blind exactly when
+        # the tent is running correctly: the S8 is specified 0-95 %RH
+        # non-condensing, and the 2026-07-27..31 logs put its failure rate at
+        # 25.9 % below 82 %RH, 67 % at 95-98 %, and 100 % above 98 % (n=205).
+        # It went permanently silent within 90 minutes of the tent saturating.
+        #
+        # With no reading the normalizer neutralises the CO2 dimension, which is
+        # correct and defensive but leaves NO driver for air exchange at all —
+        # the additive CO2 term is the only path from CO2 to an actuator. This
+        # block replaces it with a timed floor on the CO2-carrying regulators
+        # (exhaust + circulation) so the chamber still breathes on a schedule.
+        #
+        # The window is derived from wall-clock minutes, not a tick counter, so
+        # it is deterministic across reboots. command must clear the exhaust
+        # fan's real start-from-rest duty or the guarantee is nominal only —
+        # hw-test CO2.2 measures that threshold.
+        "fresh_air_exchange": {
+            "enabled": True,
+            "interval_min": 30,  # start a window every N minutes
+            "duration_min": 5,  # hold the floor for this long
+            "command": 60.0,  # floor applied to the CO2-carrying regulators
         },
         # Escalation gating — which deviation DIRECTIONS may escalate to the
         # forced emergency / latch vectors.
@@ -1619,6 +1673,23 @@ def _validate_regulation(reg_cfg, pins_cfg, top_mode):
     if profiles[profile]["category"] != _REG_CATEGORY_MODE.get(top_mode):
         raise ValueError("regulation.profile category must match top-level mode {!r}".format(top_mode))
 
+    fae = reg_cfg.get("fresh_air_exchange")
+    if fae is not None:
+        for key in ("enabled", "interval_min", "duration_min", "command"):
+            if key not in fae:
+                raise ValueError("Missing config key: regulation.fresh_air_exchange.{}".format(key))
+        if not isinstance(fae["enabled"], bool):
+            raise ValueError("regulation.fresh_air_exchange.enabled must be a bool")
+        for key in ("interval_min", "duration_min"):
+            v = fae[key]
+            if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
+                raise ValueError("regulation.fresh_air_exchange.{} must be > 0".format(key))
+        if fae["duration_min"] >= fae["interval_min"]:
+            raise ValueError("regulation.fresh_air_exchange.duration_min must be < interval_min")
+        v = fae["command"]
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or not (0 < v <= 100):
+            raise ValueError("regulation.fresh_air_exchange.command must be 0-100 and > 0")
+
     regulators = reg_cfg.get("regulators")
     if not isinstance(regulators, dict):
         raise ValueError("regulation.regulators must be a dict")
@@ -1808,6 +1879,10 @@ def validate_config():
             "override_ppm_on",
             "override_ppm_off",
             "sensor_type",
+            "verify_checksum",
+            "plausible_min_ppm",
+            "plausible_max_ppm",
+            "stale_after_s",
         ],
         "soil_logger": [
             "interval_s",
@@ -2044,6 +2119,39 @@ def validate_config():
         raise ValueError("co2_logger.override_ppm_off must be >= 0")
     if not isinstance(co2_cfg["sensor_type"], str) or not co2_cfg["sensor_type"]:
         raise ValueError("co2_logger.sensor_type must be a non-empty string")
+    if not isinstance(co2_cfg["verify_checksum"], bool):
+        raise ValueError("co2_logger.verify_checksum must be a bool")
+    lo = co2_cfg["plausible_min_ppm"]
+    hi = co2_cfg["plausible_max_ppm"]
+    for key, v in (("plausible_min_ppm", lo), ("plausible_max_ppm", hi)):
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0:
+            raise ValueError("co2_logger.{} must be >= 0".format(key))
+    if lo >= hi:
+        raise ValueError("co2_logger.plausible_min_ppm must be < plausible_max_ppm")
+    # The window has to admit the active profile's whole CO2 anchor range, or
+    # readings the regulation engine is meant to act on get thrown away as
+    # implausible before they ever reach it. Skipped when the regulation section
+    # is malformed — that section's own validator reports it, and raising a
+    # confusing co2_logger error first would bury the real cause.
+    _reg = DEVICE_CONFIG.get("regulation")
+    _prof = None
+    if isinstance(_reg, dict) and isinstance(_reg.get("profiles"), dict):
+        _prof = _reg["profiles"].get(_reg.get("profile"))
+    if isinstance(_prof, dict):
+        for phase in ("day", "night"):
+            anchors = _prof.get(phase, {}).get("co2")
+            if isinstance(anchors, dict) and anchors.get("at_100", 0) > hi:
+                raise ValueError(
+                    "co2_logger.plausible_max_ppm ({}) must cover the active profile's {} at_100 ({})".format(
+                        hi, phase, anchors["at_100"]
+                    )
+                )
+    if not isinstance(co2_cfg["stale_after_s"], (int, float)) or isinstance(co2_cfg["stale_after_s"], bool):
+        raise ValueError("co2_logger.stale_after_s must be a number")
+    if co2_cfg["stale_after_s"] < 0:
+        raise ValueError("co2_logger.stale_after_s must be >= 0")
+    if 0 < co2_cfg["stale_after_s"] <= co2_cfg["interval_s"]:
+        raise ValueError("co2_logger.stale_after_s must exceed interval_s (or be 0 to disable)")
 
     soil_cfg = DEVICE_CONFIG["soil_logger"]
     if soil_cfg["interval_s"] <= 0:

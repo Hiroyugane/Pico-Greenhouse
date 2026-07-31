@@ -2147,6 +2147,70 @@ class TestRegulationConfig:
         assert cooler["emergency_value"] is None
         assert cooler["safe_state"] is None
 
+    def test_regulation_by_cause_overrides_are_optional(self):
+        """A regulator with no by-cause block is valid — the scalar covers every cause."""
+        import config
+
+        for rname in config._REG_NAMES:
+            rcfg = config.DEVICE_CONFIG["regulation"]["regulators"][rname]
+            for key in ("emergency_by_cause", "safe_state_by_cause"):
+                assert key not in rcfg or isinstance(rcfg[key], dict)
+        assert config.validate_config() is True
+
+    def test_regulation_by_cause_accepts_a_valid_override(self):
+        import config
+
+        rcfg = config.DEVICE_CONFIG["regulation"]["regulators"]["heater"]
+        snap = rcfg.get("emergency_by_cause")
+        rcfg["emergency_by_cause"] = {"humidity_high": None, "temp_high": 0.0}
+        try:
+            assert config.validate_config() is True
+        finally:
+            if snap is None:
+                rcfg.pop("emergency_by_cause", None)
+            else:
+                rcfg["emergency_by_cause"] = snap
+
+    def test_regulation_by_cause_rejects_unknown_cause(self):
+        """A typo'd cause key must not silently do nothing."""
+        import config
+
+        rcfg = config.DEVICE_CONFIG["regulation"]["regulators"]["heater"]
+        snap = rcfg.get("safe_state_by_cause")
+        rcfg["safe_state_by_cause"] = {"humidty_high": None}  # codespell:ignore
+        try:
+            with pytest.raises(ValueError, match="must be one of"):
+                config.validate_config()
+        finally:
+            if snap is None:
+                rcfg.pop("safe_state_by_cause", None)
+            else:
+                rcfg["safe_state_by_cause"] = snap
+
+    def test_regulation_by_cause_rejects_out_of_range_value(self):
+        import config
+
+        rcfg = config.DEVICE_CONFIG["regulation"]["regulators"]["heater"]
+        snap = rcfg.get("emergency_by_cause")
+        rcfg["emergency_by_cause"] = {"temp_high": 140.0}
+        try:
+            with pytest.raises(ValueError, match="must be 0-100 or None"):
+                config.validate_config()
+        finally:
+            if snap is None:
+                rcfg.pop("emergency_by_cause", None)
+            else:
+                rcfg["emergency_by_cause"] = snap
+
+    def test_regulation_causes_cover_every_dimension_and_direction(self):
+        """The cause list is what the arbiter bit-indexes — it must stay in step."""
+        import config
+
+        assert len(config._REG_CAUSES) == 2 * len(config._REG_DIMENSIONS)
+        for i, dim in enumerate(config._REG_DIMENSIONS):
+            assert config._REG_CAUSES[i * 2] == "{}_high".format(dim)
+            assert config._REG_CAUSES[i * 2 + 1] == "{}_low".format(dim)
+
     def test_regulation_circulation_takes_the_co2_term(self):
         """Venting alone leaves dead zones — the circulation pair ramps with CO2 too."""
         from config import DEVICE_CONFIG

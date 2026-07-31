@@ -74,6 +74,12 @@ _SURFACE_PARAM_NAMES = tuple(p[0] for p in _SURFACE_PARAMS)
 # Deviation dimensions and the ordered regulator (command-vector) names. The
 # arbiter's target vector T[] is indexed by _REG_NAMES order — also load-bearing.
 _REG_DIMENSIONS = ("temp", "humidity", "co2")
+# Escalation CAUSES: one per dimension per direction, in the order the arbiter
+# bit-indexes them (dim_index * 2, +1 for the low side). These name which
+# deviation direction fired an emergency/latch, so a regulator can respond
+# differently to "too hot" than to "too wet" — forcing the heater off is
+# correct for the first and actively harmful for the second.
+_REG_CAUSES = tuple("{}_{}".format(d, side) for d in _REG_DIMENSIONS for side in ("high", "low"))
 _REG_NAMES = (
     "heater",
     "heater_follower",
@@ -1612,6 +1618,24 @@ def _validate_regulation(reg_cfg, pins_cfg, top_mode):
                 continue
             if not isinstance(v, (int, float)) or isinstance(v, bool) or not (0 <= v <= 100):
                 raise ValueError("{}.{} must be 0-100 or None".format(rctx, key))
+        # emergency_by_cause / safe_state_by_cause are OPTIONAL per-regulator
+        # overrides keyed by which deviation direction escalated ("temp_high",
+        # "humidity_low", ...). Absent = the scalar above applies to every
+        # cause, which is the pre-2026-07-31 behaviour. See the arbiter for the
+        # merge rule when several causes escalate at once.
+        for key in ("emergency_by_cause", "safe_state_by_cause"):
+            by_cause = rcfg.get(key)
+            if by_cause is None:
+                continue
+            if not isinstance(by_cause, dict):
+                raise ValueError("{}.{} must be a dict or absent".format(rctx, key))
+            for cause, v in by_cause.items():
+                if cause not in _REG_CAUSES:
+                    raise ValueError("{}.{} key {!r} must be one of {}".format(rctx, key, cause, _REG_CAUSES))
+                if v is None:
+                    continue
+                if not isinstance(v, (int, float)) or isinstance(v, bool) or not (0 <= v <= 100):
+                    raise ValueError("{}.{}.{} must be 0-100 or None".format(rctx, key, cause))
         if driven == "surface":
             dims = rcfg.get("dims")
             if not isinstance(dims, list) or len(dims) != 2 or any(d not in _REG_DIMENSIONS for d in dims):

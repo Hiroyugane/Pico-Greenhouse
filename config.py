@@ -776,6 +776,14 @@ DEVICE_CONFIG = {
             # severity where a fruiting chamber genuinely is in trouble; at_0 =
             # 0 means low CO2 never registers as a fault, which is correct —
             # there is no such thing as too much fresh air for a fruiting body.
+            #
+            # Night runs deliberately cooler and wetter than day: ideal temp
+            # drops 3 C (24 -> 21) rather than tracking day, because the dark
+            # phase is where the cool/humid shift that favours pinning is
+            # cheapest to hold — no lamp load fighting the cooler. Night RH
+            # ideal sits 2 points ABOVE day (92 -> 94) so 95-97 %RH, which is
+            # where the tent actually settles overnight, scores as near-ideal
+            # instead of dragging the humidifier off and the exhaust up.
             "cubensis": {
                 "category": "mushroom",
                 "day": {
@@ -784,8 +792,8 @@ DEVICE_CONFIG = {
                     "co2": {"at_0": 0.0, "at_50": 600.0, "at_100": 2000.0},
                 },
                 "night": {
-                    "temp": {"at_0": 15.0, "at_50": 23.0, "at_100": 29.0},
-                    "humidity": {"at_0": 75.0, "at_50": 92.0, "at_100": 100.0},
+                    "temp": {"at_0": 15.0, "at_50": 21.0, "at_100": 29.0},
+                    "humidity": {"at_0": 75.0, "at_50": 94.0, "at_100": 100.0},
                     "co2": {"at_0": 0.0, "at_50": 600.0, "at_100": 2000.0},
                 },
             },

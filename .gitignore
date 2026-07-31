@@ -88,6 +88,12 @@ htmlcov/
 sd/
 # Logger output produced by host runs.
 *.csv
+# ...except the blessed regulation golden vectors, which are the
+# reference the on-device surface math is asserted against. CLAUDE.md
+# and tests/test_regulation_golden.py both treat these as committed
+# artifacts; without this negation a fresh clone has no vectors to
+# compare against and the golden test fails on a missing file.
+!tests/golden/*.csv
 # Stray log files from prototypes/ and ad-hoc host runs.
 *.log
 # Captured SD-card output from prototype runs (incl. Windows volume cruft).

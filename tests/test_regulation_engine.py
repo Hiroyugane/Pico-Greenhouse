@@ -73,20 +73,38 @@ def _adapter(adapters, names, name):
 class TestCalm:
     def test_all_zero_at_night_ideal(self):
         # Night (b=0), everything at the night ideal → every command settles at
-        # 0, except the heater's deliberate near-ideal trim: its ramp starts one
-        # deviation point ABOVE ideal (bx_lo1 = 51), so it holds the setpoint
-        # from below instead of waiting for the room to fall out of the band.
-        # The trim must stay under the 5 % duty the time-proportioning adapter
-        # can actually realize (min_on_s 30 s in a 600 s window), so at ideal
-        # the element still fires at most 30 s per 10 minutes.
-        engine, adapters, names = _engine(temp=21.0, hum=94.0, co2=600.0, minutes=0)
+        # 0, except the two deliberate near-ideal trims.
+        #
+        # The heater's ramp starts one deviation point ABOVE ideal (bx_lo1 = 51)
+        # so it holds the setpoint from below instead of waiting for the room to
+        # fall out of the band. The trim must stay under the 5 % duty the
+        # time-proportioning adapter can actually realize (min_on_s 30 s in a
+        # 600 s window), so at ideal the element fires at most 30 s per 10 min.
+        #
+        # The humidifier gained the same treatment on 2026-07-31 (bx_lo1 43 →
+        # 53) because its ramp used to die seven deviation points BELOW ideal,
+        # which left the relay opening at RH 89.6 against a 92 % ideal — the tent
+        # could not reach its own setpoint. It now trims at ideal too, and the
+        # binding requirement is different from the heater's: the humidifier is a
+        # RELAY, so its trim must stay under the adapter's off_below or the
+        # contact would be held closed forever at the setpoint. Asserting
+        # against off_below (not a bare number) keeps this tied to the shipped
+        # calibration, which is the pair that has to move together.
+        engine, adapters, names = _engine(temp=21.0, hum=95.0, co2=600.0, minutes=0)
         engine.tick(now_s=0.0)
         heater = _adapter(adapters, names, "heater").value
         follower = _adapter(adapters, names, "heater_follower").value
         assert 0.0 < heater < 5.0
         assert abs(follower - heater * 0.8) < 1e-3
+
+        import config
+
+        off_below = config.DEVICE_CONFIG["regulation"]["regulators"]["humidifier"]["adapter"]["off_below"]
+        humidifier = _adapter(adapters, names, "humidifier").value
+        assert 0.0 < humidifier < off_below
+
         for ad in adapters:
-            if ad.name in ("heater", "heater_follower"):
+            if ad.name in ("heater", "heater_follower", "humidifier"):
                 continue
             assert ad.value == 0.0
 
@@ -148,8 +166,8 @@ class TestReactions:
         # tent the dead zones between the blocks never reach it. Hold temp and
         # RH at the day ideal so the circulation surface contributes nothing and
         # the CO2 term is the only thing that can move the pair.
-        engine_low, ad_low, names = _engine(temp=24.0, hum=92.0, co2=600.0, minutes=720)
-        engine_high, ad_high, _ = _engine(temp=24.0, hum=92.0, co2=1400.0, minutes=720)
+        engine_low, ad_low, names = _engine(temp=24.0, hum=95.0, co2=600.0, minutes=720)
+        engine_high, ad_high, _ = _engine(temp=24.0, hum=95.0, co2=1400.0, minutes=720)
         for i in range(10):  # slew_normal caps the per-tick climb
             engine_low.tick(now_s=float(i * 30))
             engine_high.tick(now_s=float(i * 30))
@@ -166,6 +184,63 @@ class TestReactions:
         follower = _adapter(adapters, names, "heater_follower").value
         assert heater > 0.0
         assert follower > 0.0
+
+
+class TestSaturationDoesNotLatch:
+    """A saturated tent must not be able to latch the system shut.
+
+    Field incident 2026-07-30/31 (docs/notes/chat-log.md): RH reached 100 %,
+    which was exactly the cubensis at_100 anchor, so humidity deviation pinned
+    at 100 and severity at its ceiling of 50. Emergency and latch both fired and
+    the safe-state vector forced the heater to 0. Heater off cooled the tent,
+    colder air raised RH further at unchanged absolute moisture, severity stayed
+    pinned, and the release gate (emax <= 30) became unreachable. The controller
+    held that state for 12.3 h with the grow light off.
+
+    The fix is that at_100 sits at 102 %RH — above anything the sensor can read
+    — so saturation now scores deviation 85.7 / severity 35.7: past the conflict
+    edge, short of the emergency edge. These tests pin that boundary from both
+    sides, because it is only useful if it is TIGHT: too generous and the
+    exhaust stops treating saturation as urgent.
+    """
+
+    def test_saturation_does_not_latch_or_emergency(self):
+        engine, adapters, names = _engine(temp=24.0, hum=100.0, co2=600.0, minutes=720)
+        for i in range(6):  # well past latch.enter_ticks (3)
+            engine.tick(now_s=float(i * 30))
+        assert engine._arb.latched is False
+        assert engine._arb.emergency_active is False
+
+    def test_saturation_leaves_the_heater_free_to_run(self):
+        # The heater is the actuator whose forced-to-0 closed the loop. It must
+        # still be following its own surface at saturation, not pinned.
+        engine, adapters, names = _engine(temp=21.0, hum=100.0, co2=600.0, minutes=720)
+        for i in range(6):
+            engine.tick(now_s=float(i * 30))
+        assert _adapter(adapters, names, "heater").value > 0.0
+
+    def test_saturation_leaves_the_growlight_on_in_daylight(self):
+        # Light-off is defensible for an over-temperature emergency (lamp load).
+        # For an over-humidity one it is pure loss, and light is the pinning
+        # trigger for cubensis — it was dark for ~19 h during the incident.
+        engine, adapters, names = _engine(temp=24.0, hum=100.0, co2=600.0, minutes=720)
+        for i in range(6):
+            engine.tick(now_s=float(i * 30))
+        assert _adapter(adapters, names, "growlight").value > 0.0
+
+    def test_saturation_still_vents_hard(self):
+        # The anchor must not be so loose that saturation reads as unremarkable.
+        # at_100 = 105 was rejected for exactly this: it halved the exhaust.
+        engine, adapters, names = _engine(temp=24.0, hum=100.0, co2=600.0, minutes=720)
+        for i in range(10):
+            engine.tick(now_s=float(i * 30))
+        assert _adapter(adapters, names, "exhaust").value == 100.0
+
+    def test_saturation_still_cuts_the_humidifier(self):
+        engine, adapters, names = _engine(temp=24.0, hum=100.0, co2=600.0, minutes=720)
+        for i in range(6):
+            engine.tick(now_s=float(i * 30))
+        assert _adapter(adapters, names, "humidifier").value == 0.0
 
 
 class TestEmergencyLatch:

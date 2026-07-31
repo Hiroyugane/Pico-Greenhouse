@@ -777,23 +777,50 @@ DEVICE_CONFIG = {
             # 0 means low CO2 never registers as a fault, which is correct —
             # there is no such thing as too much fresh air for a fruiting body.
             #
-            # Night runs deliberately cooler and wetter than day: ideal temp
-            # drops 3 C (24 -> 21) rather than tracking day, because the dark
-            # phase is where the cool/humid shift that favours pinning is
-            # cheapest to hold — no lamp load fighting the cooler. Night RH
-            # ideal sits 2 points ABOVE day (92 -> 94) so 95-97 %RH, which is
-            # where the tent actually settles overnight, scores as near-ideal
-            # instead of dragging the humidifier off and the exhaust up.
+            # Night runs deliberately cooler than day: ideal temp drops 3 C
+            # (24 -> 21) rather than tracking day, because the dark phase is
+            # where the cool/humid shift that favours pinning is cheapest to
+            # hold — no lamp load fighting the cooler.
+            #
+            # HUMIDITY at_100 IS DELIBERATELY UNREACHABLE (102 %RH), and that is
+            # the point of the anchor rather than an off-by-something.
+            # Deviation saturates at the outer anchor, and a saturated dimension
+            # pins severity at 50 — the latch edge. With at_100 = 100 %RH that
+            # ceiling sat on a reading the tent reaches routinely: a saturated
+            # chamber scored maximum severity, fired emergency + latch, and the
+            # safe-state vector then forced the heater to 0. Heater off cooled
+            # the tent, colder air raised RH further at unchanged absolute
+            # moisture, severity stayed pinned, and the latch release
+            # (emax <= 30) became unreachable — a closed loop the firmware could
+            # not exit. It held that way for 12.3 h on 2026-07-30/31, with the
+            # grow light dark for ~19 h (docs/notes/chat-log.md 2026-07-31).
+            #
+            # 102 is chosen TIGHTLY, not generously. Saturation now scores
+            # deviation 85.7 / severity 35.7: past the conflict edge (30) so the
+            # mold-risk rule still arms and the exhaust still saturates at 100,
+            # but short of the emergency edge (40) so RH can never again be the
+            # dimension that latches the system. A looser 105 was tried first
+            # and rejected — it drops saturation to severity 25, which halves
+            # the exhaust (100 -> 57.5) and the circulation (100 -> 44) at
+            # exactly the condition they exist to correct, and demotes a
+            # saturated tent to the "organic" band where it reads as normal.
+            #
+            # at_50 = 95 %RH is the operator's fruiting target. The KPI +-10
+            # band is therefore RH 91.0-96.4, which is where a fruiting chamber
+            # actually lives. Day and night share it. TWO other things are
+            # calibrated against this ideal and had to move with it: the
+            # humidifier ramp (regulators.humidifier) and the mold-risk conflict
+            # rule's humidity threshold (see conflicts, below).
             "cubensis": {
                 "category": "mushroom",
                 "day": {
                     "temp": {"at_0": 16.0, "at_50": 24.0, "at_100": 30.0},
-                    "humidity": {"at_0": 75.0, "at_50": 92.0, "at_100": 100.0},
+                    "humidity": {"at_0": 75.0, "at_50": 95.0, "at_100": 102.0},
                     "co2": {"at_0": 0.0, "at_50": 600.0, "at_100": 2000.0},
                 },
                 "night": {
                     "temp": {"at_0": 15.0, "at_50": 21.0, "at_100": 29.0},
-                    "humidity": {"at_0": 75.0, "at_50": 94.0, "at_100": 100.0},
+                    "humidity": {"at_0": 75.0, "at_50": 95.0, "at_100": 102.0},
                     "co2": {"at_0": 0.0, "at_50": 600.0, "at_100": 2000.0},
                 },
             },
@@ -1010,8 +1037,8 @@ DEVICE_CONFIG = {
                 # chill further). hy_lo1/hy_lo2 add a mild cold-side taper so a
                 # cold chamber backs off progressively rather than in one step.
                 #
-                # The RH response is still a proportional ramp that starts AT
-                # ideal (hx_lo1 = 1.4 from bx_lo1 = 43), and it deliberately
+                # The RH response is a proportional ramp that ends just ABOVE
+                # ideal (hx_lo1 = 1.4 from bx_lo1 = 53), and it deliberately
                 # carries no deadband of its own. A relay actuator only ever
                 # observes two points on the curve — where the command crosses
                 # the adapter's on_above / off_below — so a surface-level
@@ -1026,6 +1053,26 @@ DEVICE_CONFIG = {
                 # hx_hi1/-bx_hi1 and hx_hi2 cut the command back once the air is
                 # already humid, so the evaporative bias never adds moisture to
                 # a humid room.
+                #
+                # bx_lo1 moved 43 -> 53 on 2026-07-31 because the ramp ended
+                # SEVEN deviation points BELOW ideal, and off_below opened the
+                # contact earlier still: driving this surface through the
+                # shipped adapter, the relay opened at RH 89.6 against a 92 %
+                # ideal. The tent could not reach its own setpoint. On
+                # 2026-07-29, the last full day with the relay in control, RH
+                # averaged 89.9 % — the predicted ceiling to within a rounding
+                # error — and the operator bypassed the relay onto mains because
+                # the ideal "looked too low". It was not too low, it was
+                # unreachable.
+                #
+                # This is the same correction the heater received on 2026-07-22
+                # (bx_lo1 = 51, one point above its ideal, so it "trims
+                # continuously around the setpoint instead of waiting for the
+                # room to fall out of the band"). The humidifier never got it,
+                # which is exactly why temperature held 99.3 % inside the KPI
+                # band that day while humidity met it on no day at all. 53
+                # rather than 51 because the relay's own hysteresis costs a
+                # further ~2 points of RH before the contact opens.
                 "surface": _surface(
                     ca=-1.2,
                     sa=1.4,
@@ -1035,7 +1082,7 @@ DEVICE_CONFIG = {
                     bx_hi1=55.0,
                     hx_hi2=0.2,
                     hx_lo1=1.4,
-                    bx_lo1=43.0,
+                    bx_lo1=53.0,
                     hy_lo1=0.2,
                     hy_lo2=0.1,
                 ),
@@ -1050,6 +1097,26 @@ DEVICE_CONFIG = {
                 # mists sooner, a cold one later. That bias is intended; cut
                 # gain/cross toward 0 if the band should be temperature-
                 # independent instead.
+                #
+                # off_below DELIBERATELY STAYS 7.0 while the surface's bx_lo1
+                # moved 43 -> 53 (2026-07-31). Measured at the ideal temperature
+                # against the 75/95/102 anchors, the relay opens at:
+                #   bx_lo1 43, off_below 7  →  RH 89.6   (old: 2.4 points short)
+                #   bx_lo1 53, off_below 7  →  RH 94.5   ← shipped, 0.5 short
+                #   bx_lo1 53, off_below 5  →  RH 94.9
+                #   bx_lo1 53, off_below 3  →  RH 95.1
+                # Moving the ramp alone recovers almost all of the shortfall,
+                # and the last half point is not worth buying. This surface's
+                # humid-AND-hot residue is 4.3 command units (evaluate at x=80,
+                # y=100), and a relay whose command never falls back under
+                # off_below can never be released — so off_below must stay above
+                # that residue. At 7.0 the guard keeps 2.7 units of margin; at
+                # 3.0 it inverts, and the humidifier could be held closed in a
+                # hot, near-saturated tent. tests/test_regulation_surface.py
+                # asserts exactly this, and it caught the 3.0 attempt.
+                #
+                # Resulting band at ideal temperature: RH 92.7 (close) .. 94.6
+                # (open), with min_on_s / min_off_s bounding the cycling.
                 "adapter": {
                     "type": "relay",
                     "pin_key": "relay_humidifier",  # GP19 (freed fan relay 2)
@@ -1237,9 +1304,26 @@ DEVICE_CONFIG = {
         # severity threshold on the signed side of 50). force sets exact values;
         # prefer applies max(). Ship the mold-risk rule: hot+humid → humidifier
         # hard-cut, exhaust+cooler preferred.
+        #
+        # The humidity threshold is 0 — "at or above ideal" — and it is a
+        # re-derivation, not a loosening. It was 30 (deviation >= 80) when the
+        # humidity anchors were 75/92/100, where deviation 80 meant RH 96.8.
+        # Under 75/95/102 that same 30 would mean RH 99.2, leaving the rule dark
+        # through most of the band where blotch develops. Worse, the protection
+        # at 28 C / 96 %RH never came from this rule at all: it came from the
+        # humidifier surface's own high-side cut-back at deviation 55, which
+        # used to land on RH 92.8 and now lands on RH 95.7 — so raising the
+        # ideal quietly moved that guard 3 points up and opened a window where a
+        # 28 C, 96 %RH tent was commanded to mist (25.6, well over the relay's
+        # on_above of 18). Bacterial-blotch conditions, created by the anchor
+        # change itself. Threshold 0 restores the guard as an explicit rule
+        # rather than a side effect of surface geometry: above 27.6 C, stop
+        # adding water once humidity reaches ideal. Verified to hold the
+        # humidifier at 0 for 27.8/95.5, 28/96, 28.2/97.5 and 30/98, while 24 C
+        # misting and 26 C misting (below the temp gate) are untouched.
         "conflicts": [
             {
-                "when": [["humidity", "above", 30], ["temp", "above", 30]],
+                "when": [["humidity", "above", 0], ["temp", "above", 30]],
                 "force": {"humidifier": 0.0},
                 "prefer": {"exhaust": 60.0, "cooler": 100.0},
             },

@@ -186,6 +186,81 @@ class TestReactions:
         assert follower > 0.0
 
 
+class TestFreshAirExchangeFallback:
+    """When the CO2 reading is gone, the chamber must still breathe.
+
+    The additive CO2 term is the only path from a CO2 reading to an actuator,
+    so a neutralised reading leaves no air-exchange driver at all. That is not
+    a rare case on this hardware: the S8 is specified 0-95 %RH non-condensing
+    and measured a 100 % failure rate above 98 %RH during the 2026-07-27..31
+    run, i.e. it goes blind exactly when a fruiting chamber is at its target.
+    """
+
+    def test_idle_when_the_sensor_is_healthy(self):
+        # A live reading means the real CO2 term is in charge; the fallback
+        # must not add anything on top of it.
+        engine, adapters, names = _engine(temp=24.0, hum=95.0, co2=600.0, minutes=720)
+        assert engine._fae_floor(600.0, 720) == 0.0
+
+    def test_floor_applied_inside_the_window_when_blind(self):
+        import config
+
+        fae = config.DEVICE_CONFIG["regulation"]["fresh_air_exchange"]
+        engine, adapters, names = _engine(temp=24.0, hum=95.0, co2=None, minutes=720)
+        # minute 720 % 30 == 0 → inside the duration window.
+        assert engine._fae_floor(None, 720) == fae["command"]
+        # 10 minutes in, past a 5-minute duration → idle again.
+        assert engine._fae_floor(None, 730) == 0.0
+
+    def test_window_reaches_the_actuators(self):
+        import config
+
+        fae = config.DEVICE_CONFIG["regulation"]["fresh_air_exchange"]
+        engine, adapters, names = _engine(temp=24.0, hum=95.0, co2=None, minutes=720)
+        for i in range(10):
+            engine.tick(now_s=float(i * 30))
+        assert _adapter(adapters, names, "exhaust").value >= fae["command"]
+        assert _adapter(adapters, names, "circulation").value >= fae["command"]
+
+    def test_fallback_never_cuts_a_stronger_demand(self):
+        """It is a floor, not a setpoint — a hot tent must still vent harder."""
+        import config
+
+        fae = config.DEVICE_CONFIG["regulation"]["fresh_air_exchange"]
+        engine, adapters, names = _engine(temp=29.0, hum=95.0, co2=None, minutes=720)
+        for i in range(10):
+            engine.tick(now_s=float(i * 30))
+        assert _adapter(adapters, names, "exhaust").value > fae["command"]
+
+    def test_schedule_is_wall_clock_not_tick_counted(self):
+        """A reboot mid-cycle must resume the schedule, not restart it."""
+        engine, adapters, names = _engine(temp=24.0, hum=95.0, co2=None, minutes=720)
+        fresh, _, _ = _engine(temp=24.0, hum=95.0, co2=None, minutes=720)
+        assert engine._fae_floor(None, 903) == fresh._fae_floor(None, 903)
+
+    def test_disabled_block_never_engages(self):
+        import copy
+
+        import config
+        from lib.regulation_engine import RegulationEngine
+
+        reg = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        reg["fresh_air_exchange"]["enabled"] = False
+        names = config._REG_NAMES
+        adapters = [FakeAdapter(n) for n in names]
+        engine = RegulationEngine(
+            reg,
+            names,
+            config._REG_DIMENSIONS,
+            adapters,
+            FakeTh(24.0, 95.0),
+            FakeCo2(None),
+            FakeTime(720 * 60),
+            clock=lambda: 0.0,
+        )
+        assert engine._fae_floor(None, 720) == 0.0
+
+
 class TestSaturationDoesNotLatch:
     """A saturated tent must not be able to latch the system shut.
 

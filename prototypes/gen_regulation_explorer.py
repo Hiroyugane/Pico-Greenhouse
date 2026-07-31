@@ -800,6 +800,13 @@ _HTML_BODY = """<div class="topbar">
       <span class="eyebrow ctl-label">Species profile</span>
       <select id="prof"></select>
     </div>
+    <div class="ctl">
+      <span class="eyebrow ctl-label">Axis ticks</span>
+      <div class="segrail mini" id="axisMode" role="group" aria-label="Axis tick units">
+        <button type="button" data-axis="dev">deviation</button>
+        <button type="button" data-axis="phys">physical</button>
+      </div>
+    </div>
     <div class="ctl grow">
       <div class="slider-head"><span class="eyebrow" id="todLabel">Time of day (blend b)</span>
         <span class="readout" id="todOut"></span></div>
@@ -935,6 +942,7 @@ let state = {
   // Defaults to noon, which is inside every sane day window.
   clockMin: parseInt(localStorage.getItem("rse.clock") ?? "720", 10),
   todMode: localStorage.getItem("rse.todmode") || "b",
+  axis: localStorage.getItem("rse.axis") || "dev",
   co2dev: parseInt(localStorage.getItem("rse.co2") ?? "50", 10),
   sel: null,
   showAll: false
@@ -946,6 +954,7 @@ state.b = Math.min(1, Math.max(0, state.b));
 if (!Number.isFinite(state.clockMin)) state.clockMin = 720;
 state.clockMin = Math.min(1435, Math.max(0, state.clockMin));
 if (state.todMode !== "clock") state.todMode = "b";
+if (state.axis !== "phys") state.axis = "dev";
 if (!Number.isFinite(state.co2dev)) state.co2dev = 50;
 state.co2dev = Math.min(100, Math.max(0, state.co2dev));
 
@@ -1287,6 +1296,15 @@ function buildControls() {
     render(); renderProfileEditor();
   };
 
+  const axis = el("axisMode");
+  axis.querySelectorAll("button").forEach(b => {
+    b.onclick = () => {
+      state.axis = b.dataset.axis;
+      localStorage.setItem("rse.axis", state.axis);
+      render();
+    };
+  });
+
   const todm = el("todMode");
   todm.querySelectorAll("button").forEach(b => {
     b.onclick = () => {
@@ -1370,20 +1388,38 @@ function render() {
     + "b = " + b.toFixed(2) + " · "
     + (b >= 1 ? "full day" : b <= 0 ? "full night" : "transition");
 
-  // Axes — deviation number every other tick (majors at 0/50/100 bold); the
-  // physical anchors live in the axis title, exact values in the detail panel.
+  // Axes. In deviation mode: the number every other tick (majors at 0/50/100
+  // bold), physical anchors in the axis title, exact values in the detail
+  // panel. In physical mode the ticks carry the profile's own units instead —
+  // at the quarters only, because "24.0" needs four times the room "40" does,
+  // and on the quarters specifically so that dev 50 (ideal, the one value an
+  // operator looks for) always carries a number.
+  // The cells never move: the deviation grid is evenly spaced, so physical
+  // ticks are unevenly VALUED either side of ideal whenever the profile's
+  // anchors are asymmetric. The axis title says so.
   const dx = R.dims[0], dy = R.dims[1];
   const ax = anchors(dx), ay = anchors(dy);
   const dp = d => d === "co2" ? 0 : 1;
-  el("xlab").innerHTML = `${D.dimLabels[dx]} deviation → <span class="mono" style="color:var(--fg-3)">`
-    + `${ax.a0.toFixed(dp(dx))} · ${ax.a50.toFixed(dp(dx))} · ${ax.a100.toFixed(dp(dx))} ${D.dimUnits[dx]}</span>`;
-  el("ylab").innerHTML = `${D.dimLabels[dy]} deviation → `
-    + `${ay.a0.toFixed(dp(dy))} · ${ay.a50.toFixed(dp(dy))} · ${ay.a100.toFixed(dp(dy))} ${D.dimUnits[dy]}`;
+  const phys = state.axis === "phys";
+  const axisTitle = (dim, a) => phys
+    ? `${D.dimLabels[dim]} → <span class="mono" style="color:var(--fg-3)">${D.dimUnits[dim]}`
+      + ` · non-linear at ideal ${a.a50.toFixed(dp(dim))}</span>`
+    : `${D.dimLabels[dim]} deviation → <span class="mono" style="color:var(--fg-3)">`
+      + `${a.a0.toFixed(dp(dim))} · ${a.a50.toFixed(dp(dim))} · ${a.a100.toFixed(dp(dim))}`
+      + ` ${D.dimUnits[dim]}</span>`;
+  el("xlab").innerHTML = axisTitle(dx, ax);
+  el("ylab").innerHTML = axisTitle(dy, ay);
   const tickCls = v => (v % 50 === 0) ? " maj" : "";
+  const tickText = (v, i, dim, a) => {
+    if (!phys) return i % 2 === 0 ? String(v) : "";
+    return v % 25 === 0 ? devToPhys(v, a).toFixed(dp(dim)) : "";
+  };
   el("xticks").innerHTML = G.map((v, i) =>
-    `<div class="xtick${tickCls(v)}">${i % 2 === 0 ? v : ""}</div>`).join("");
+    `<div class="xtick${tickCls(v)}">${tickText(v, i, dx, ax)}</div>`).join("");
   el("yticks").innerHTML = G.map((v, i) =>
-    `<div class="ytick${tickCls(v)}">${i % 2 === 0 ? v : ""}</div>`).join("");
+    `<div class="ytick${tickCls(v)}">${tickText(v, i, dy, ay)}</div>`).join("");
+  el("axisMode").querySelectorAll("button")
+    .forEach(b => b.setAttribute("aria-pressed", b.dataset.axis === state.axis));
 
   el("chartTitle").textContent = reg + " — final effective duty";
   el("chartNote").textContent = chartNote(R, reg);

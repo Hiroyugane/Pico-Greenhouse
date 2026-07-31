@@ -955,6 +955,27 @@ DEVICE_CONFIG = {
                 "floor": 0.0,
                 "emergency_value": 0.0,  # heat source off in emergency
                 "safe_state": 0.0,
+                # ...but NOT when the emergency is "too wet". Relative humidity
+                # is temperature-coupled, so cutting the heat in a saturated
+                # tent raises RH further and the severity that fired the
+                # emergency can never fall — the 2026-07-30/31 deadlock, where
+                # the tent cooled 2.8 C over the 12.3 h it was held. Freeing the
+                # heater lets its own surface keep holding temperature, which is
+                # what stops the spiral; the surface commands 0 once the room is
+                # warm enough, so it cannot overheat.
+                #
+                # The cubensis anchors make RH-driven escalation unreachable on
+                # their own (at_100 = 102 %RH), so for that profile this is
+                # defence in depth. It is NOT redundant: every other profile
+                # still has a reachable humidity at_100 (oyster 98, lions_mane
+                # 100, ...) and the validator cannot enforce unreachability, so
+                # this is the fix that holds regardless of profile.
+                #
+                # Both vectors carry it because emergency is applied BEFORE the
+                # latch: freeing the heater only in safe_state would leave it
+                # already pinned to 0 by the time the latch stage runs.
+                "emergency_by_cause": {"humidity_high": None},
+                "safe_state_by_cause": {"humidity_high": None},
             },
             "heater_follower": {
                 "driven": "follower",
@@ -1303,6 +1324,16 @@ DEVICE_CONFIG = {
                 "floor": 0.0,
                 "emergency_value": 0.0,
                 "safe_state": 0.0,
+                # Light-off is a real mitigation for an over-TEMPERATURE
+                # emergency: the panel is lamp load, and cutting it removes heat
+                # the tent cannot otherwise shed. It does nothing whatsoever for
+                # an over-humidity one — the lamp is not a moisture source — so
+                # there it is pure loss. Light is the pinning trigger for
+                # cubensis, and the tent went dark for ~19 h during the
+                # 2026-07-30/31 latch because the vector could not tell the two
+                # emergencies apart.
+                "emergency_by_cause": {"humidity_high": None},
+                "safe_state_by_cause": {"humidity_high": None},
             },
         },
         # Conflict override rules (global band >= 30), applied in order — later

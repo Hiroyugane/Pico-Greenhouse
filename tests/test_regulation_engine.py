@@ -243,6 +243,64 @@ class TestSaturationDoesNotLatch:
         assert _adapter(adapters, names, "humidifier").value == 0.0
 
 
+class TestHumidityEmergencyKeepsItsRemedies:
+    """Belt and braces for the deadlock, at the layer the anchors cannot reach.
+
+    TestSaturationDoesNotLatch covers the cubensis case, where at_100 = 102 %RH
+    puts RH-driven escalation out of reach entirely. That trick is per-profile
+    and the validator cannot enforce it — oyster still has at_100 = 98, so a
+    saturated oyster chamber CAN still escalate on humidity. These tests force
+    the reachable case and assert the cause-aware vectors hold the line anyway.
+    """
+
+    @staticmethod
+    def _engine_with_reachable_humidity(**kw):
+        import copy
+
+        import config
+        from lib.regulation_engine import RegulationEngine
+
+        reg = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        for phase in ("day", "night"):
+            reg["profiles"]["cubensis"][phase]["humidity"] = {"at_0": 75.0, "at_50": 92.0, "at_100": 100.0}
+        names = config._REG_NAMES
+        adapters = [FakeAdapter(n) for n in names]
+        engine = RegulationEngine(
+            reg,
+            names,
+            config._REG_DIMENSIONS,
+            adapters,
+            FakeTh(kw.get("temp", 21.0), kw.get("hum", 100.0)),
+            FakeCo2(600.0),
+            FakeTime(kw.get("minutes", 720) * 60),
+            clock=lambda: 0.0,
+        )
+        return engine, adapters, names
+
+    def test_saturation_latches_but_leaves_heater_and_light_alone(self):
+        engine, adapters, names = self._engine_with_reachable_humidity(temp=21.0, hum=100.0)
+        for i in range(6):
+            engine.tick(now_s=float(i * 30))
+        # The latch DOES fire here — that is the point of the fixture.
+        assert engine._arb.latched is True
+        # …but the two actuators that were wrongly cut now survive it.
+        assert _adapter(adapters, names, "heater").value > 0.0
+        assert _adapter(adapters, names, "growlight").value > 0.0
+        # …while the ones that genuinely help are still forced.
+        assert _adapter(adapters, names, "exhaust").value == 100.0
+        assert _adapter(adapters, names, "humidifier").value == 0.0
+
+    def test_a_simultaneous_heat_emergency_takes_the_heater_back(self):
+        # Too hot AND too wet: the humidity relaxation must lapse, because the
+        # merge only keeps an override every active cause agrees on.
+        engine, adapters, names = self._engine_with_reachable_humidity(temp=30.0, hum=100.0)
+        for i in range(6):
+            engine.tick(now_s=float(i * 30))
+        assert engine._arb.latched is True
+        assert _adapter(adapters, names, "heater").value == 0.0
+        assert _adapter(adapters, names, "growlight").value == 0.0
+
+
 class TestEmergencyLatch:
     def test_emergency_fires_alarm_and_logs(self):
         alarms = []

@@ -680,6 +680,10 @@ async def main():
             sensor_type=co2_config.get("sensor_type", "co2"),
             write_queue=write_queue,
             status_manager=status_manager,
+            verify_checksum=co2_config.get("verify_checksum", True),
+            plausible_min_ppm=co2_config.get("plausible_min_ppm", 300),
+            plausible_max_ppm=co2_config.get("plausible_max_ppm", 5000),
+            stale_after_s=co2_config.get("stale_after_s", 300),
         )
     except Exception as e:
         logger.warning("MAIN", f"CO2Logger init failed (non-critical): {e}")

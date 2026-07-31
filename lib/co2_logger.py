@@ -237,6 +237,12 @@ class CO2Logger:
 
     def _ensure_header(self) -> None:
         relpath = self._strip_sd_prefix(self.filename)
+        # Register before writing: a header created while SD is down can be
+        # evicted from the fallback (oldest-first) before it ever reaches the
+        # card, which is how co2_2026-07-27.csv ended up headerless.
+        setter = getattr(self.buffer_manager, "set_header", None)
+        if setter is not None:
+            setter(relpath, "Timestamp,PPM\n")
         if not self.buffer_manager.has_data_for(relpath):
             try:
                 self.buffer_manager.write(relpath, "Timestamp,PPM\n")

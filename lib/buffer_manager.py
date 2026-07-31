@@ -70,6 +70,8 @@ class BufferManager:
         self.fallback_path = fallback_path
         self.max_buffer_entries = max_buffer_entries
         self.max_fallback_size_kb = max_fallback_size_kb
+        # relpath → first line the file must always carry (see set_header).
+        self._headers = {}
         self._debug = debug_callback
         self._logger = logger
         self._migrate_batch_max = int(migrate_batch_max) if migrate_batch_max else 0
@@ -344,6 +346,25 @@ class BufferManager:
         except Exception:
             return False
 
+    def set_header(self, relpath: str, header: str) -> None:
+        """Register the first line a file must always carry.
+
+        The header is then re-emitted whenever the primary file is created or
+        found empty, instead of being written once and hoped for. See the
+        header handling in _write_inner for why once is not enough.
+        """
+        if relpath.startswith("/sd/"):
+            relpath = relpath[4:]
+        self._headers[relpath] = header
+
+    @staticmethod
+    def _primary_has_data(primary_path: str) -> bool:
+        try:
+            with open(primary_path, "r") as f:
+                return bool(f.read(1))
+        except Exception:
+            return False
+
     def clear_fallback_startup(self) -> bool:
         """
         Delete fallback file at startup so each boot starts clean.
@@ -482,6 +503,24 @@ class BufferManager:
         if primary_ok:
             try:
                 self._ensure_parent_dir(primary_path)
+                header = self._headers.get(relpath)
+                if header is not None and data != header and not self._primary_has_data(primary_path):
+                    # The file is about to be created (or is empty) and its
+                    # header is not in it. Emit the header first.
+                    #
+                    # A one-shot "write the header when the file is new" is not
+                    # enough, because the header can be created while SD is down
+                    # and then discarded before it ever reaches the card: both
+                    # the fallback prune and the in-memory buffer evict
+                    # OLDEST-FIRST, and a header is by construction the oldest
+                    # entry for its file. That is how th_2026-07-27.csv and
+                    # co2_2026-07-27.csv ended up headerless on the field card
+                    # while metrics_2026-07-27.csv survived — 07-27 was the one
+                    # day the card ran in fallback (367 fallback writes, zero on
+                    # every other day). Re-checking at the moment the primary
+                    # file is created covers every loss path, not just that one.
+                    with open(primary_path, "a") as f:
+                        f.write(header)
                 with open(primary_path, "a") as f:
                     f.write(data)
                 self.writes_to_primary += 1

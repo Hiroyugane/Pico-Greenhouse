@@ -125,6 +125,9 @@ class MetricsLogger:
         """Write the CSV header once via BufferManager."""
         relpath = self._strip_sd_prefix(self.filename)
         header = ",".join(self.COLUMNS) + "\n"
+        setter = getattr(self.buffer_manager, "set_header", None)
+        if setter is not None:
+            setter(relpath, header)
         self.buffer_manager.write(relpath, header)
         self._created_files.add(relpath)
 

@@ -947,3 +947,99 @@ class TestBufferManagerFallbackPrune:
             self._run_one_iteration(bm)
         msgs = " ".join(str(c) for c in logger.error.call_args_list)
         assert "Unexpected error" in msgs or "boom" in msgs
+
+
+class TestHeaderSurvivesFallback:
+    """Regression: the 2026-07-27 daily CSVs lost their header row.
+
+    th_2026-07-27.csv and co2_2026-07-27.csv on the field card have no header;
+    metrics_2026-07-27.csv does. 07-27 was the one day the card ran in fallback
+    (sd_fallback_writes peaked at 367, zero every other day). Any tool reading
+    those files has to sniff the first line to know whether it is data.
+    """
+
+    @staticmethod
+    def _bm(tmp_path, available):
+        from lib.buffer_manager import BufferManager
+
+        sd = tmp_path / "sd"
+        sd.mkdir()
+        fallback_dir = tmp_path / "local"
+        fallback_dir.mkdir()
+        bm = BufferManager(
+            sd_mount_point=str(sd),
+            fallback_path=str(fallback_dir / "fallback.csv"),
+        )
+        bm.is_primary_available = lambda: available[0]
+        return bm, sd
+
+    def test_header_written_during_fallback_reaches_sd_after_migration(self, tmp_path):
+        available = [False]
+        bm, sd = self._bm(tmp_path, available)
+        relpath = "sensors/th/2026/th_2026-07-27.csv"
+
+        # Day starts with SD down: header + first rows go to fallback.
+        assert bm.has_data_for(relpath) is False
+        bm.write(relpath, "Timestamp,Temperature,Humidity\n")
+        bm.write(relpath, "2026-07-27 15:39:27,23.1,91.2\n")
+
+        # SD comes back and the fallback is migrated.
+        available[0] = True
+        bm.migrate_fallback()
+
+        content = (sd / relpath).read_text()
+        assert content.startswith("Timestamp,Temperature,Humidity"), (
+            "header lost during fallback migration; got: {!r}".format(content[:60])
+        )
+
+    def test_logger_does_not_reprint_the_header_after_migration(self, tmp_path):
+        """The dedupe that caused this must still work — no duplicate headers."""
+        available = [False]
+        bm, sd = self._bm(tmp_path, available)
+        relpath = "sensors/th/2026/th_2026-07-27.csv"
+        bm.write(relpath, "Timestamp,Temperature,Humidity\n")
+        available[0] = True
+        bm.migrate_fallback()
+        assert bm.has_data_for(relpath) is True
+
+    def test_header_survives_losing_the_fallback_entry(self, tmp_path):
+        """The actual field mechanism: the header is evicted before it lands.
+
+        Both the fallback prune and the in-memory buffer evict OLDEST-FIRST,
+        and a header is by construction the oldest entry for its file. When the
+        header entry is dropped, every later row still reaches the card — so
+        the file exists, is full of valid data, and has no header. That is
+        exactly the state of th_2026-07-27.csv on the field card.
+
+        Without set_header() this test fails: the file starts with a data row.
+        """
+        available = [False]
+        bm, sd = self._bm(tmp_path, available)
+        relpath = "sensors/th/2026/th_2026-07-27.csv"
+        header = "Timestamp,Temperature,Humidity\n"
+
+        bm.set_header(relpath, header)
+        bm.write(relpath, header)  # goes to fallback, SD is down
+
+        # Simulate the prune/eviction discarding the oldest fallback entries.
+        open(bm.fallback_path, "w").close()
+
+        available[0] = True
+        bm.write(relpath, "2026-07-27 15:39:27,23.1,91.2\n")
+
+        content = (sd / relpath).read_text()
+        assert content.startswith(header), "header lost: {!r}".format(content[:60])
+        assert content.count("Timestamp,Temperature,Humidity") == 1
+
+    def test_header_not_duplicated_on_later_writes(self, tmp_path):
+        available = [True]
+        bm, sd = self._bm(tmp_path, available)
+        relpath = "sensors/th/2026/th_2026-07-28.csv"
+        header = "Timestamp,Temperature,Humidity\n"
+        bm.set_header(relpath, header)
+        bm.write(relpath, header)
+        for i in range(5):
+            bm.write(relpath, "2026-07-28 00:0{}:00,21.8,94.5\n".format(i))
+        content = (sd / relpath).read_text()
+        assert content.count("Timestamp,Temperature,Humidity") == 1
+        assert content.startswith(header)

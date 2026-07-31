@@ -55,7 +55,7 @@ Record the three figures and the verdict in
 **Build under WSL, not native Windows.** The RP2 port needs host-side tools
 from the pico-SDK (`pioasm`, `picotool`) that want a Unix-ish C toolchain;
 under WSL that is three apt packages, on native Windows it is an afternoon.
-This machine's build path is **WSL2 / Ubuntu 24.04**.
+The reference build path is **WSL2 / Ubuntu 24.04**.
 
 ```bash
 wsl --install -d Ubuntu          # only if no distribution exists yet
@@ -92,6 +92,7 @@ magnitude slower. Override with `--mpy-dir`.
 ## 2. Build
 
 ```bash
+# from the repo root (substitute your own checkout path after /mnt/)
 wsl -d Ubuntu -- bash /mnt/<drive>/<path-to-repo>/tools/build_firmware.sh
 ```
 

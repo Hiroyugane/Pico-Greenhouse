@@ -9,7 +9,7 @@
 # structure below is the copy; everything under "rendering" is layout only.
 # When operator-visible behaviour changes (OLED pages/fields, relay or PWM
 # channel assignment, LED policy, alert keys, button timings), edit CONTENT
-# here, bump LEGEND_REV, and regenerate -- see .claude/rules/case-legend.md.
+# here, bump LEGEND_REV, and regenerate (see the case-legend convention in CLAUDE.md).
 #
 # Usage (from the repo root, with the project venv active):
 #     python tools/gen_case_legend.py

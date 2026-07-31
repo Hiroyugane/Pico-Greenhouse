@@ -264,7 +264,7 @@ class TestFreshAirExchangeFallback:
 class TestSaturationDoesNotLatch:
     """A saturated tent must not be able to latch the system shut.
 
-    Field incident 2026-07-30/31 (docs/notes/chat-log.md): RH reached 100 %,
+    Field incident 2026-07-30/31 (the internal chat-log): RH reached 100 %,
     which was exactly the cubensis at_100 anchor, so humidity deviation pinned
     at 100 and severity at its ceiling of 50. Emergency and latch both fired and
     the safe-state vector forced the heater to 0. Heater off cooled the tent,

@@ -387,7 +387,7 @@ DEVICE_CONFIG = {
     # and were fed straight to the actuators. Isolated on ticks where temp and
     # RH were both within 10 of ideal, the exhaust averaged 50.3 when the CO2
     # term was active against 3.6 when it was not: the fan was mostly being
-    # driven by UART framing errors. See docs/notes/chat-log.md 2026-07-31.
+    # driven by UART framing errors. See the internal chat-log 2026-07-31.
     "co2_logger": {
         "interval_s": 30,  # Poll cadence (seconds)
         "warmup_s": 30,  # Sensor warm-up window where read failures don't escalate
@@ -472,7 +472,7 @@ DEVICE_CONFIG = {
         # every rotation is now an atomic os.rename (O(1)), so the active log
         # stays tiny and rotation never blocks the async watchdog feed. (The old
         # 1 MB cap let system.log grow for days, then the rotation copy of a ~1 MB
-        # file starved the 8 s WDT -> bootloop; see docs/notes/chat-log 2026-07-20.)
+        # file starved the 8 s WDT -> bootloop; see the internal chat-log 2026-07-20.)
         "max_size": 131072,  # 128 KB — max active-log size (bytes) before rotation
         "info_flush_threshold": 5,  # Flush after N info-level entries buffered
         "warn_flush_threshold": 1,  # Flush after N warning-level entries (1=immediate, like ERROR)
@@ -788,7 +788,7 @@ DEVICE_CONFIG = {
         # system into the safe-state vector on the first tick — with the very
         # actuators that would fix it (humidifier, heater) forced off, so the
         # severity could never fall back under release_max. Deadlock; see
-        # docs/notes/chat-log.md 2026-07-21.
+        # the internal chat-log 2026-07-21.
         #
         # Only the hazardous HIGH side escalates: too hot cooks the culture and
         # too wet invites bacterial blotch, and both run away without
@@ -853,7 +853,7 @@ DEVICE_CONFIG = {
             # moisture, severity stayed pinned, and the latch release
             # (emax <= 30) became unreachable — a closed loop the firmware could
             # not exit. It held that way for 12.3 h on 2026-07-30/31, with the
-            # grow light dark for ~19 h (docs/notes/chat-log.md 2026-07-31).
+            # grow light dark for ~19 h (the internal chat-log 2026-07-31).
             #
             # 102 is chosen TIGHTLY, not generously. Saturation now scores
             # deviation 85.7 / severity 35.7: past the conflict edge (30) so the
@@ -1127,7 +1127,7 @@ DEVICE_CONFIG = {
                 # deadband-below-40 version shipped before 2026-07-21 commanded
                 # 48.9 at RH 80.4% against an ideal of 92%, under an on_above of
                 # 60, and left the humidifier off in a drying tent
-                # (docs/notes/chat-log.md 2026-07-21). The hysteresis band lives
+                # (the internal chat-log 2026-07-21). The hysteresis band lives
                 # entirely in the adapter, which is what on_above/off_below are
                 # for.
                 #
@@ -1248,7 +1248,7 @@ DEVICE_CONFIG = {
                 # minor edge. In every realistic tent state the exhaust was
                 # pinned at 40 and CO2 from 0 to 2000 ppm changed nothing; at
                 # the 1200 ppm actually observed on the OLED the term was 9.1
-                # (docs/notes/chat-log.md 2026-07-22).
+                # (the internal chat-log 2026-07-22).
                 #
                 # Gain and break are ONE calibration with the floor below — the
                 # term must be able to clear the floor well inside the profile's

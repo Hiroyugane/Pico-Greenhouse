@@ -35,7 +35,7 @@
 # is correct for the first and actively harmful for the second, since cooling
 # the tent raises relative humidity at unchanged absolute moisture and the
 # severity that fired the emergency can then never fall (field incident
-# 2026-07-30/31, docs/notes/chat-log.md).
+# 2026-07-30/31, the internal chat-log).
 #
 # When SEVERAL causes escalate at once the merge is deliberately conservative: a
 # regulator keeps a per-cause value only if EVERY active cause agrees on it,

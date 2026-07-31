@@ -264,7 +264,7 @@ Git-codebase/
 ├── tests/                       # Unit tests (pytest + pytest-asyncio)
 │   ├── conftest.py              #   MicroPython mocking setup
 │   └── test_*.py                #   One file per lib/ module + config + main
-├── docs/                        # Schematic, hardware notes, chat-log, hw-test-log
+├── docs/                        # Hardware docs, build runbook, prompts, conventions
 └── typings/os.pyi               # Type stubs for MicroPython os
 ```
 
@@ -299,7 +299,7 @@ Design convention: **solid = problem, blink = activity, dark = all good.** At bo
 - **Testing**: `pytest` + `pytest-asyncio`, `asyncio_mode=auto`; coverage gate `fail_under=88`
 - **Lint/format**: `ruff` (`line-length=120`, selecting `E,F,I`); vendored drivers, `host_shims/`, and `typings/` are excluded from lint and coverage
 - **Version**: InDev2.0 (Modular Architecture with Dependency Injection)
-- **Custom firmware**: building a frozen-module `.uf2`, flashing it, and the `.mpy` ABI rules that keep OTA payloads importable are in [docs/hardware/firmware-build-runbook.md](docs/hardware/firmware-build-runbook.md); the reasoning behind the freeze scope is in [docs/notes/firmware-freeze-versioning-plan.md](docs/notes/firmware-freeze-versioning-plan.md)
+- **Custom firmware**: building a frozen-module `.uf2`, flashing it, and the `.mpy` ABI rules that keep OTA payloads importable are in [docs/hardware/firmware-build-runbook.md](docs/hardware/firmware-build-runbook.md); the reasoning behind the freeze scope is in the firmware-freeze versioning plan (internal notes)
 
 ## Troubleshooting
 

@@ -2229,7 +2229,7 @@ class TestRegulationConfig:
         The additive term is bounded by co2_gain * (100 - co2_break); if that
         ceiling sits at or below the regulator's floor, the arbiter forces the
         command up to the floor and CO2 changes nothing anywhere in the
-        profile's range (docs/notes/chat-log.md 2026-07-22). Gain, break and
+        profile's range (the internal chat-log 2026-07-22). Gain, break and
         floor are one calibration — this asserts they were re-derived together.
         """
         from config import DEVICE_CONFIG

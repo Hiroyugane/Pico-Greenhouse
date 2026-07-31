@@ -5,7 +5,7 @@
 # A0=VCC → 0x61) before wiring the dimming driver. Should also list
 # the DS3231 RTC (0x68) and SSD1306 OLED (0x3C) for context.
 #
-# Phase 0 of docs/notes/2026-05-14-pcb-codebase-gap-plan.md.
+# Phase 0 of the 2026-05-14 PCB-codebase gap plan (internal notes).
 
 machine = __import__("machine")
 time = __import__("time")

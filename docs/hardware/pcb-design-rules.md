@@ -8,7 +8,7 @@
 > [next-revision.md](next-revision.md).
 >
 > Companion: full rationale in
-> [chat-log 2026-06-02](../notes/chat-log.md#2026-06-02--pcb-design-ruleset-net-classes).
+> chat-log 2026-06-02.
 
 ## Stackup & fab assumptions
 

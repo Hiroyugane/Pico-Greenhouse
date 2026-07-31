@@ -1,7 +1,7 @@
 """Compare steady-state heap use across firmware/deployment variants (punch item P0.5).
 
 The freeze decision in
-[`docs/notes/firmware-freeze-versioning-plan.md`](../docs/notes/firmware-freeze-versioning-plan.md)
+`the firmware-freeze versioning plan (internal notes)`
 turns on one number: how much heap a variant leaves free at steady state.
 Freezing modules into the firmware buys RAM but permanently costs OTA reach,
 so the council gated it on measuring the two variants that cost nothing first:

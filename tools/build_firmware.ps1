@@ -3,7 +3,7 @@
     Build the Pi Greenhouse custom MicroPython firmware (.uf2) offline.
 
 .DESCRIPTION
-    Punch item P1 of docs/notes/firmware-freeze-versioning-plan.md, at the
+    Punch item P1 of the firmware-freeze versioning plan (internal notes), at the
     "minimum scope" the council chose (section 5.4): a hand-run script. No CI,
     no tag-triggered artifact build, no auto-flash. Flashing stays a deliberate
     human act with a Pico in BOOTSEL mode.

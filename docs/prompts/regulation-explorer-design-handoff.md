@@ -255,7 +255,7 @@ markup for the affected block so it can be mirrored in the render functions.
 
 - Pipeline spec: [`docs/prompts/regulation-matrix.md`](regulation-matrix.md)
 - Why this tool exists and what it verifies:
-  [`docs/notes/chat-log.md`](../notes/chat-log.md), entry
+  `the internal chat-log`, entry
   *2026-07-22 · Interactive regulation-surface explorer*
 - The two bugs that motivated it: same file, entries *2026-07-22 · Exhaust
   ignored CO2* and *2026-07-21 · Humidifier dead zone*

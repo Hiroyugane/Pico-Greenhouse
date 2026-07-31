@@ -321,7 +321,7 @@ class EventLogger:
         base name is already taken (numbered same-day archives). The rename is
         atomic (os.rename via BufferManager), so rotating even a large file
         cannot block the async watchdog. After a successful rotation, archives
-        older than the retention window are pruned. See docs/notes/chat-log
+        older than the retention window are pruned. See the internal chat-log
         2026-07-20 for the bootloop this replaced.
         """
         self._refresh_log_size()

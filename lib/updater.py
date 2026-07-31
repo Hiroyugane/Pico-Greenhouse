@@ -625,7 +625,7 @@ class Updater:
         Uses ``<base>_<YYYY-MM-DD>.log`` (numbered ``.1.log``, ``.2.log`` … when
         the base name is already taken) so several same-day rotations coalesce
         instead of minting one file per rotation. Matches the EventLogger scheme
-        — see docs/notes/chat-log 2026-07-20 for why per-rotation timestamps were
+        — see the internal chat-log 2026-07-20 for why per-rotation timestamps were
         a problem.
         """
         if self.log_max_size <= 0:

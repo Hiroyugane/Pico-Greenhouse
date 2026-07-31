@@ -3,7 +3,7 @@
 > How to build, flash, and version-verify a custom Pi Greenhouse firmware
 > offline, and how to adopt a newer MicroPython without stranding the field
 > units. Punch item **P7** of
-> [`firmware-freeze-versioning-plan.md`](../notes/firmware-freeze-versioning-plan.md);
+> `firmware-freeze-versioning-plan.md`;
 > that document holds the *why*, this one holds the *how*.
 
 **Read this first, in one sentence:** a frozen module can only be changed by
@@ -23,7 +23,7 @@ OTA reach and two cheaper variants might already be enough.
 > A could not be deployed (the raw set no longer fits flash), B ran at 97.5 %
 > heap use (~6 KB free), C was not relevant. Neither OTA-preserving variant is
 > viable. Kept below as the procedure to repeat after any change that moves the
-> heap; results live in [`hw-test-log.md`](../test/hw-test-log.md) FW.2.
+> heap; results live in `hw-test-log.md` FW.2.
 
 Measure three variants, each a multi-hour bench soak with
 `diagnostics.mem_trend_log = True` in `config.py`:
@@ -46,7 +46,7 @@ python tools/heap_baseline.py A=logs/a-system.log B=logs/b-system.log C=logs/c-s
   (`-FreezeOnly`) and re-measuring, rather than taking the whole tier at once.
 
 Record the three figures and the verdict in
-[`hw-test-log.md`](../test/hw-test-log.md).
+`hw-test-log.md`.
 
 ---
 
@@ -249,7 +249,7 @@ After flashing:
    `system.log`, and compare against the pre-freeze baseline with
    `tools/heap_baseline.py`. That number is the entire justification for the
    freeze — record it.
-5. Tick the corresponding rows in [`hw-test-log.md`](../test/hw-test-log.md).
+5. Tick the corresponding rows in `hw-test-log.md`.
 
 ---
 

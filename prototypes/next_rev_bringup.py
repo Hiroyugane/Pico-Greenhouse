@@ -2,7 +2,7 @@
 # Dennis Hiro, 2026-06-30
 #
 # Linear, tick-as-you-go walk-through of the FIRMWARE-ASSISTED next-rev bench
-# checks that are still OUTSTANDING — the subset of docs/test/hw-test-log.md
+# checks that are still OUTSTANDING — the subset of the internal hw-test-log
 # where running code helps and the item has not yet passed:
 #   * single-channel fan PWM sanity (invert direction + does duty 0 fully
 #     stop — see config pca9685.invert and the fans pca9685_ch map),
@@ -10,7 +10,7 @@
 #   * per-relay isolation cycle over the wired REL_CON ports only.
 # Checks that already PASSED (SD card-detect polarity, I2C scan, grow-light
 # DAC sweep, heater-gate drive, soil AOUT-moves) were removed once recorded
-# in docs/test/next-rev-results.md — re-add them here only if a board change
+# in the internal next-rev results log — re-add them here only if a board change
 # invalidates the pass. Pure design-review / visual / multimeter-only items
 # and full-firmware behaviours (SD recovery, soaks) live in hw-test-log.md.
 #
@@ -278,7 +278,7 @@ def _item(id_, text, fn=None, record=False):
 
 
 # Firmware-assisted bench items only, and only those still OUTSTANDING —
-# passed checks live in docs/test/next-rev-results.md; design-review /
+# passed checks live in the internal next-rev results log; design-review /
 # multimeter-only checks and full-firmware behaviours in hw-test-log.md.
 SECTIONS = [
     (

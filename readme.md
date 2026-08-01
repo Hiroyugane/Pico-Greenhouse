@@ -1,276 +1,177 @@
 
 # Pi Greenhouse: Raspberry Pi Pico Environmental Control System
 
-## Overview
+**Pi Greenhouse** runs a grow tent or mushroom fruiting chamber closed-loop on a Raspberry Pi Pico. Every 30 seconds it reads temperature, humidity and CO₂, normalises them against the active species profile, and turns the result into commands for seven actuators — heater, heater-follower fan, cooler, humidifier, exhaust, circulation pair and grow light. Everything it measures is logged to SD with tiered fallback, shown on an OLED, and the unit can be updated in the field from the same card.
 
-**Pi Greenhouse** is a MicroPython-based automated greenhouse/grow-tent controller running on a Raspberry Pi Pico. It senses temperature and humidity (SHT31-D), CO₂ (SenseAir S8-style UART sensor), and soil moisture (ADC); controls fans (schedule + thermostat + CO₂ override), a heater (day/night thermostat), and a grow light (dawn/sunset schedule with optional DAC dimming); logs everything to SD with tiered fallback storage; and drives an OLED menu, status LEDs, and a buzzer. All components are wired through dependency injection and run as concurrent `uasyncio` tasks under a hardware watchdog.
+The **same source** runs in two places: on the Pico under MicroPython, and on Windows or Linux CPython through the shims in [host_shims/](host_shims/) — so the whole system boots and runs on a laptop with no hardware attached.
 
-The **same source** runs two ways: on the Pico under MicroPython, and on Windows/CPython for development and testing via the shims in [host_shims/](host_shims/).
+## At a glance
 
-## Operating Modes
+| | |
+| --- | --- |
+| **Target** | Raspberry Pi Pico (RP2040), custom MicroPython with frozen application modules |
+| **Sensing** | SHT31-D temp/humidity (I²C0), SenseAir S8-style CO₂ (UART0), analog soil probe (plant mode) |
+| **Actuation** | 3 mains relays, 1 heater MOSFET, 5 PWM fan channels (PCA9685), 0–10 V lamp dimmer (MCP4725) |
+| **Control** | one config-driven regulation engine, 30 s tick, allocation-free hot path |
+| **Storage** | SD card → `/local/fallback.csv` → in-memory ring buffer, with automatic migration back |
+| **Operator UI** | SSD1306 OLED (11 pages, one button), 5 status LEDs, passive buzzer |
+| **Updates** | SD-payload OTA (SHA-256 + `.mpy` ABI checked), custom firmware build + verify tooling |
+| **Host dev** | full system runs on CPython; pytest suite with an 88 % coverage gate |
 
-A single top-level `mode` switch in [config.py](config.py) picks which optional components are constructed at boot:
+## How it works
 
-| Mode | Grow light | Soil logger |
+### One engine owns every regulated actuator
+
+The [RegulationEngine](lib/regulation_engine.py) replaces what used to be a pile of independent controllers (a fan thermostat, a heater day/night cycle, a CO₂ vent override, a grow-light scheduler). It runs a five-stage pipeline every `regulation.tick_s`:
+
+1. **Normalize** — each dimension's physical reading is mapped through three per-phase anchors (`at_0`, `at_50`, `at_100`) to a deviation `d ∈ 0..100`, where 50 is ideal. Severity is `|d − 50|`. Day and night anchors are blended by a time-of-day factor from the RTC, so setpoints ramp instead of stepping at dawn.
+2. **2D hinge surfaces** — each regulator evaluates a pure function of two deviations (e.g. the heater sees temp × humidity) built from a rotated plane, eight hinges, two boost axes and clamps. CO₂ enters additively on the exhaust and circulation regulators — no surface takes CO₂ as an axis.
+3. **Band classify** — severity is bucketed by `band_edges` into perfect / ideal / organic / minor / major / emergency / shutdown.
+4. **Arbitrate** — slew-limit the organic output, apply per-regulator floors, apply ordered conflict rules (the shipped one cuts the humidifier in a hot-and-humid tent to head off bacterial blotch), then emergency and latch vectors. Forced values are written *after* the slew limiter, so a safety cut lands in one tick.
+5. **Actuator adapters** — device quirks live only [here](lib/regulation_adapters.py): relay hysteresis and compressor anti-short-cycle, heater time-proportioning over a 600 s window, PWM duty, the pair scaler for centre/wall fans, and the grow light's relay-plus-DAC pairing.
+
+The engine never reads a sensor directly — it consumes the loggers' cached values. The per-tick path is allocation-free (frozen `array('f')` parameters, preallocated buffers), and the surface math is pinned by golden-vector CSVs under [tests/golden/](tests/golden/).
+
+Full specification: [docs/prompts/regulation-matrix.md](docs/prompts/regulation-matrix.md).
+
+Two behaviours are worth knowing before you tune anything:
+
+- **Escalation is gated by direction.** Only the hazardous high side of temperature and humidity may escalate to the emergency and latch vectors; too cold, too dry and any CO₂ level are conditions the surfaces correct on their own. Ungated escalation used to latch a freshly set-up tent on its first tick, with the very actuators that would fix it forced off.
+- **The chamber keeps breathing when CO₂ goes blind.** The S8 is specified to 95 %RH non-condensing and fails exactly when a fruiting tent is running correctly. With no usable reading the CO₂ dimension is neutralised, so `regulation.fresh_air_exchange` applies a timed floor to the exhaust and circulation instead.
+
+### The profile is the setpoint
+
+`regulation.profile` picks a species profile — `cubensis`, `oyster`, `lions_mane` for mushrooms; `seedling`, `cannabis`, `bellpepper` for plants. Each holds day and night anchors for all three dimensions, and its `category` must match the top-level `mode` (validated at boot). Retuning what "ideal" means is an edit to three numbers per dimension, not a code change.
+
+The top-level `mode` switch decides which optional components are constructed:
+
+| Mode | Soil logger | Regulation profiles allowed |
 | --- | --- | --- |
-| `"plant"` | Dimmable — MCP4725 DAC over the relay master switch | Enabled (GP28 ADC) |
-| `"mushroom"` (default) | Relay-only on/off | Not constructed |
+| `"mushroom"` (default) | not constructed | `category: mushroom` |
+| `"plant"` | enabled (GP28 ADC) | `category: plant` |
 
-Disabled components are skipped entirely — no task, no I/O — so being in the wrong mode only costs the missing feature, not idle RAM.
+Grow-light dimming is **not** tied to the mode — `regulation.regulators.growlight.dimmable` decides, because the MCP4725 is harmless when fitted and pointless for mushrooms either way. Disabled components are skipped entirely: no task, no I/O, no idle RAM.
 
-## Key Features
+### Same code, two runtimes
 
-- **Temperature / Humidity** — SHT31-D on the shared I2C0 bus, CRC-validated reads with retry logic, cached `last_temperature` feeding the fan/heater thermostats
-- **CO₂ Monitoring + Vent Override** — `CO2Logger` polls a SenseAir S8-style sensor over UART0; crossing `override_ppm_on` force-runs the exhaust fan until ppm drops below `override_ppm_off`
-- **Soil Moisture** *(plant mode)* — `SoilLogger` reads GP28/ADC2, scales raw counts to a calibrated 0–100 %, and raises the warning LED below a threshold
-- **Dual + Expandable Fan Roster** — role-keyed `fans` dict dispatched by mode: `thermostat_schedule` (time cycle + temp override), `always_on`, `heater_follower`. Two relay fans ship enabled; three PCA9685 PWM roles ship disabled for the next-rev PWM board
-- **Heater Control** — `HeaterController` on an active-HIGH MOSFET (GP3) with separate day/night setpoints that track the grow-light schedule
-- **Grow Light** — `GrowlightController` relay master switch with configurable dawn/sunset; optional MCP4725 DAC dimming in plant mode
-- **Tiered Storage** — `BufferManager` writes SD → `/local/fallback.csv` → in-memory ring buffer, and migrates fallback rows back to SD when the card returns; async write batching via `WriteQueueManager`
-- **Sensor-first SD layout** — `/sd/sensors/<type>/YYYY/<type>_YYYY-MM-DD.csv`, one folder per sensor type, daily rollover
-- **System Event Logging** — `EventLogger` with severity levels, buffered flush, and size-based rotation to `/sd/logs/system.log`
-- **OLED Display** — SSD1306 menu (temp/hum/CO₂/soil/fan/SD/uptime/stats), short-press cycles menus, long-press runs context actions including a guarded debug-actions sub-menu
-- **Status LEDs + Buzzer** — activity / SD / warning / error / reminder LEDs with a power-on self-test (POST) walk; passive buzzer for startup, alert, error, and reminder patterns
-- **Service Reminder** — LED-based maintenance reminder with configurable interval, persisted timestamp, and long-press reset
-- **Watchdog** — hardware WDT fed by a dedicated async task; a stalled scheduler resets the Pico
-- **SD-payload OTA Updater** — drop a SHA-256-verified payload tree under `/sd/ota/pending`; `updater.py` verifies, applies, archives, and resets on next boot
-- **SD Hot-swap Recovery** — the health loop detects SD loss, buffers writes, and re-mounts automatically on re-insertion
-- **Host Simulation** — runs on Windows/CPython via `host_shims/` with console-logged GPIO for development without hardware
+[main.py](main.py#L31-L36) detects `sys.implementation.name != "micropython"` and prepends [host_shims/](host_shims/) to `sys.path`, providing `machine`, `micropython`, `os`, `framebuf`, an `sht31` simulator and a `uasyncio` that aliases standard `asyncio`. Anything new that imports a MicroPython-only API needs a matching shim, or it will only ever work on-device.
 
-## Architecture
+Tests take a third path: [tests/conftest.py](tests/conftest.py) installs `MagicMock` stubs *before* any `lib/` import and never touches the shims.
 
-The system follows a **dependency-injection, factory-based** design — [main.py](main.py) is the only place that wires components:
+### Every persistent write goes through one chokepoint
 
-1. **`config.py`** — single `DEVICE_CONFIG` dict holding every pin, interval, threshold, and path. `validate_config()` runs first at boot and is the only check.
-2. **Watchdog** — `WDT` is armed early (before other hardware) and fed both by an async task and at long synchronous boundaries via `feed_wdt()`.
-3. **`HardwareFactory`** — ordered init: RTC (critical) → SPI/SD mount → GPIO. If `system.require_sd_startup` is set and the card won't mount, the boot path lights sd+error LEDs, holds a visible countdown, then resets.
-4. **`run_pending_update()`** — runs *before* the logger so logging code itself can be replaced; ends in `machine.reset()` when an update applies.
-5. **`RTCTimeProvider`** — wraps the DS3231; all modules receive timestamps through this provider (no direct RTC calls).
-6. **`StatusManager`** — owns the activity/SD/warning/error/heartbeat LEDs and the POST walk; "solid = problem, blink = activity, dark = all good".
-7. **`BufferManager` + `WriteQueueManager`** — the single chokepoint for all persistent writes (SD → fallback → RAM), with async drainage and fallback migration.
-8. **`EventLogger`** — system log with severity levels, buffered flush through `BufferManager`, and size-based rotation.
-9. **Sensor loggers** — `TempHumidityLogger`, `CO2Logger`, `SoilLogger`, each writing through the sensor-first SD path helper.
-10. **Actuators** — `HeaterController`, the fan roster (`FanController` / `AlwaysOnFanController` / `HeaterFollowerFanController` over `RelayFanOutput` / `Pca9685FanOutput`), and `GrowlightController` (+ optional `MCP4725`).
-11. **UI** — `LEDButtonHandler` + `ServiceReminder` + `OLEDDisplay` + `BuzzerController`.
+`TempHumidityLogger`, `CO2Logger`, `SoilLogger`, `MetricsLogger` and `EventLogger` all write through [BufferManager](lib/buffer_manager.py), which tries the SD card, falls back to `/local/fallback.csv`, and falls back again to an in-memory ring buffer. When the card comes back the health loop migrates the fallback rows onto it in bounded batches. [WriteQueueManager](lib/write_queue_manager.py) batches the actual SD writes off the hot path. Direct file I/O anywhere else bypasses all of that and is a bug.
 
-All long-running logic runs as `uasyncio` tasks with `await asyncio.sleep()` (no blocking loops — a blocking task would trip the watchdog on real hardware).
+### Boot order is enforced
 
-> **Same code, two runtimes.** [main.py](main.py#L30-L35) detects `sys.implementation.name != "micropython"` and prepends [host_shims/](host_shims/) to `sys.path`, providing `machine`, `micropython`, `os`, `framebuf`, an `sht31` simulator, and a `uasyncio` that aliases standard `asyncio`. Anything new importing MicroPython-only APIs needs a matching shim.
+[main.py](main.py) is the only place components are wired; everything downstream takes its dependencies as constructor arguments. The order is deliberate:
 
-## Hardware — Pico GPIO Map
+1. **Config validation** — `validate_config()` is the only check, and it runs before anything is constructed.
+2. **Early OTA (device only)** — the watchdog is armed and a pending SD update is applied *before* the heavy application imports, while the heap is still nearly empty. A successful apply ends in `machine.reset()`, so the old code never finishes booting.
+3. **[HardwareFactory](lib/hardware_factory.py)** — RTC (critical) → SPI/SD mount → GPIO. If `system.require_sd_startup` is set and the card will not mount, the boot path lights the SD and error LEDs, holds a visible countdown, and resets.
+4. **`RTCTimeProvider`** — every timestamp in the system comes from here; no module calls the RTC directly.
+5. **`StatusManager`** — owns the LED row and the power-on self-test walk.
+6. **Buffer / queue / event logger**, then the sensor loggers, then the regulation stack, then the UI.
 
-Pin assignments mirror PCB schematic `SCH_Pico-Greenhouse-PCB_2026-05-14` and the `pins` section of [config.py](config.py). All relay GPIOs are **active-low** (HIGH = off, LOW = on); LEDs and the heater MOSFET are active-high.
+All long-running work is a `uasyncio` task. The watchdog is fed by its own task, so a stalled scheduler resets the Pico — which also means a blocking call inside any task will reset real hardware even when host tests pass happily.
 
-| GPIO | Net | Purpose |
-| --- | --- | --- |
-| GP0 / GP1 | I2C0 (SDA/SCL) | **Shared bus**: SHT31-D `0x44`, DS3231 RTC `0x68`, SSD1306 OLED `0x3C`, MCP4725 DAC `0x60`, I2C breakouts. Pulled to 3V3 via R1/R2 |
-| GP2 | GP2_CON | General-purpose breakout (future use) |
-| GP3 | Heater MOSFET | IRLZ44N gate via R6 — active HIGH |
-| GP4 | Activity LED | Brief blink on I/O actions |
-| GP5 | SD LED | Solid = SD missing/failed |
-| GP6 | Warning LED | Solid = degraded condition |
-| GP7 | Error LED | Solid = fault needs attention |
-| GP8 | Reminder LED | Blinks when service is due |
-| GP9 | Menu button | Short = cycle menu, long ≥ 3 s = action |
-| GP10–GP13 | SPI1 | SD card (SCK/MOSI/MISO/CS); MOSI has series damper R10, MISO is direct |
-| GP14 | Buzzer | Passive buzzer (PWM), R3 pulldown |
-| GP16 | UART0 TX | → CO₂ sensor (via R9) |
-| GP17 | UART0 RX | ← CO₂ sensor (via R11) |
-| GP18 | Relay — fan 1 (`exhaust`) | Active-low relay |
-| GP19 | Relay — fan 2 (`growroom_walls`) | Active-low relay |
-| GP20 | Relay — grow light | Active-low relay |
-| GP21 / GP22 | Reserved relays | REL_CON pins 5–6 (future use) |
-| GP25 | On-board LED | Heartbeat |
-| GP26 / GP27 | Reserved relays | REL_CON pins 7–8 (future use) |
-| GP28 | ADC2 | Soil-moisture probe (plant mode) |
+## Hardware
 
-> The PCB's `RES_BTN` is wired to the Pico's `3V3_EN` (hardware reset), not a GPIO. The OLED, RTC, SHT31, and DAC all share the single **I2C0** bus — there is no separate I2C1 in this design.
+Pin assignments mirror PCB schematic `SCH_Pico-Greenhouse-PCB_2026-05-14` and the `pins` section of [config.py](config.py). Relay GPIOs are **active-low** (HIGH = off, LOW = on); LEDs and the heater MOSFET are active-high.
 
-## Quick Start
+| GPIO | Purpose |
+| --- | --- |
+| GP0 / GP1 | **I²C0, shared**: SHT31-D `0x44`, DS3231 RTC `0x68`, SSD1306 OLED `0x3C`, PCA9685 `0x40`, MCP4725 `0x60`, breakout headers. Pulled to 3V3 via R1/R2 |
+| GP2 | General-purpose breakout header |
+| GP3 | Heater MOSFET gate (IRLZ44N via R6) — **active HIGH** |
+| GP4 – GP8 | Status LEDs: activity, SD, warning, error, service reminder |
+| GP9 | Menu button — short press cycles pages, long press (≥ 3 s) runs the page action |
+| GP10 – GP13 | SPI1 to the SD card (SCK / MOSI / MISO / CS); MOSI and MISO carry series dampers |
+| GP14 | Passive buzzer (PWM) |
+| GP15 | SD card-detect (Adafruit 4682 CD switch; HIGH = card seated) |
+| GP16 / GP17 | UART0 TX/RX to the CO₂ sensor, 9600 baud |
+| GP18 | Relay 1 — **cooler** |
+| GP19 | Relay 2 — **humidifier** |
+| GP20 | Relay 3 — **grow light** |
+| GP21 | Relay 4 — spare (wired, no controller) |
+| GP22 / GP26 / GP27 | Reserved relay lines (no net on the connector) |
+| GP25 | On-board LED — heartbeat |
+| GP28 | ADC2 — soil-moisture probe (plant mode) |
 
-### 1. First run only — seed the RTC
+Fans do not use GPIO: all five run from the PCA9685 on I²C0 — ch0 circulation centre, ch1 circulation walls, ch2 heater follower, ch3 case, ch4 exhaust. The channel map is bench-confirmed; do not renumber it without re-running the bring-up.
+
+The PCB's `RES_BTN` is wired to the Pico's `3V3_EN` (hardware reset), not a GPIO. There is no I²C1 in this design — every I²C device shares bus 0.
+
+Hardware reference: [docs/hardware/pcb-design-rules.md](docs/hardware/pcb-design-rules.md), the queued changes in [docs/hardware/next-revision.md](docs/hardware/next-revision.md), and the printable enclosure legend [docs/hardware/case-legend.pdf](docs/hardware/case-legend.pdf).
+
+## Quick start
+
+### Run it on your machine
+
+The shims simulate GPIO, SPI, I²C, UART, the SHT31 and the filesystem, so the full system runs on standard Python 3.
 
 ```bash
-# Sets the DS3231 from the Pico's system clock (run in Thonny on-device)
-python prototypes/rtc_set_time.py
-```
-
-### 2. Normal operation
-
-```bash
-# Validates config, inits hardware, spawns all async tasks (run in Thonny on-device)
+pip install -r requirements.txt
 python main.py
 ```
 
-### 3. Run on Windows (host simulation)
+It creates `./sd/` (simulated card) and `./local/` (fallback buffer) in the repo. Shims are auto-detected and never loaded on the Pico.
 
-The shims in [host_shims/](host_shims/) simulate GPIO, SPI, I2C, the SHT31 sensor, and filesystem calls so the full system runs on standard Python 3.
-
-```bash
-pip install -r requirements.txt   # one-time
-python main.py                    # runs with console-logged GPIO actions
-```
-
-Host paths created in the repo: `./sd/` (simulated SD mount) and `./local/` (fallback buffer). Shims are auto-detected via `sys.implementation.name` and never loaded on the Pico.
-
-### 4. Run tests
+### Run the tests
 
 ```bash
-pip install -r requirements.txt                                   # pytest, pytest-asyncio, ruff, pre-commit
-pytest tests/                                                     # full suite (asyncio_mode=auto)
-pytest tests/test_relay.py                                        # single file
-pytest tests/ --cov=lib --cov=config --cov-report=term-missing    # coverage; gate is fail_under=88
-ruff check . --fix                                                # lint + autofix
+pytest tests/
 ```
 
-See [tests/README.md](tests/README.md) for the MicroPython mocking approach. Tests never import `host_shims/`; [tests/conftest.py](tests/conftest.py) installs `MagicMock` stubs for `machine`/`micropython`/`uasyncio` before any `lib/` import.
-
-### 5. Verify data on the SD card
-
-- `/sd/sensors/th/YYYY/th_YYYY-MM-DD.csv` — temperature / humidity (one file per day)
-- `/sd/sensors/co2/YYYY/co2_YYYY-MM-DD.csv` — CO₂ ppm
-- `/sd/sensors/soil/YYYY/soil_YYYY-MM-DD.csv` — soil moisture (plant mode)
-- `/sd/logs/system.log` — system event log
-
-## Configuration
-
-Every tunable parameter lives in `DEVICE_CONFIG` inside [config.py](config.py); `validate_config()` asserts required keys and value ranges at startup. New config keys must be added to the dict, the validator, **and** [tests/test_config.py](tests/test_config.py). `lib/` modules never import `DEVICE_CONFIG` — values flow in through constructors.
-
-### Fan roster (role-keyed, mode-dispatched)
-
-```python
-"fans": {
-    "exhaust": {            # enabled — relay on GP18
-        "mode": "thermostat_schedule",  # time cycle + temperature override
-        "output": "relay", "relay_pin_key": "relay_fan_1",
-        "interval_s": 600, "on_time_s": 20,
-        "max_temp": 23.8, "temp_hysteresis": 0.5, "poll_interval_s": 5,
-    },
-    "growroom_walls": {...},     # enabled — relay on GP19
-    "growroom_center": {...},    # disabled — pca9685 ch0 (next-rev PWM board)
-    "heater_distribution": {...},# disabled — heater_follower, pca9685 ch1
-    "case": {...},               # disabled — always_on, pca9685 ch2
-}
+```bash
+pytest tests/ --cov=lib --cov=config --cov-report=term-missing
 ```
 
-`thermostat_schedule` fans run on a time cycle and force on whenever `last_temperature` exceeds `max_temp`, releasing at `max_temp − temp_hysteresis`. The CO₂ logger attaches an `external_override` hook to the `co2_logger.override_fan` role.
-
-### Heater
-
-```python
-"heater": {
-    "day_min_temp": 22.0, "night_min_temp": 16.0,   # day window must be >= night
-    "temp_hysteresis": 0.5,
-    "day_offset_min": 0, "night_offset_min": 0,      # offsets from grow-light dawn/sunset
-    "max_stale_reads": 3,                            # consecutive sensor failures tolerated
-    "poll_interval_s": 30,
-}
+```bash
+ruff check . --fix
 ```
 
-### Grow light
+Coverage below 88 % fails. See [tests/README.md](tests/README.md) for the MicroPython mocking approach.
 
-```python
-"growlight": {
-    "dawn_hour": 7, "dawn_minute": 0,                # ON at 07:00
-    "sunset_hour": 19, "sunset_minute": 0,           # OFF at 19:00
-    "poll_interval_s": 60,
-    "dac_i2c_address": 0x60,                         # MCP4725 (plant mode only)
-    "default_level_pct": 80, "max_level_pct": 91,    # ViparSpectra XS1500 safe ceiling
-    "min_level_pct": 0, "ramp_duration_s": 300,
-}
-```
+### Run it on a Pico
 
-### CO₂ logger
+1. Flash the firmware — stock MicroPython works, the custom frozen build is recommended (see [Keeping a unit up to date](#keeping-a-unit-up-to-date)).
+2. Seed the RTC once, on-device: `prototypes/rtc_set_time.py`.
+3. Copy `main.py`, `config.py` and `lib/` to the board (`tools/deploy_device.py` does this over `mpremote`, with `--prune` to clear stale files that would shadow frozen modules).
+4. Reset. The LED walk at boot confirms the row is alive; the OLED banner confirms the display is.
 
-```python
-"co2_logger": {
-    "interval_s": 30, "warmup_s": 30, "max_retries": 3,
-    "override_ppm_on": 2500, "override_ppm_off": 2200,  # on must be > off
-    "override_fan": "exhaust",                          # role in the fans dict
-    "sensor_type": "co2",
-}
-```
+## Operating the unit
 
-### Service reminder
+**Button (GP9)** — short press cycles OLED pages; long press (≥ 3 s) runs the current page's action. The debug page's action opens a sub-menu where short press picks an action and long press runs it; destructive actions ask for a second long press.
 
-```python
-"Service_reminder": {
-    "days_interval": 7,
-    "blink_pattern_ms": [200, 200, 200, 800],
-    "blink_after_days": 3,                # days overdue before solid → blink
-    "storage_path": "/service_reminder.txt",
-    "monitor_interval_s": 3600,
-}
-# Long-press the menu button (GP9 ≥ 3 s) to reset.
-```
+**OLED pages** — `temp`, `humidity`, `service`, `sd`, `alerts`, `system`, `relays`, `reg`, `co2`, `soil`, `debug`. The `reg` page shows the engine's live state: deviation triple, band, and the commanded value for each actuator. The display sleeps after `display.display_timeout_s` to spare the panel.
 
-Other sections worth knowing: `system` (watchdog, health-check intervals, SD retry, write-queue), `buffer_manager`, `event_logger`, `status_leds` (POST walk order, memory warn/error %), `display` (OLED + debug sub-menu), `buzzer`, `updater` / `updater_feedback` (SD-payload OTA), `pca9685` (disabled until the next-rev board).
+**Status LEDs** — the convention is *solid = problem, blink = activity, dark = all good*.
 
-## File Structure
+| LED | GPIO | Meaning |
+| --- | --- | --- |
+| Activity | GP4 | Brief blink on sensor reads and I/O |
+| SD | GP5 | Dark = mounted · solid = no card in the slot · blinking = card present but mount failed |
+| Warning | GP6 | Solid = a degraded condition is active |
+| Error | GP7 | Solid = a fault needs attention |
+| Reminder | GP8 | Blinks when the service interval has elapsed (long-press GP9 to reset) |
+| Heartbeat | GP25 | Toggles each health-check tick — proves the loop is alive |
+
+**Alert keys** — the `alerts` page names the active condition. Errors: `sd_required`, `th_dead`, `mem_error`, `logged_error`. Warnings: `th_intermittent`, `fallback_active`, `buffer_backlog`, `mem_warn`, `rtc_invalid`, `co2_stale`, and `soil_low` in plant mode. The printed case legend lists these for someone standing at the tent with no terminal; it is regenerated from [tools/gen_case_legend.py](tools/gen_case_legend.py) whenever an operator-visible surface changes.
+
+## Data on the SD card
 
 ```text
-Git-codebase/
-├── config.py                    # Central DEVICE_CONFIG + validate_config()
-├── main.py                      # Orchestrator — DI-based init, spawns async tasks
-├── requirements.txt             # Host / dev dependencies
-├── pyproject.toml               # pytest + coverage + ruff configuration
-├── host_shims/                  # Windows / CPython compatibility shims
-│   ├── sht31.py                 #   SHT31 simulation (probe-calibrated readings)
-│   ├── machine.py               #   Pin, SPI, I2C, UART, ADC, WDT with console logging
-│   ├── micropython.py           #   const() stub
-│   ├── framebuf.py              #   Framebuffer stub for the OLED driver
-│   ├── os.py                    #   mount / umount / ilistdir / VFS stubs
-│   ├── uasyncio.py              #   Maps to asyncio
-│   └── _probe_data.py           #   Canned host sensor data
-├── lib/                         # Core library modules
-│   ├── boot_log.py              #   Tees boot diagnostics to /boot.log
-│   ├── hardware_factory.py      #   Ordered HW init (RTC → SPI/SD → GPIO)
-│   ├── time_provider.py         #   TimeProvider, RTCTimeProvider
-│   ├── status_manager.py        #   LED ownership + POST walk
-│   ├── buffer_manager.py        #   Tiered storage: SD → fallback → RAM
-│   ├── write_queue_manager.py   #   Async SD write batching
-│   ├── event_logger.py          #   System logger with severity + rotation
-│   ├── sensor_paths.py          #   Canonical /sd/sensors path builder
-│   ├── sht31.py                 #   SHT31-D I2C driver (CRC-validated)
-│   ├── temp_humidity_logger.py  #   Temp/humidity logger with date rollover
-│   ├── co2_logger.py            #   UART CO₂ logger + fan override flag
-│   ├── soil_logger.py           #   ADC soil-moisture logger (plant mode)
-│   ├── relay.py                 #   RelayController, FanController, GrowlightController
-│   ├── fan_output.py            #   RelayFanOutput, Pca9685FanOutput
-│   ├── fan_controllers.py       #   AlwaysOn + HeaterFollower fan policies
-│   ├── heater.py                #   HeaterController (day/night thermostat)
-│   ├── pca9685.py               #   16-ch PWM driver (next-rev fan board)
-│   ├── mcp4725.py               #   DAC driver for grow-light dimming
-│   ├── led_button.py            #   LED, LEDButtonHandler, ServiceReminder
-│   ├── buzzer.py                #   Passive-buzzer pattern player
-│   ├── oled_display.py          #   SSD1306 menu + debug actions sub-menu
-│   ├── updater.py               #   SD-payload OTA verify/apply/reset
-│   ├── updater_feedback.py      #   LED chase + buzzer ticks during update
-│   ├── sd_integration.py        #   mount_sd(), is_mounted() helpers
-│   ├── sdcard.py                #   SPI SD-card filesystem driver (vendored)
-│   ├── ds3231.py                #   Primary RTC driver (vendored)
-│   └── ssd1306.py               #   OLED framebuffer driver (vendored)
-├── prototypes/                  # On-device bench scripts (not part of the app)
-│   ├── rtc_set_time.py          #   One-time RTC sync
-│   ├── sd_test.py               #   SD card health-check state machine
-│   ├── i2c_scan.py              #   I2C bus address scan
-│   ├── hw_probe.py              #   Hardware probe
-│   ├── co2*.py                  #   CO₂ sensor smoke tests
-│   ├── led_cycle_test.py        #   LED walk test
-│   └── transfer_logs.py         #   Pull logs off the device
-├── tools/                       # Host-side utilities
-│   ├── build_update_payload.py  #   Build a signed OTA payload tree
-│   └── relay_diag.py            #   Relay diagnostics
-├── tests/                       # Unit tests (pytest + pytest-asyncio)
-│   ├── conftest.py              #   MicroPython mocking setup
-│   └── test_*.py                #   One file per lib/ module + config + main
-├── docs/                        # Hardware docs, build runbook, prompts, conventions
-└── typings/os.pyi               # Type stubs for MicroPython os
+/sd/sensors/th/YYYY/th_YYYY-MM-DD.csv           temperature + humidity
+/sd/sensors/co2/YYYY/co2_YYYY-MM-DD.csv         CO₂ ppm
+/sd/sensors/soil/YYYY/soil_YYYY-MM-DD.csv       soil moisture (plant mode)
+/sd/sensors/metrics/YYYY/metrics_YYYY-MM-DD.csv health + regulation metrics
+/sd/logs/system.log                             system event log
+/sd/logs/updates.log                            OTA history
+/boot.log                                       last boot's diagnostics (internal flash)
 ```
 
-## CSV Data Format
-
-Sensor data lives under `/sd/sensors/<type>/YYYY/<type>_YYYY-MM-DD.csv`, rolling over at midnight. Temperature / humidity rows:
+Sensor files roll over at midnight. Temperature/humidity rows look like this:
 
 ```csv
 Timestamp,Temperature,Humidity
@@ -278,50 +179,65 @@ Timestamp,Temperature,Humidity
 2026-01-29 14:36:12,22.6,65.1
 ```
 
-## LED Status
+The **metrics CSV** is written by the health loop when `diagnostics.metrics_log` is on: free/allocated heap and used percentage, task count, write-queue and buffer depth, fallback writes and write failures, plus the engine's `tick_us` / `tick_max_us` timing, global severity, band, latch and emergency flags, the three deviations, and the commanded value for all seven actuators. It charts like any other sensor log, which is what makes a soak run legible after the fact. `diagnostics.mem_trend_log` adds one greppable pre/post-GC heap line per cycle to `system.log` without turning on debug logging.
 
-Design convention: **solid = problem, blink = activity, dark = all good.** At boot a POST walk lights each LED in `status_leds.walk_order` to verify the row.
+## Keeping a unit up to date
 
-| LED | GPIO | Meaning |
-| --- | --- | --- |
-| Activity | GP4 | Brief blink on sensor reads / I/O |
-| SD | GP5 | Solid = SD card missing or failed |
-| Warning | GP6 | Solid = degraded (fallback active, low soil, high RAM, RTC invalid) |
-| Error | GP7 | Solid = fault needs attention |
-| Reminder | GP8 | Blinks when service interval has elapsed (long-press GP9 to reset) |
-| Heartbeat | GP25 | On-board LED toggles each health-check tick |
+**Application updates (no reflash).** Build a payload with `tools/build_update_payload.py`, drop the tree under `/sd/ota/pending`, and reset. The updater verifies every file by SHA-256 before writing any, refuses payloads whose `.mpy` ABI the running firmware cannot import, writes with per-file retries, sweeps files the payload did not ship (so a stale `lib/*.mpy` cannot keep shadowing its frozen twin), archives the payload to `/sd/ota/applied/<version>/`, and resets. LEDs chase and the buzzer ticks throughout, so an update is visible without a serial console.
 
-## Development Notes
+**Firmware.** The application modules are frozen into a custom `.uf2`, which reclaimed roughly a third of the heap. Building, flashing, verifying that the image really froze what the manifest asked for, and the `.mpy` ABI rules that keep OTA payloads importable are all in [docs/hardware/firmware-build-runbook.md](docs/hardware/firmware-build-runbook.md). Two rules that bite: a package cannot span frozen and filesystem copies, and a leftover file in `/lib` silently wins over its frozen twin.
 
-- **Language**: MicroPython on-device; standard Python 3 for host simulation and tests
-- **IDE**: Thonny (for flashing to the Pico) or any editor with the host shims
-- **Architecture**: dependency injection + factory pattern; concurrent `uasyncio` tasks under a hardware watchdog
-- **Testing**: `pytest` + `pytest-asyncio`, `asyncio_mode=auto`; coverage gate `fail_under=88`
-- **Lint/format**: `ruff` (`line-length=120`, selecting `E,F,I`); vendored drivers, `host_shims/`, and `typings/` are excluded from lint and coverage
-- **Version**: InDev2.0 (Modular Architecture with Dependency Injection)
-- **Custom firmware**: building a frozen-module `.uf2`, flashing it, and the `.mpy` ABI rules that keep OTA payloads importable are in [docs/hardware/firmware-build-runbook.md](docs/hardware/firmware-build-runbook.md); the reasoning behind the freeze scope is in the firmware-freeze versioning plan (internal notes)
+Every boot logs one identity line — firmware version, app version, `.mpy` ABI, and where that identity came from — to both `system.log` and `/boot.log`. It is the only record of the outgoing firmware once a new image is written.
+
+## Configuration
+
+Every tunable value lives in the single `DEVICE_CONFIG` dict in [config.py](config.py), and `validate_config()` checks it at boot. A new key is not done until it exists in the dict, in the validator, and in [tests/test_config.py](tests/test_config.py). `lib/` modules never import `DEVICE_CONFIG` — values reach them through constructors, which is what keeps them testable in isolation.
+
+**→ [docs/configuration.md](docs/configuration.md)** documents every section: pins, regulation (profiles, regulators, surfaces, adapters, escalation, latch, conflicts), loggers, storage, display, LEDs, buzzer, updater, diagnostics and system timing.
+
+## Repository layout
+
+```text
+config.py        DEVICE_CONFIG + validate_config() — the only knobs
+main.py          orchestrator: DI wiring, boot order, async tasks, health loop
+lib/             application modules (+ vendored SD, RTC, OLED drivers)
+host_shims/      CPython stand-ins for MicroPython APIs
+tests/           pytest suite, incl. golden vectors for the surface math
+tools/           host-side: firmware build, OTA payload, deploy, case legend
+prototypes/      on-device bench scripts and the surface-tuning explorer
+docs/            configuration, conventions, hardware, task prompts
+```
+
+**→ [docs/repository-layout.md](docs/repository-layout.md)** for the annotated file-by-file tree.
+
+## Development
+
+- **Language** — MicroPython on-device, standard Python 3 on the host. No f-strings or dict churn in the regulation tick path.
+- **Style** — `ruff`, line length 120, rules `E,F,I`. Vendored drivers, `host_shims/` and `typings/` are excluded from lint and coverage on purpose.
+- **Tests** — `pytest` + `pytest-asyncio` with `asyncio_mode=auto`; coverage gate `fail_under=88`; `pre-commit run --all-files` runs lint and the suite.
+- **Conventions** — architecture, naming, GPIO, logging and error-handling rules are in [docs/conventions.md](docs/conventions.md).
+- **Retuning a surface** is a deliberate act: regenerate the golden vectors with [prototypes/plot_regulation_surfaces.py](prototypes/plot_regulation_surfaces.py), and remember that a surface and its adapter's thresholds are one calibration, not two knobs.
 
 ## Troubleshooting
 
-| Issue | Solution |
+| Symptom | Where to look |
 | --- | --- |
-| No timestamp data | Run `prototypes/rtc_set_time.py` first to seed the DS3231 |
-| Boot resets in a loop with sd+error LEDs lit | SD required but not mounting — check GP10–GP13 wiring / card seating, or set `system.require_sd_startup=False` |
-| Sensor read failures | Check SHT31 on I2C0 (GP0/GP1, `0x44`); `max_retries` defaults to 3 |
-| Relay not switching | Confirm inverted GPIO logic (HIGH = off, LOW = on) |
-| Data missing after SD removal | Check `/local/fallback.csv`; `BufferManager` migrates entries when SD returns |
-| CO₂ override never fires | Verify the sensor on UART0 (GP16/GP17) and that `override_fan` names an enabled fan role |
-| OLED blank | Check it answers at `0x3C` on I2C0 (`prototypes/i2c_scan.py`); `display.enabled` must be True |
-| System log growing large | `EventLogger` auto-rotates past `event_logger.max_size`; old logs renamed with a timestamp |
-| Service reminder won't clear | Long-press the menu button (GP9 ≥ 3 s) |
-| OTA payload refused with `mpy_abi mismatch` | The `.mpy` files were compiled by a different `mpy-cross` than the running firmware. Rebuild them with the firmware's own `mpy-cross`, or ship a raw-`.py` payload — see [the runbook](docs/hardware/firmware-build-runbook.md#5-the-mpy-abi-invariant-do-not-get-this-wrong) |
-| OTA applied but a `lib/` module didn't change | That module is frozen into the firmware; the dropped file is ignored. Rebuild and reflash, or move it out of the freeze set |
+| No timestamps in the logs | Seed the DS3231 once with `prototypes/rtc_set_time.py` |
+| Boot loops with the SD and error LEDs lit | SD required but not mounting — check GP10–GP13 wiring and card seating, or set `system.require_sd_startup=False` |
+| Sensor reads failing | SHT31 at `0x44` on I²C0 (`prototypes/i2c_scan.py`); `max_retries` defaults to 3 |
+| A relay never switches | Relay GPIOs are inverted (HIGH = off). Confirm with the `relays` OLED page or `tools/relay_diag.py` |
+| Data missing after pulling the card | Check `/local/fallback.csv` — rows migrate back when the card returns |
+| An actuator sits at a constant value | Check the `reg` OLED page for a latch. Release needs every severity ≤ `latch.release_max` for `release_ticks` ticks *and* `latch.min_s` elapsed |
+| CO₂ never moves the fans | The reading may be stale (`co2_stale` alert) — the fresh-air-exchange floor takes over. Otherwise check UART0 wiring and that the CO₂ term clears the regulator's floor |
+| OLED blank | It must answer at `0x3C`; after `display.max_render_errors` consecutive I²C failures it self-disables to protect the shared bus |
+| `system.log` growing without bound | It rotates past `event_logger.max_size` and keeps `log_retention_days` of archives |
+| OTA refused with `mpy_abi mismatch` | The `.mpy` files were built by a different `mpy-cross` than the running firmware — see [the runbook](docs/hardware/firmware-build-runbook.md#5-the-mpy-abi-invariant-do-not-get-this-wrong) |
+| OTA applied but a `lib/` module didn't change | That module is frozen into the firmware. Rebuild and reflash, or move it out of the freeze set |
 
-## Planned Enhancements
+## Roadmap
 
-- **PCA9685 PWM fan board** — flip the three disabled fan roles on for variable-speed control (driver + config already in place; awaiting the next-rev PCB)
-- **MCP4725 grow-light dimming** in production — ramped dawn/sunset fades on the ViparSpectra XS1500
-- **Soil sensor swap** — move from the analog GP28 probe to the Adafruit STEMMA #4026 (I²C, `0x36`) on the next PCB
-- **Adaptive environmental control** — closed-loop adjustments from combined temp/humidity/CO₂/soil signals
-- **Custom enclosure** with assembly instructions
-- **Preset configurations** — grow templates for vegetables, household plants, flowers, and mycology
+- **Adaptive tuning** — close the loop on the regulation surfaces themselves from logged outcomes, rather than hand-exporting them from the tuning explorer.
+- **Soil sensor swap** — replace the analog GP28 probe with the Adafruit STEMMA #4026 (I²C) on the next PCB.
+- **Hydroponics monitoring** — a second I²C bus for Atlas EZO pH/EC probes, monitor-only to start.
+- **More species profiles** — colonization-phase mushroom profiles (which legitimately run several thousand ppm CO₂) and vegetable presets.
+- **Enclosure** — a documented case with assembly instructions to go with the printed legend.

@@ -1,3 +1,7 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/banner-dark.svg">
+  <img src="docs/images/banner-light.svg" alt="Pi Greenhouse — closed-loop grow control for the Raspberry Pi Pico">
+</picture>
 
 # Pi Greenhouse: Raspberry Pi Pico Environmental Control System
 
@@ -38,6 +42,14 @@ Two behaviours are worth knowing before you tune anything:
 
 - **Escalation is gated by direction.** Only the hazardous high side of temperature and humidity may escalate to the emergency and latch vectors; too cold, too dry and any CO₂ level are conditions the surfaces correct on their own. Ungated escalation used to latch a freshly set-up tent on its first tick, with the very actuators that would fix it forced off.
 - **The chamber keeps breathing when CO₂ goes blind.** The S8 is specified to 95 %RH non-condensing and fails exactly when a fruiting tent is running correctly. With no usable reading the CO₂ dimension is neutralised, so `regulation.fresh_air_exchange` applies a timed floor to the exhaust and circulation instead.
+
+### Seeing what the engine will do before it does it
+
+[prototypes/gen_regulation_explorer.py](prototypes/gen_regulation_explorer.py) renders the matrix as one self-contained HTML file — no server, no build step, no CDN — so a misbehaving tent can be diagnosed on a bench machine that is offline. It draws a 21 × 21 grid of a regulator's response across two deviation axes, and clicking any cell walks that cell through the pipeline.
+
+![The regulation surface explorer: a 21 by 21 heat map of exhaust duty across temperature and humidity deviation, with a selected cell whose raw surface value of 57.5 becomes a final actuator command of 100.0](docs/images/regulation-explorer.png)
+
+The comparison in the middle panel is the whole point. The two regulation bugs that motivated the tool both lived in the gap between what the surface asked for and what the actuator actually did — a floor and a CO₂ term quietly swallowing the output — and neither was visible in a plot of the surface alone. The species anchors and every tuning parameter are editable in the browser: the plot recomputes live, and *Export changes* hands back a paste-ready `config.py` fragment. The page checks its own evaluator against the golden-vector grids on load, so a port that has drifted shows a banner instead of plotting fiction.
 
 ### The profile is the setpoint
 
@@ -203,7 +215,7 @@ main.py          orchestrator: DI wiring, boot order, async tasks, health loop
 lib/             application modules (+ vendored SD, RTC, OLED drivers)
 host_shims/      CPython stand-ins for MicroPython APIs
 tests/           pytest suite, incl. golden vectors for the surface math
-tools/           host-side: firmware build, OTA payload, deploy, case legend
+tools/           host-side: firmware build, OTA payload, deploy, case legend, banner
 prototypes/      on-device bench scripts and the surface-tuning explorer
 docs/            configuration, conventions, hardware, task prompts
 ```

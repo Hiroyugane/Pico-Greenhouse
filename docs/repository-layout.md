@@ -168,6 +168,7 @@ repository-layout.md        this file
 conventions.md              architecture, naming, GPIO, logging and error-handling rules
 images/banner-light.svg           README banner, light ground (generated)
 images/banner-dark.svg            README banner, dark ground (generated)
+images/regulation-explorer.png    the explorer figure used in the README
 hardware/case-legend.pdf          printable enclosure legend (generated)
 hardware/firmware-build-runbook.md  build, flash, verify, and the .mpy ABI invariant
 hardware/next-revision.md         queued changes for the next PCB / enclosure / harness

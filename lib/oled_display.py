@@ -191,7 +191,10 @@ class OLEDDisplay:
     def _init_display(self) -> None:
         """Initialize SSD1306 driver. Non-fatal if display absent."""
         try:
-            from lib.ssd1306 import SSD1306_I2C
+            try:
+                from lib.ssd1306 import SSD1306_I2C
+            except ImportError:  # frozen into the firmware as a top-level module
+                from ssd1306 import SSD1306_I2C
 
             self._oled = SSD1306_I2C(self._width, self._height, self._i2c, addr=self._i2c_address)
 

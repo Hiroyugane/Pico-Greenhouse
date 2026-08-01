@@ -100,7 +100,10 @@ def mount_sd(spi, cs_pin, mount_point: str = "/sd", debug_callback=None):
             return True, None
         from machine import Pin
 
-        from lib import sdcard
+        try:
+            from lib import sdcard
+        except ImportError:  # frozen into the firmware as top-level modules
+            import sdcard
 
         # Ensure cs_pin is a Pin object
         if isinstance(cs_pin, int):
@@ -178,7 +181,11 @@ def is_mounted(sd, spi=None, return_instances: bool = False, debug_callback=None
         from machine import SPI, Pin
 
         from config import DEVICE_CONFIG
-        from lib import sdcard
+
+        try:
+            from lib import sdcard
+        except ImportError:  # frozen into the firmware as top-level modules
+            import sdcard
 
         spi_config = DEVICE_CONFIG.get("spi", {})
         spi_id = spi_config.get("id", 1)

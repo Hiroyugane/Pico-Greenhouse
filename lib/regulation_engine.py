@@ -137,6 +137,16 @@ class RegulationEngine:
 
         self._light_level_day = float(regulators["growlight"]["light_level_day"])
 
+        # Fresh-air exchange fallback for a blind CO2 channel. The window is
+        # derived from wall-clock minutes rather than a tick counter so it is
+        # deterministic across reboots — a controller that resets mid-window
+        # resumes the same schedule instead of restarting the cycle.
+        fae = reg_cfg.get("fresh_air_exchange")
+        self._fae_enabled = bool(fae["enabled"]) if fae else False
+        self._fae_interval_min = float(fae["interval_min"]) if fae else 0.0
+        self._fae_duration_min = float(fae["duration_min"]) if fae else 0.0
+        self._fae_command = float(fae["command"]) if fae else 0.0
+
         ext = reg_cfg["external_sensor"]
         self._ext_enabled = bool(ext["enabled"])
         self._ext_full_c = float(ext["full_delta_c"])
@@ -167,9 +177,28 @@ class RegulationEngine:
         fh = _effect_factor(hum_in - h_out, self._ext_full_rh, self._ext_min_rh)
         return ft * fh
 
+    # -- fresh-air exchange fallback ---------------------------------------
+
+    def _fae_floor(self, co2, minutes):
+        """Command floor for the CO2-carrying regulators, or 0.0 when idle.
+
+        Only ever non-zero while ``co2`` is None. A fruiting chamber still needs
+        air exchange when the sensor is blind, and on this hardware it is blind
+        precisely when the tent is running correctly: the S8 is specified
+        0-95 %RH non-condensing and measured a 100 % failure rate above 98 %RH
+        over the 2026-07-27..31 run. Since the additive CO2 term is the only
+        path from CO2 to an actuator, a neutralised reading otherwise leaves no
+        air-exchange driver at all.
+        """
+        if co2 is not None or not self._fae_enabled:
+            return 0.0
+        if minutes % self._fae_interval_min < self._fae_duration_min:
+            return self._fae_command
+        return 0.0
+
     # -- target vector build ----------------------------------------------
 
-    def _compute_targets(self, ext_mult):
+    def _compute_targets(self, ext_mult, fae_floor=0.0):
         dev = self._dev
         target = self._target
         for i, params in enumerate(self._surface_params):
@@ -181,6 +210,13 @@ class RegulationEngine:
                 over = dev[self._co2_idx] - self._co2_break[i]
                 if over > 0.0:
                     val += self._co2_gain[i] * over
+                # Scheduled fresh-air exchange, non-zero only while the CO2
+                # reading is unavailable. Applied as a floor, never a cap, so
+                # it can only raise a command — and only on the regulators that
+                # already carry the CO2 term, which is exactly the exhaust and
+                # the circulation pair.
+                if fae_floor > val:
+                    val = fae_floor
             if self._ext_active[i]:
                 val *= ext_mult
             # evaluate() already returns 0..100; this bounds the CO2 term and
@@ -224,7 +260,7 @@ class RegulationEngine:
             self._sev[i] = severity(self._dev[i])
 
         ext_mult = self._external_mult(temp if temp is not None else 0.0, hum if hum is not None else 0.0)
-        self._compute_targets(ext_mult)
+        self._compute_targets(ext_mult, self._fae_floor(co2, minutes))
 
         self._gmax = self._arb.arbitrate(self._target, self._sev, self._dev, self._out)
 

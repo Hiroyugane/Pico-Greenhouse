@@ -12,13 +12,27 @@ from tests.conftest import FAKE_LOCALTIME
 
 @pytest.fixture
 def fake_uart():
-    """A MagicMock UART that captures writes and replays canned read frames."""
+    """A MagicMock UART that captures writes and replays canned read frames.
+
+    ``inject()`` ARMS a reply rather than putting bytes straight into RX: the
+    real sensor only speaks when polled, so a frame must not be readable before
+    the request goes out. The logger drains RX before each request precisely
+    because leftover bytes desynchronise the next read, and a fixture that
+    pre-filled RX would make that drain look like a bug.
+
+    Use ``preload()`` for the opposite case — bytes genuinely left over from an
+    earlier exchange, which the drain is supposed to discard.
+    """
     u = MagicMock()
     u._writes = []
     u._rx = bytearray()
+    u._pending = bytearray()
 
     def _write(buf):
         u._writes.append(bytes(buf))
+        if u._pending:
+            u._rx.extend(u._pending)
+            u._pending = bytearray()
         return len(buf)
 
     def _any():
@@ -44,9 +58,15 @@ def fake_uart():
     u.flush = MagicMock(side_effect=_flush)
 
     def _inject(frame: bytes) -> None:
-        u._rx.extend(frame)
+        """Arm the sensor's reply to the next request."""
+        u._pending.extend(frame)
+
+    def _preload(data: bytes) -> None:
+        """Put bytes in RX as if left over from an earlier exchange."""
+        u._rx.extend(data)
 
     u.inject = _inject
+    u.preload = _preload
     return u
 
 
@@ -340,3 +360,167 @@ class TestErrorPaths:
                     with patch("time.localtime", return_value=FAKE_LOCALTIME):
                         asyncio.run(co2_logger.log_loop())
         assert mock_event_logger.error.called
+
+
+def _crc_frame(ppm: int) -> bytes:
+    """Build a 7-byte reply with a CORRECT Modbus CRC, as the real sensor sends."""
+    from lib.co2_logger import crc16
+
+    body = bytes([0xFE, 0x44, 0x02, (ppm >> 8) & 0xFF, ppm & 0xFF])
+    crc = crc16(body)
+    return body + bytes([crc & 0xFF, (crc >> 8) & 0xFF])
+
+
+class TestFrameIntegrity:
+    """Checksum + window. The field run fed 8320/9470 ppm straight to the fans."""
+
+    def test_crc_frame_accepted(self):
+        from lib.co2_logger import parse_frame
+
+        assert parse_frame(_crc_frame(742), verify_checksum=True) == 742
+
+    def test_bad_crc_rejected(self):
+        from lib.co2_logger import parse_frame
+
+        bad = bytearray(_crc_frame(742))
+        bad[5] ^= 0xFF  # corrupt the checksum
+        assert parse_frame(bytes(bad), verify_checksum=True) is None
+
+    def test_wrong_header_rejected(self):
+        """A misaligned read starts mid-frame — the header is what catches it."""
+        from lib.co2_logger import parse_frame
+
+        bad = bytearray(_crc_frame(742))
+        bad[0] = 0x00
+        assert parse_frame(bytes(bad), verify_checksum=True) is None
+
+    def test_short_frame_rejected_under_checksum(self):
+        from lib.co2_logger import parse_frame
+
+        assert parse_frame(_crc_frame(742)[:6], verify_checksum=True) is None
+
+    def test_field_observed_values_are_rejected_by_the_window(self):
+        """9470 and 2 ppm both parsed cleanly before the window existed."""
+        from lib.co2_logger import parse_frame
+
+        for ppm in (0, 2, 5, 48, 8320, 8903, 9470):
+            assert parse_frame(_frame(ppm), min_ppm=300, max_ppm=5000) is None
+
+    def test_window_admits_the_real_operating_range(self):
+        from lib.co2_logger import parse_frame
+
+        for ppm in (420, 600, 1300, 2000, 4999):
+            assert parse_frame(_frame(ppm), min_ppm=300, max_ppm=5000) == ppm
+
+    def test_checksum_catches_what_the_window_cannot(self):
+        """The point of the checksum: a corrupt frame can look perfectly plausible."""
+        from lib.co2_logger import parse_frame
+
+        plausible_but_corrupt = bytes([0xFE, 0x44, 0x02, 0x02, 0xBC, 0x00, 0x00])  # 700 ppm, bad CRC
+        assert parse_frame(plausible_but_corrupt, min_ppm=300, max_ppm=5000) == 700
+        assert parse_frame(plausible_but_corrupt, min_ppm=300, max_ppm=5000, verify_checksum=True) is None
+
+
+class TestStaleReading:
+    """A dead sensor must stop offering its last value to the regulation engine."""
+
+    @staticmethod
+    def _logger(time_provider, buffer_manager, mock_event_logger, fake_uart, **kw):
+        from lib.co2_logger import CO2Logger
+
+        return CO2Logger(
+            uart=fake_uart,
+            time_provider=time_provider,
+            buffer_manager=buffer_manager,
+            logger=mock_event_logger,
+            sensor_root="/sd/sensors",
+            sensor_type="co2",
+            **kw,
+        )
+
+    def test_reading_expires_after_the_timeout(self, time_provider, buffer_manager, mock_event_logger, fake_uart):
+        import lib.co2_logger as mod
+
+        log = self._logger(time_provider, buffer_manager, mock_event_logger, fake_uart, stale_after_s=300)
+        now = [1_000_000]
+        original = mod._ticks_ms
+        mod._ticks_ms = lambda: now[0]
+        try:
+            log.last_ppm = 1159
+            assert log.last_ppm == 1159
+            now[0] += 299 * 1000
+            assert log.last_ppm == 1159  # still fresh
+            now[0] += 2 * 1000
+            assert log.last_ppm is None  # aged out
+            assert log.is_stale() is True
+        finally:
+            mod._ticks_ms = original
+
+    def test_timeout_zero_never_expires(self, time_provider, buffer_manager, mock_event_logger, fake_uart):
+        import lib.co2_logger as mod
+
+        log = self._logger(time_provider, buffer_manager, mock_event_logger, fake_uart, stale_after_s=0)
+        now = [1_000_000]
+        original = mod._ticks_ms
+        mod._ticks_ms = lambda: now[0]
+        try:
+            log.last_ppm = 1159
+            now[0] += 10_000 * 1000
+            assert log.last_ppm == 1159
+            assert log.is_stale() is False
+        finally:
+            mod._ticks_ms = original
+
+    def test_stale_raises_and_clears_the_operator_warning(
+        self, time_provider, buffer_manager, mock_event_logger, fake_uart
+    ):
+        import lib.co2_logger as mod
+
+        status = MagicMock()
+        log = self._logger(
+            time_provider,
+            buffer_manager,
+            mock_event_logger,
+            fake_uart,
+            stale_after_s=300,
+            status_manager=status,
+        )
+        now = [1_000_000]
+        original = mod._ticks_ms
+        mod._ticks_ms = lambda: now[0]
+        try:
+            log.last_ppm = 700
+            now[0] += 301 * 1000
+            log._update_stale_alert()
+            status.set_warning.assert_called_with("co2_stale", True)
+            log.last_ppm = 700  # sensor comes back
+            log._update_stale_alert()
+            status.set_warning.assert_called_with("co2_stale", False)
+        finally:
+            mod._ticks_ms = original
+
+
+class TestRxDrain:
+    """Leftover RX bytes desynchronise the next read — drain before requesting."""
+
+    def test_stale_rx_bytes_are_discarded_before_the_request(self, co2_logger, fake_uart):
+        fake_uart.preload(b"\x02\xbc\x00")  # tail of a previous reply
+        fake_uart.inject(_frame(640))
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            asyncio.run(co2_logger._poll_once())
+        assert co2_logger.last_ppm == 640
+
+    def test_without_the_drain_the_read_would_desynchronise(self, co2_logger, fake_uart):
+        """Shows what the drain prevents: leftover bytes shift the ppm word.
+
+        Reading 7 bytes from [leftover(3) + reply(7)] yields a frame whose
+        bytes [3:5] are not the ppm word at all — which is how a healthy sensor
+        reports 8320 ppm.
+        """
+        fake_uart.preload(b"\x02\xbc\x00")
+        fake_uart.inject(_frame(640))
+        fake_uart.write(b"")  # deliver the reply without draining first
+        misaligned = fake_uart.read(7)
+        from lib.co2_logger import parse_frame
+
+        assert parse_frame(misaligned) != 640

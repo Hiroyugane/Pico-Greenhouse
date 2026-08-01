@@ -21,6 +21,8 @@ def _arb(
     tick_s=30.0,
     escalation=None,
     latch_enter_ticks=1,
+    emergency_by_cause=None,
+    safe_state_by_cause=None,
 ):
     from lib.regulation_arbiter import RegulationArbiter
 
@@ -40,7 +42,15 @@ def _arb(
         tick_s,
         escalation=escalation,
         latch_enter_ticks=latch_enter_ticks,
+        emergency_by_cause=emergency_by_cause,
+        safe_state_by_cause=safe_state_by_cause,
     )
+
+
+# Cause bit indices, mirroring config._REG_CAUSES ordering.
+TEMP_HIGH, TEMP_LOW = 0, 1
+HUM_HIGH, HUM_LOW = 2, 3
+ALL_ESCALATE = ((True, True), (True, True), (True, True))
 
 
 def _run(arb, target, sev, dev=None, n=1):
@@ -291,3 +301,129 @@ class TestFromConfig:
         assert out[names.index("humidifier")] == 0.0
         assert out[names.index("exhaust")] >= 60.0
         assert out[names.index("cooler")] >= 100.0
+
+
+class TestPerCauseForcedVectors:
+    """The forced vectors can differ by WHICH direction escalated.
+
+    Field incident 2026-07-30/31: a humidity emergency applied the same vector
+    as a temperature one, so the heater was forced to 0 while the tent was
+    saturated. Cooling raises relative humidity at unchanged absolute moisture,
+    so the severity that fired the emergency could never fall and the latch
+    could never release. The heater had to be able to answer "too wet"
+    differently from "too hot".
+    """
+
+    def test_no_overrides_is_byte_identical_to_the_base_vector(self):
+        # The whole change must be inert for a config that sets no overrides.
+        plain = _arb(n=2, emergency=[11.0, 22.0], escalation=ALL_ESCALATE)
+        out_a, _ = _run(plain, [0.0, 0.0], [45.0, 0.0, 0.0], dev=[95.0, 50.0, 50.0], n=2)
+        withc = _arb(n=2, emergency=[11.0, 22.0], escalation=ALL_ESCALATE, emergency_by_cause={})
+        out_b, _ = _run(withc, [0.0, 0.0], [45.0, 0.0, 0.0], dev=[95.0, 50.0, 50.0], n=2)
+        assert list(out_a) == list(out_b) == [11.0, 22.0]
+
+    def test_override_frees_a_regulator_for_one_cause_only(self):
+        # Regulator 0 is freed when humidity escalates high, but not when temp
+        # does. Freed means "keeps its arbitrated organic output", here 7.0.
+        arb = _arb(
+            n=1,
+            emergency=[0.0],
+            escalation=ALL_ESCALATE,
+            emergency_by_cause={HUM_HIGH: {0: None}},
+        )
+        # humidity high, severity 45 → freed → organic value survives.
+        out, _ = _run(arb, [7.0], [0.0, 45.0, 0.0], dev=[50.0, 95.0, 50.0])
+        assert out[0] == 7.0
+        # temperature high, severity 45 → base vector → forced to 0.
+        arb2 = _arb(
+            n=1,
+            emergency=[0.0],
+            escalation=ALL_ESCALATE,
+            emergency_by_cause={HUM_HIGH: {0: None}},
+        )
+        out2, _ = _run(arb2, [7.0], [45.0, 0.0, 0.0], dev=[95.0, 50.0, 50.0])
+        assert out2[0] == 0.0
+
+    def test_a_second_disagreeing_cause_revokes_the_relaxation(self):
+        # Both dimensions escalating: humidity wants the regulator free, temp
+        # wants the base value. They disagree, so the conservative base wins.
+        # This is the property that makes the scheme safe -- adding a cause can
+        # only ever remove freedom.
+        arb = _arb(
+            n=1,
+            emergency=[0.0],
+            escalation=ALL_ESCALATE,
+            emergency_by_cause={HUM_HIGH: {0: None}},
+        )
+        out, _ = _run(arb, [7.0], [45.0, 45.0, 0.0], dev=[95.0, 95.0, 50.0])
+        assert out[0] == 0.0
+
+    def test_agreeing_causes_keep_the_override(self):
+        # Same override on both active causes → they agree → it applies.
+        arb = _arb(
+            n=1,
+            emergency=[0.0],
+            escalation=ALL_ESCALATE,
+            emergency_by_cause={HUM_HIGH: {0: None}, TEMP_HIGH: {0: None}},
+        )
+        out, _ = _run(arb, [7.0], [45.0, 45.0, 0.0], dev=[95.0, 95.0, 50.0])
+        assert out[0] == 7.0
+
+    def test_latch_cause_mask_is_sticky_within_an_episode(self):
+        # A cause dipping under release_max for a tick must not re-pin the
+        # regulator: that is exactly the oscillation that kept the field latch
+        # from ever releasing.
+        # emergency=[None] isolates the latch stage: emergency runs FIRST and
+        # both fire at severity 50, so a regulator freed only in the safe-state
+        # vector would still arrive at the latch already pinned to 0.
+        arb = _arb(
+            n=1,
+            emergency=[None],
+            safe_state=[0.0],
+            escalation=ALL_ESCALATE,
+            safe_state_by_cause={HUM_HIGH: {0: None}},
+            latch_enter_ticks=1,
+        )
+        out, _ = _run(arb, [7.0], [0.0, 50.0, 0.0], dev=[50.0, 100.0, 50.0])
+        assert arb.latched is True
+        assert out[0] == 7.0  # freed by the humidity_high override
+        # Humidity drops under release_max for one tick; still freed.
+        out, _ = _run(arb, [7.0], [0.0, 10.0, 0.0], dev=[50.0, 60.0, 50.0])
+        assert out[0] == 7.0
+
+    def test_a_new_cause_mid_latch_removes_the_freedom(self):
+        # Latched on humidity (heater free), then the tent genuinely overheats.
+        # The frozen-at-entry alternative would keep the heater free into a real
+        # heat emergency; the union must take that freedom back.
+        # emergency=[None] isolates the latch stage: emergency runs FIRST and
+        # both fire at severity 50, so a regulator freed only in the safe-state
+        # vector would still arrive at the latch already pinned to 0.
+        arb = _arb(
+            n=1,
+            emergency=[None],
+            safe_state=[0.0],
+            escalation=ALL_ESCALATE,
+            safe_state_by_cause={HUM_HIGH: {0: None}},
+            latch_enter_ticks=1,
+        )
+        out, _ = _run(arb, [7.0], [0.0, 50.0, 0.0], dev=[50.0, 100.0, 50.0])
+        assert out[0] == 7.0
+        out, _ = _run(arb, [7.0], [45.0, 50.0, 0.0], dev=[95.0, 100.0, 50.0])
+        assert out[0] == 0.0
+
+    def test_cause_mask_clears_on_release(self):
+        arb = _arb(
+            n=1,
+            emergency=[None],
+            safe_state=[0.0],
+            escalation=ALL_ESCALATE,
+            safe_state_by_cause={HUM_HIGH: {0: None}},
+            latch_enter_ticks=1,
+            release_ticks=1,
+            min_s=0.0,
+        )
+        _run(arb, [7.0], [0.0, 50.0, 0.0], dev=[50.0, 100.0, 50.0])
+        assert arb.latched is True
+        _run(arb, [7.0], [0.0, 0.0, 0.0], dev=[50.0, 50.0, 50.0])
+        assert arb.latched is False
+        assert arb._latch_cause_mask == 0

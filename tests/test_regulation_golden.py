@@ -229,17 +229,31 @@ class TestHumidifierRelayBand:
         assert _relay_state_at(rh=80.4, temp=23.5, co2=1200.0) is True
 
     def test_relay_closes_below_the_calibrated_band(self):
-        # Band is RH 88 (close) .. 91 (open) at the ideal temperature.
+        # Band is RH 92.7 (close) .. 94.6 (open) at the ideal temperature,
+        # against the 75/95/102 anchors. It moved up with the 2026-07-31
+        # retune (was 88 .. 91): the ideal went 92 → 95 and the surface ramp
+        # was extended past ideal (bx_lo1 43 → 53) so the tent can actually
+        # reach its setpoint instead of stalling 2.4 points below it.
         assert _relay_state_at(rh=87.0) is True
 
     def test_relay_opens_above_the_calibrated_band(self):
-        assert _relay_state_at(rh=92.0, start_on=True) is False
+        assert _relay_state_at(rh=95.0, start_on=True) is False
 
     def test_relay_holds_inside_the_band(self):
         # Between the thresholds the relay keeps whatever state it had — that
         # is the hysteresis, and it must not collapse to a single switch point.
-        assert _relay_state_at(rh=89.5, start_on=True) is True
-        assert _relay_state_at(rh=89.5, start_on=False) is False
+        assert _relay_state_at(rh=93.5, start_on=True) is True
+        assert _relay_state_at(rh=93.5, start_on=False) is False
 
     def test_relay_stays_open_at_ideal(self):
-        assert _relay_state_at(rh=92.0) is False
+        # At ideal the surface still trims (4.2), deliberately — but the trim
+        # sits under off_below (7.0) so a relay actuator never closes on it.
+        assert _relay_state_at(rh=95.0) is False
+
+    def test_relay_still_misting_just_below_ideal(self):
+        # The defect this retune fixes: with the old calibration the relay
+        # opened at RH 89.6 against a 92 % ideal, so the tent stalled ~2.4
+        # points short of its own setpoint and the operator bypassed the relay
+        # onto mains. Anything inside the band, approached from below, must
+        # still be misting — that is what makes the setpoint reachable.
+        assert _relay_state_at(rh=94.0, start_on=True) is True

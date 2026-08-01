@@ -12,6 +12,9 @@ import uasyncio as asyncio
 
 REQUEST_FRAME = b"\xfe\x44\x00\x08\x02\x9f\x25"
 _MAX_PLAUSIBLE_PPM = 10000
+# Modbus RTU reply header: address FE, function 44, byte-count 02.
+_REPLY_HEADER = b"\xfe\x44\x02"
+_REPLY_LEN = 7
 
 try:
     _ticks_ms = time.ticks_ms  # MicroPython
@@ -21,18 +24,54 @@ except AttributeError:
         return int(time.time() * 1000)
 
 
-def parse_frame(buf):
+try:
+    _ticks_diff = time.ticks_diff  # MicroPython (wrap-safe)
+except AttributeError:
+
+    def _ticks_diff(a, b):  # CPython fallback
+        return a - b
+
+
+def crc16(data):
+    """Modbus RTU CRC16 (poly 0xA001, init 0xFFFF) over ``data``."""
+    crc = 0xFFFF
+    for b in data:
+        crc ^= b
+        for _ in range(8):
+            if crc & 1:
+                crc = (crc >> 1) ^ 0xA001
+            else:
+                crc >>= 1
+    return crc
+
+
+def parse_frame(buf, min_ppm=0, max_ppm=_MAX_PLAUSIBLE_PPM, verify_checksum=False):
     """
     Parse a SenseAir-style 7-byte reply.
 
     The ppm value is the big-endian word at bytes [3:5]. Returns None for
     malformed or implausible frames so the caller can treat parse failures
     the same as a missed read.
+
+    With ``verify_checksum`` the header and Modbus CRC16 are checked first.
+    That matters more than the range window: a misaligned read (a partial
+    previous reply still sitting in the RX buffer) produces a *structurally*
+    wrong frame whose ppm word can land anywhere, including inside any
+    plausible range. The 2026-07-27..31 field run logged 8320, 8903 and 9470
+    ppm alongside 0, 2 and 5 ppm from exactly this. A checksum rejects those
+    deterministically; a window only catches the ones that happen to look silly.
     """
     if buf is None or len(buf) < 5:
         return None
+    if verify_checksum:
+        if len(buf) != _REPLY_LEN:
+            return None
+        if bytes(buf[0:3]) != _REPLY_HEADER:
+            return None
+        if crc16(buf[0:5]) != (buf[5] | (buf[6] << 8)):
+            return None
     ppm = buf[3] * 256 + buf[4]
-    if ppm < 0 or ppm > _MAX_PLAUSIBLE_PPM:
+    if ppm < min_ppm or ppm > max_ppm:
         return None
     return ppm
 
@@ -73,6 +112,10 @@ class CO2Logger:
         retry_delay_ms: int = 50,
         write_queue=None,
         status_manager=None,
+        verify_checksum: bool = False,
+        plausible_min_ppm: int = 0,
+        plausible_max_ppm: int = _MAX_PLAUSIBLE_PPM,
+        stale_after_s: int = 0,
     ):
         self.uart = uart
         self.time_provider = time_provider
@@ -86,9 +129,15 @@ class CO2Logger:
         self.retry_delay_ms = retry_delay_ms
         self.write_queue = write_queue
         self.status_manager = status_manager
+        self.verify_checksum = verify_checksum
+        self.plausible_min_ppm = plausible_min_ppm
+        self.plausible_max_ppm = plausible_max_ppm
+        self.stale_after_s = stale_after_s
 
         # State
-        self.last_ppm = None
+        self._last_ppm = None
+        self._last_ok_ms = None
+        self._stale_flagged = False
         self.override_active = False
         self.read_failures = 0
         self.write_failures = 0
@@ -109,10 +158,61 @@ class CO2Logger:
             filename=self.filename,
         )
 
+    # ------------------------------------------------------------------ reading
+
+    @property
+    def last_ppm(self):
+        """Most recent good reading, or None once it is older than stale_after_s.
+
+        The regulation engine reads this every tick and its normalizer maps None
+        to a neutral deviation. Before the timeout existed, a dead sensor left
+        the last good value in place forever and the engine kept regulating on
+        it: the S8 fell silent at 15:41 on 2026-07-30 and only an unrelated
+        reboot stopped 1159 ppm from being treated as live indefinitely.
+        """
+        if self._last_ppm is None:
+            return None
+        if not self.stale_after_s or self._last_ok_ms is None:
+            return self._last_ppm
+        if _ticks_diff(_ticks_ms(), self._last_ok_ms) >= self.stale_after_s * 1000:
+            return None
+        return self._last_ppm
+
+    @last_ppm.setter
+    def last_ppm(self, value):
+        """Kept writable so tests and callers can seed a reading directly."""
+        self._last_ppm = value
+        self._last_ok_ms = None if value is None else _ticks_ms()
+
+    def is_stale(self):
+        """True when a reading was seen once but has since aged out."""
+        return self._last_ppm is not None and self.last_ppm is None
+
+    def _update_stale_alert(self):
+        """Raise/clear the operator-visible co2_stale warning on edges only.
+
+        A silently blind CO2 channel is the failure this whole change exists to
+        surface: the sensor produced 7427 read failures over 4.5 days and the
+        only outward sign was a warning line buried in the log.
+        """
+        if self.status_manager is None:
+            return
+        stale = self.is_stale()
+        if stale == self._stale_flagged:
+            return
+        self._stale_flagged = stale
+        try:
+            self.status_manager.set_warning("co2_stale", stale)
+        except Exception as exc:
+            self.logger.debug("CO2Logger", f"stale alert failed: {exc}")
+
     # ------------------------------------------------------------------ filename
 
     def _update_filename_for_date(self) -> None:
-        from lib.sensor_paths import daily_csv_path
+        try:
+            from lib.sensor_paths import daily_csv_path
+        except ImportError:  # frozen into the firmware as a top-level module
+            from sensor_paths import daily_csv_path
 
         try:
             year, month, day = self.time_provider.now_date_tuple()[:3]
@@ -137,6 +237,12 @@ class CO2Logger:
 
     def _ensure_header(self) -> None:
         relpath = self._strip_sd_prefix(self.filename)
+        # Register before writing: a header created while SD is down can be
+        # evicted from the fallback (oldest-first) before it ever reaches the
+        # card, which is how co2_2026-07-27.csv ended up headerless.
+        setter = getattr(self.buffer_manager, "set_header", None)
+        if setter is not None:
+            setter(relpath, "Timestamp,PPM\n")
         if not self.buffer_manager.has_data_for(relpath):
             try:
                 self.buffer_manager.write(relpath, "Timestamp,PPM\n")
@@ -169,6 +275,16 @@ class CO2Logger:
     async def _poll_once(self) -> None:
         self._check_date_changed()
         try:
+            # Drain anything left over from a previous exchange before asking
+            # again. A partial reply still sitting in the RX buffer makes the
+            # next read(7) start mid-frame, and a misaligned frame's ppm word
+            # can be any value at all — the most likely source of the 8320 /
+            # 9470 ppm readings in the 2026-07-27..31 logs.
+            if self.uart.any():
+                self.uart.read()
+        except Exception as exc:
+            self.logger.debug("CO2Logger", f"uart flush failed: {exc}")
+        try:
             self.uart.write(REQUEST_FRAME)
         except Exception as exc:
             self.logger.error("CO2Logger", f"uart write failed: {exc}")
@@ -190,7 +306,12 @@ class CO2Logger:
             if attempt < self.max_retries - 1:
                 await asyncio.sleep_ms(self.retry_delay_ms)
 
-        ppm = parse_frame(frame)
+        ppm = parse_frame(
+            frame,
+            min_ppm=self.plausible_min_ppm,
+            max_ppm=self.plausible_max_ppm,
+            verify_checksum=self.verify_checksum,
+        )
         if ppm is None:
             self.read_failures += 1
             in_warmup = (_ticks_ms() - self._started_ms) < self.warmup_s * 1000
@@ -201,9 +322,11 @@ class CO2Logger:
                     "CO2Logger",
                     f"no reading (failures={self.read_failures})",
                 )
+            self._update_stale_alert()
             return
 
         self.last_ppm = ppm
+        self._update_stale_alert()
         self._update_override(ppm)
 
         timestamp = self.time_provider.now_timestamp()

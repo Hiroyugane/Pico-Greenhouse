@@ -5,7 +5,7 @@ Use this prompt with Claude (Fable) to replace all per-device control logic
 with one unified, config-driven regulation pipeline.
 
 Architecture was decided by council deliberation on 2026-07-06 — see
-[chat-log](../notes/chat-log.md#2026-07-06--regulation-matrix-35-d-situationreaction--architecture-decided).
+chat-log.
 Do not re-litigate the encoding choice; open questions are listed at the end.
 
 ---
@@ -231,14 +231,14 @@ this is the tuning loop, so make it pleasant (one command, all surfaces).
 
 ## Process requirements
 
-- Follow `.claude/rules/ecc/common/commit-granularity.md`: config schema
+- Follow the commit-granularity convention: config schema
   commit first (dict + validator + tests), then one commit per stage
   (module + its tests), then per-actuator wiring swaps (each removing the
   superseded controller), then the host tool, then docs. Run
   `pytest tests/` + `ruff check .` before each commit; `python main.py`
   host run must stay clean.
-- End-of-session: append to `docs/notes/chat-log.md` and
-  `docs/test/hw-test-log.md` (bench checklist for the new engine —
+- End-of-session: append to `the internal chat-log` and
+  `the internal hw-test-log` (bench checklist for the new engine —
   extend the `REG.1` entry), per the documentation routine.
 
 ## Open items — resolve with the user at session start (AskUserQuestion)

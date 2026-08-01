@@ -27,6 +27,25 @@
 # A regulator whose emergency_value / safe_state is None is left "free" in that
 # forced vector: it keeps its arbitrated organic command, so the actuator that
 # resolves the condition can keep working while the latch is held.
+#
+# The forced vectors are also CAUSE-AWARE. Each escalating direction is a
+# "cause" (dim_index * 2, +1 for the low side), and a regulator may carry a
+# per-cause override of its emergency/safe value. This exists because the
+# response to "too hot" and "too wet" are not the same: forcing the heater off
+# is correct for the first and actively harmful for the second, since cooling
+# the tent raises relative humidity at unchanged absolute moisture and the
+# severity that fired the emergency can then never fall (field incident
+# 2026-07-30/31, the internal chat-log).
+#
+# When SEVERAL causes escalate at once the merge is deliberately conservative: a
+# regulator keeps a per-cause value only if EVERY active cause agrees on it,
+# otherwise the base vector applies. Adding a cause can therefore only remove
+# freedom, never grant it — so "heater free because it is too wet" stops
+# applying the moment the tent is also too hot. There is no scalar ordering of
+# safety across this vector (0 is safe for the heater, 100 is safe for the
+# exhaust), so min/max would be wrong for half the regulators; the base vector
+# is the operator-blessed conservative state and a per-cause override is a
+# relaxation justified by that cause alone.
 
 from array import array
 
@@ -42,6 +61,34 @@ def _forced_vector(values):
             vec[i] = float(v)
             hold.append(True)
     return vec, tuple(hold)
+
+
+def _cause_index(cause, dim_order):
+    """Map a config cause name ("humidity_high") to its bit index."""
+    dim, _, side = cause.rpartition("_")
+    return (dim_order.index(dim) << 1) | (0 if side == "high" else 1)
+
+
+def _cause_vectors(base_values, per_cause, n_causes):
+    """Build one forced vector per cause, or None when no cause overrides.
+
+    ``per_cause`` maps cause index → {regulator index: value-or-None}. A cause
+    with no entry reuses the base vector, represented as None so the hot path
+    can skip it without copying.
+    """
+    if not per_cause:
+        return None
+    out = []
+    for c in range(n_causes):
+        overrides = per_cause.get(c)
+        if not overrides:
+            out.append(None)
+            continue
+        values = list(base_values)
+        for reg_idx, v in overrides.items():
+            values[reg_idx] = v
+        out.append(_forced_vector(values))
+    return tuple(out)
 
 
 class RegulationArbiter:
@@ -63,6 +110,8 @@ class RegulationArbiter:
         tick_s,
         escalation=None,
         latch_enter_ticks=1,
+        emergency_by_cause=None,
+        safe_state_by_cause=None,
     ):
         """All list/array inputs are indexed by regulator position.
 
@@ -82,6 +131,9 @@ class RegulationArbiter:
                 direction escalates (the pre-gating behaviour).
             latch_enter_ticks: consecutive ticks the latch condition must hold
                 before the latch fires.
+            emergency_by_cause, safe_state_by_cause: optional {cause index →
+                {regulator index → value-or-None}} overrides. Absent → the
+                scalar vectors apply to every cause (pre-2026-07-31 behaviour).
         """
         self._n = len(reg_dims)
         self._reg_dims = reg_dims
@@ -113,6 +165,16 @@ class RegulationArbiter:
             self._esc_high = tuple(bool(pair[0]) for pair in escalation)
             self._esc_low = tuple(bool(pair[1]) for pair in escalation)
 
+        # Per-cause forced vectors + preallocated merge scratch. Emergency and
+        # latch can both apply in the same tick, so they need separate scratch.
+        # Two causes (high/low) per deviation dimension; without an escalation
+        # block the dimension count is the config default of three.
+        self._n_causes = 2 * (len(escalation) if escalation is not None else 3)
+        self._emerg_cause = _cause_vectors(emergency, emergency_by_cause, self._n_causes)
+        self._safe_cause = _cause_vectors(safe_state, safe_state_by_cause, self._n_causes)
+        self._merge_e = (array("f", [0.0] * self._n), bytearray(self._n))
+        self._merge_s = (array("f", [0.0] * self._n), bytearray(self._n))
+
         self._last = array("f", [0.0] * self._n)
         self._regsev = array("f", [0.0] * self._n)
 
@@ -126,6 +188,9 @@ class RegulationArbiter:
         self._latch_ticks = 0
         self._enter_counter = 0
         self._release_counter = 0
+        # Causes that fired the current latch episode, accumulated (see
+        # arbitrate step 5 for why it is sticky rather than per-tick).
+        self._latch_cause_mask = 0
 
     @classmethod
     def from_config(cls, reg_cfg, reg_names, dim_order, tick_s):
@@ -147,6 +212,9 @@ class RegulationArbiter:
         # constructor splits them into a float array plus a hold mask.
         emergency = [0.0] * len(reg_names)
         safe_state = [0.0] * len(reg_names)
+        # cause index → {regulator index: value-or-None}
+        emergency_by_cause = {}
+        safe_state_by_cause = {}
         for i, name in enumerate(reg_names):
             r = regulators[name]
             driven = r["driven"]
@@ -169,6 +237,12 @@ class RegulationArbiter:
             ss = r["safe_state"]
             emergency[i] = None if ev is None else float(ev)
             safe_state[i] = None if ss is None else float(ss)
+            for key, sink in (
+                ("emergency_by_cause", emergency_by_cause),
+                ("safe_state_by_cause", safe_state_by_cause),
+            ):
+                for cause, v in (r.get(key) or {}).items():
+                    sink.setdefault(_cause_index(cause, dim_order), {})[i] = None if v is None else float(v)
 
         reg_index = {name: i for i, name in enumerate(reg_names)}
         conflicts = []
@@ -199,6 +273,8 @@ class RegulationArbiter:
             float(tick_s),
             escalation=escalation,
             latch_enter_ticks=int(latch.get("enter_ticks", 1)),
+            emergency_by_cause=emergency_by_cause,
+            safe_state_by_cause=safe_state_by_cause,
         )
 
     def band_index(self, sev):
@@ -217,6 +293,64 @@ class RegulationArbiter:
             if sev[di] > m:
                 m = sev[di]
         return m
+
+    def _forced_for(self, mask, base, cause_vecs, scratch):
+        """Pick the forced (values, hold) pair for the active cause ``mask``.
+
+        Returns ``base`` unchanged whenever nothing cause-specific applies,
+        which is the whole cost for a config that sets no overrides. With
+        exactly one active cause its vector is used directly. With several, the
+        conservative merge runs into the preallocated ``scratch`` — a regulator
+        keeps a per-cause value only if every active cause agrees on it.
+        """
+        if cause_vecs is None or mask == 0:
+            return base
+
+        n_causes = self._n_causes
+        # Single active cause: no merge needed.
+        lone = -1
+        count = 0
+        for c in range(n_causes):
+            if mask & (1 << c):
+                lone = c
+                count += 1
+                if count > 1:
+                    break
+        if count == 1:
+            cv = cause_vecs[lone]
+            return base if cv is None else cv
+
+        base_vec, base_hold = base
+        out_vec, out_hold = scratch
+        for i in range(self._n):
+            first = True
+            agree = True
+            h0 = False
+            v0 = 0.0
+            for c in range(n_causes):
+                if not (mask & (1 << c)):
+                    continue
+                cv = cause_vecs[c]
+                if cv is None:
+                    h = base_hold[i]
+                    v = base_vec[i]
+                else:
+                    h = cv[1][i]
+                    v = cv[0][i]
+                if first:
+                    h0 = h
+                    v0 = v
+                    first = False
+                elif h != h0 or (h and v != v0):
+                    agree = False
+                    break
+            if agree:
+                out_hold[i] = 1 if h0 else 0
+                out_vec[i] = v0
+            else:
+                out_hold[i] = 1 if base_hold[i] else 0
+                out_vec[i] = base_vec[i]
+        return out_vec, out_hold
 
     def arbitrate(self, target, sev, dev, out):
         """Resolve ``target`` into ``out`` (both len num_regs). Returns global severity.
@@ -240,22 +374,46 @@ class RegulationArbiter:
         # directions allowed to escalate. Drives steps 4-5 (and the latch
         # release gate) so a correctable direction — a tent still being
         # brought up to spec — never forces a shutdown it cannot undo.
+        # Alongside the magnitude, record WHICH directions are escalating, as a
+        # bitmask over causes (dim * 2, +1 for the low side). Three thresholds
+        # are tracked because the three consumers differ: the emergency vector
+        # wants causes at the emergency edge, the latch wants causes at the
+        # latch edge, and the sticky latch mask wants causes still above
+        # release_max (the same terms the release gate itself is written in).
         esc_high = self._esc_high
-        if esc_high is None:
-            emax = gmax
-        else:
-            esc_low = self._esc_low
-            emax = 0.0
-            for i in range(len(sev)):
-                d = dev[i]
-                if d > 50.0:
-                    allowed = esc_high[i]
-                elif d < 50.0:
-                    allowed = esc_low[i]
-                else:
-                    allowed = False
-                if allowed and sev[i] > emax:
-                    emax = sev[i]
+        esc_low = self._esc_low
+        ungated = esc_high is None
+        emax = 0.0
+        mask_emerg = 0
+        mask_latch = 0
+        mask_hold = 0
+        for i in range(len(sev)):
+            d = dev[i]
+            if d > 50.0:
+                cause = i << 1
+                allowed = True if ungated else esc_high[i]
+            elif d < 50.0:
+                cause = (i << 1) | 1
+                allowed = True if ungated else esc_low[i]
+            else:
+                # Exactly at ideal: no direction, so no cause to attribute.
+                # Ungated still counts it toward emax, which is what keeps
+                # "no escalation block" identical to plain global severity.
+                cause = -1
+                allowed = ungated
+            if not allowed:
+                continue
+            s = sev[i]
+            if s > emax:
+                emax = s
+            if cause < 0:
+                continue
+            if s >= self._e_emerg:
+                mask_emerg |= 1 << cause
+            if s >= self._e_latch:
+                mask_latch |= 1 << cause
+            if s > self._latch_release_max:
+                mask_hold |= 1 << cause
         self.escalation_severity = emax
 
         # 1. Slew limit (organic output only) + cache regulator severities.
@@ -288,12 +446,18 @@ class RegulationArbiter:
                             out[idx] = val
 
         # 4. Emergency (forced): any escalating dim severity >= emergency edge.
+        # Stateless — the cause mask is re-read every tick by design.
         self.just_entered_emergency = False
         if emax >= self._e_emerg:
-            hold = self._emergency_hold
+            vec, hold = self._forced_for(
+                mask_emerg,
+                (self._emergency, self._emergency_hold),
+                self._emerg_cause,
+                self._merge_e,
+            )
             for i in range(n):
                 if hold[i]:
-                    out[i] = self._emergency[i]
+                    out[i] = vec[i]
             if not self.emergency_active:
                 self.just_entered_emergency = True
             self.emergency_active = True
@@ -314,12 +478,31 @@ class RegulationArbiter:
                 self._latch_ticks = 0
                 self._enter_counter = 0
                 self._release_counter = 0
+                self._latch_cause_mask = mask_latch
                 self.just_entered_latch = True
         if self.latched:
-            hold = self._safe_hold
+            # The latch cause mask is STICKY across the episode, unioned with
+            # whatever is still above release_max. Two failure modes bracket
+            # this. Freezing it at entry is unsafe: a latch entered on humidity
+            # frees the heater, the heater runs, the tent genuinely overheats,
+            # and a frozen mask keeps the heater free — a new hazard could never
+            # take that freedom back. Re-reading it fresh each tick is the
+            # opposite trap: release needs release_ticks AND min_s, so a cause
+            # dipping under the edge for one tick would re-pin the heater, cool
+            # the tent, push RH back up and reset the release counter — exactly
+            # the deadlock this whole change exists to remove. Union of both is
+            # safe in the only direction that matters, because the merge rule is
+            # monotone: more causes can only remove freedom.
+            self._latch_cause_mask |= mask_hold
+            vec, hold = self._forced_for(
+                self._latch_cause_mask,
+                (self._safe_state, self._safe_hold),
+                self._safe_cause,
+                self._merge_s,
+            )
             for i in range(n):
                 if hold[i]:
-                    out[i] = self._safe_state[i]
+                    out[i] = vec[i]
             self._latch_ticks += 1
             if emax <= self._latch_release_max:
                 self._release_counter += 1
@@ -328,6 +511,7 @@ class RegulationArbiter:
             elapsed_s = self._latch_ticks * self._tick_s
             if self._release_counter >= self._latch_release_ticks and elapsed_s >= self._latch_min_s:
                 self.latched = False
+                self._latch_cause_mask = 0
                 self.just_released_latch = True
 
         # Persist the commanded vector for next tick's slew reference.

@@ -9,7 +9,7 @@
 # structure below is the copy; everything under "rendering" is layout only.
 # When operator-visible behaviour changes (OLED pages/fields, relay or PWM
 # channel assignment, LED policy, alert keys, button timings), edit CONTENT
-# here, bump LEGEND_REV, and regenerate -- see .claude/rules/case-legend.md.
+# here, bump LEGEND_REV, and regenerate (see the case-legend convention in CLAUDE.md).
 #
 # Usage (from the repo root, with the project venv active):
 #     python tools/gen_case_legend.py
@@ -32,7 +32,7 @@ from reportlab.pdfgen import canvas
 # ---------------------------------------------------------------------------
 # Bump this date whenever CONTENT changes, so a legend glued to the case can
 # be compared against the repo without diffing the PDF.
-LEGEND_REV = "2026-07-22"
+LEGEND_REV = "2026-07-31"
 
 DEFAULT_OUTPUT = Path("docs/hardware/case-legend.pdf")
 
@@ -222,6 +222,7 @@ PAGE2 = [
                 ("WRN buffer_backlog", "writes queueing up"),
                 ("WRN mem_warn", "RAM above warn level"),
                 ("WRN rtc_invalid", "clock time implausible"),
+                ("WRN co2_stale", "CO2 reading too old; timed venting"),
             ],
         ),
         ("gap", None),

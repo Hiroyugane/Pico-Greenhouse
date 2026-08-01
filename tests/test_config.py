@@ -314,6 +314,64 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["updater"]["allowed_paths"] = original
 
+    def test_updater_enforce_mpy_abi_defaults_on(self):
+        """The ABI guard ships enabled — a mismatched .mpy payload must fail safe."""
+        from config import DEVICE_CONFIG
+
+        assert DEVICE_CONFIG["updater"]["enforce_mpy_abi"] is True
+
+    def test_updater_enforce_mpy_abi_non_bool_raises(self):
+        """updater.enforce_mpy_abi must be a bool."""
+        import config
+
+        original = config.DEVICE_CONFIG["updater"]["enforce_mpy_abi"]
+        config.DEVICE_CONFIG["updater"]["enforce_mpy_abi"] = "yes"
+        try:
+            with pytest.raises(ValueError, match="updater.enforce_mpy_abi"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["updater"]["enforce_mpy_abi"] = original
+
+    def test_updater_enforce_mpy_abi_may_be_disabled(self):
+        """Turning the guard off is a valid operator override, not a config error."""
+        import config
+
+        original = config.DEVICE_CONFIG["updater"]["enforce_mpy_abi"]
+        config.DEVICE_CONFIG["updater"]["enforce_mpy_abi"] = False
+        try:
+            assert config.validate_config() is True
+        finally:
+            config.DEVICE_CONFIG["updater"]["enforce_mpy_abi"] = original
+
+    def test_updater_prune_stale_defaults_on(self):
+        """Flash stops being additive by default — a stale shadow negates the freeze."""
+        from config import DEVICE_CONFIG
+
+        assert DEVICE_CONFIG["updater"]["prune_stale"] is True
+
+    def test_updater_prune_stale_non_bool_raises(self):
+        """updater.prune_stale must be a bool."""
+        import config
+
+        original = config.DEVICE_CONFIG["updater"]["prune_stale"]
+        config.DEVICE_CONFIG["updater"]["prune_stale"] = "yes"
+        try:
+            with pytest.raises(ValueError, match="updater.prune_stale"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["updater"]["prune_stale"] = original
+
+    def test_updater_prune_stale_may_be_disabled(self):
+        """Keeping the pre-2026-07-28 additive behaviour is a valid operator choice."""
+        import config
+
+        original = config.DEVICE_CONFIG["updater"]["prune_stale"]
+        config.DEVICE_CONFIG["updater"]["prune_stale"] = False
+        try:
+            assert config.validate_config() is True
+        finally:
+            config.DEVICE_CONFIG["updater"]["prune_stale"] = original
+
     def test_updater_legacy_update_dirs_non_list_raises(self):
         """updater.legacy_update_dirs must be a list."""
         import config
@@ -669,6 +727,15 @@ class TestValidateConfig:
                 config.validate_config()
         finally:
             config.DEVICE_CONFIG["pca9685"]["i2c_address"] = original
+
+    def test_pca9685_freq_is_the_sub_audible_trial_value(self):
+        """pca9685.freq_hz stays at the 60 Hz noise trial, not back at 1000."""
+        # 2026-07-28: dropped 1000 -> 60 to move the fan tone below the
+        # whine band (chat-log 2026-07-28). Pinned so a revert is deliberate:
+        # the pitch operators hear is exactly this number.
+        from config import DEVICE_CONFIG
+
+        assert DEVICE_CONFIG["pca9685"]["freq_hz"] == 60
 
     def test_pca9685_freq_too_low_raises(self):
         """pca9685.freq_hz below 24 Hz raises ValueError."""
@@ -1598,11 +1665,12 @@ class TestDiagnosticsConfig:
 
         assert isinstance(DEVICE_CONFIG["diagnostics"]["mem_trend_log"], bool)
 
-    def test_metrics_log_off_by_default(self):
-        """diagnostics.metrics_log defaults to False (heap headroom for the I2C error path)."""
+    def test_metrics_log_on_by_default(self):
+        """diagnostics.metrics_log defaults to True since the firmware freeze
+        reclaimed ~83 KB of heap (2026-07-27) — the post-freeze soak needs the CSV."""
         from config import DEVICE_CONFIG
 
-        assert DEVICE_CONFIG["diagnostics"]["metrics_log"] is False
+        assert DEVICE_CONFIG["diagnostics"]["metrics_log"] is True
 
     def test_metrics_log_non_bool_raises(self):
         """diagnostics.metrics_log with non-bool raises ValueError."""
@@ -2079,6 +2147,70 @@ class TestRegulationConfig:
         assert cooler["emergency_value"] is None
         assert cooler["safe_state"] is None
 
+    def test_regulation_by_cause_overrides_are_optional(self):
+        """A regulator with no by-cause block is valid — the scalar covers every cause."""
+        import config
+
+        for rname in config._REG_NAMES:
+            rcfg = config.DEVICE_CONFIG["regulation"]["regulators"][rname]
+            for key in ("emergency_by_cause", "safe_state_by_cause"):
+                assert key not in rcfg or isinstance(rcfg[key], dict)
+        assert config.validate_config() is True
+
+    def test_regulation_by_cause_accepts_a_valid_override(self):
+        import config
+
+        rcfg = config.DEVICE_CONFIG["regulation"]["regulators"]["heater"]
+        snap = rcfg.get("emergency_by_cause")
+        rcfg["emergency_by_cause"] = {"humidity_high": None, "temp_high": 0.0}
+        try:
+            assert config.validate_config() is True
+        finally:
+            if snap is None:
+                rcfg.pop("emergency_by_cause", None)
+            else:
+                rcfg["emergency_by_cause"] = snap
+
+    def test_regulation_by_cause_rejects_unknown_cause(self):
+        """A typo'd cause key must not silently do nothing."""
+        import config
+
+        rcfg = config.DEVICE_CONFIG["regulation"]["regulators"]["heater"]
+        snap = rcfg.get("safe_state_by_cause")
+        rcfg["safe_state_by_cause"] = {"humidty_high": None}  # codespell:ignore
+        try:
+            with pytest.raises(ValueError, match="must be one of"):
+                config.validate_config()
+        finally:
+            if snap is None:
+                rcfg.pop("safe_state_by_cause", None)
+            else:
+                rcfg["safe_state_by_cause"] = snap
+
+    def test_regulation_by_cause_rejects_out_of_range_value(self):
+        import config
+
+        rcfg = config.DEVICE_CONFIG["regulation"]["regulators"]["heater"]
+        snap = rcfg.get("emergency_by_cause")
+        rcfg["emergency_by_cause"] = {"temp_high": 140.0}
+        try:
+            with pytest.raises(ValueError, match="must be 0-100 or None"):
+                config.validate_config()
+        finally:
+            if snap is None:
+                rcfg.pop("emergency_by_cause", None)
+            else:
+                rcfg["emergency_by_cause"] = snap
+
+    def test_regulation_causes_cover_every_dimension_and_direction(self):
+        """The cause list is what the arbiter bit-indexes — it must stay in step."""
+        import config
+
+        assert len(config._REG_CAUSES) == 2 * len(config._REG_DIMENSIONS)
+        for i, dim in enumerate(config._REG_DIMENSIONS):
+            assert config._REG_CAUSES[i * 2] == "{}_high".format(dim)
+            assert config._REG_CAUSES[i * 2 + 1] == "{}_low".format(dim)
+
     def test_regulation_circulation_takes_the_co2_term(self):
         """Venting alone leaves dead zones — the circulation pair ramps with CO2 too."""
         from config import DEVICE_CONFIG
@@ -2097,7 +2229,7 @@ class TestRegulationConfig:
         The additive term is bounded by co2_gain * (100 - co2_break); if that
         ceiling sits at or below the regulator's floor, the arbiter forces the
         command up to the floor and CO2 changes nothing anywhere in the
-        profile's range (docs/notes/chat-log.md 2026-07-22). Gain, break and
+        profile's range (the internal chat-log 2026-07-22). Gain, break and
         floor are one calibration — this asserts they were re-derived together.
         """
         from config import DEVICE_CONFIG
@@ -2206,3 +2338,97 @@ class TestRegulationConfig:
                 config.validate_config()
         finally:
             self._restore(snap)
+
+
+class TestCo2FilteringConfig:
+    """Plausibility window, checksum flag, staleness timeout, and the FAE block."""
+
+    @staticmethod
+    def _swap(section, key, value):
+        import config
+
+        cfg = config.DEVICE_CONFIG[section] if isinstance(section, str) else section
+        original = cfg.get(key)
+        cfg[key] = value
+        return cfg, key, original
+
+    def test_defaults_validate(self):
+        import config
+
+        assert config.validate_config() is True
+
+    def test_plausible_window_must_be_ordered(self):
+        import config
+
+        cfg, key, original = self._swap("co2_logger", "plausible_min_ppm", 9000)
+        try:
+            with pytest.raises(ValueError, match="plausible_min_ppm must be <"):
+                config.validate_config()
+        finally:
+            cfg[key] = original
+
+    def test_plausible_ceiling_must_cover_the_active_profile(self):
+        """A window that discards readings the engine acts on is a silent data loss."""
+        import config
+
+        cfg, key, original = self._swap("co2_logger", "plausible_max_ppm", 900)
+        try:
+            with pytest.raises(ValueError, match="must cover the active profile"):
+                config.validate_config()
+        finally:
+            cfg[key] = original
+
+    def test_stale_timeout_must_exceed_the_poll_interval(self):
+        """A timeout under one poll period would mark every reading stale at once."""
+        import config
+
+        cfg, key, original = self._swap("co2_logger", "stale_after_s", 10)
+        try:
+            with pytest.raises(ValueError, match="stale_after_s must exceed interval_s"):
+                config.validate_config()
+        finally:
+            cfg[key] = original
+
+    def test_stale_timeout_zero_disables(self):
+        import config
+
+        cfg, key, original = self._swap("co2_logger", "stale_after_s", 0)
+        try:
+            assert config.validate_config() is True
+        finally:
+            cfg[key] = original
+
+    def test_verify_checksum_must_be_bool(self):
+        import config
+
+        cfg, key, original = self._swap("co2_logger", "verify_checksum", "yes")
+        try:
+            with pytest.raises(ValueError, match="verify_checksum must be a bool"):
+                config.validate_config()
+        finally:
+            cfg[key] = original
+
+    def test_fae_duration_must_fit_inside_the_interval(self):
+        import config
+
+        fae = config.DEVICE_CONFIG["regulation"]["fresh_air_exchange"]
+        original = fae["duration_min"]
+        fae["duration_min"] = fae["interval_min"]
+        try:
+            with pytest.raises(ValueError, match="duration_min must be <"):
+                config.validate_config()
+        finally:
+            fae["duration_min"] = original
+
+    def test_fae_command_must_be_actionable(self):
+        """A zero command would schedule a window that commands nothing."""
+        import config
+
+        fae = config.DEVICE_CONFIG["regulation"]["fresh_air_exchange"]
+        original = fae["command"]
+        fae["command"] = 0.0
+        try:
+            with pytest.raises(ValueError, match="command must be 0-100"):
+                config.validate_config()
+        finally:
+            fae["command"] = original

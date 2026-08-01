@@ -210,6 +210,72 @@ class TestMainStartup:
 
         assert len(created_tasks) > 0
 
+    async def test_logs_firmware_and_app_version_once_per_boot(self, monkeypatch):
+        """Boot writes one version line to system.log AND /boot.log.
+
+        Why both: system.log is the searchable history, but a unit whose SD
+        card has gone read-only still records its identity on internal flash —
+        and that line is the only record of the outgoing firmware once a new
+        .uf2 is flashed over it (plan section 3.1).
+        """
+        import main as main_module
+
+        monkeypatch.setattr(main_module, "validate_config", lambda: True)
+
+        mock_hw = Mock()
+        mock_hw.setup.return_value = True
+        mock_hw.get_rtc.return_value = Mock()
+        mock_hw.is_sd_mounted.return_value = True
+        monkeypatch.setattr(main_module, "HardwareFactory", lambda *a, **kw: mock_hw)
+
+        mock_buffer = Mock()
+        mock_buffer.get_metrics.return_value = {
+            "buffer_entries": 0,
+            "writes_to_fallback": 0,
+            "fallback_migrations": 0,
+            "writes_to_primary": 0,
+            "write_failures": 0,
+        }
+        mock_buffer.is_primary_available.return_value = True
+        monkeypatch.setattr(main_module, "BufferManager", lambda *a, **kw: mock_buffer)
+
+        mock_logger = Mock()
+        monkeypatch.setattr(main_module, "EventLogger", lambda *a, **kw: mock_logger)
+        monkeypatch.setattr(main_module, "TempHumidityLogger", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "ServiceReminder", lambda *a, **kw: Mock())
+        mock_buzzer = Mock()
+        mock_buzzer.startup = AsyncMock()
+        monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
+        monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: Mock(run_post=AsyncMock(return_value=True)))
+
+        boot_lines = []
+        monkeypatch.setattr(main_module.boot_log, "log", boot_lines.append)
+        monkeypatch.setattr(main_module.version, "describe", lambda: "fw=pg-fw-2026.07-a1b2c3d app=deadbee")
+
+        monkeypatch.setattr(main_module.asyncio, "create_task", _capture_create_task([]))
+
+        async def stop_immediately(duration):
+            raise asyncio.CancelledError()
+
+        monkeypatch.setattr(main_module.asyncio, "sleep", stop_immediately)
+        monkeypatch.setattr(main_module.asyncio, "sleep_ms", stop_immediately)
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with pytest.raises(asyncio.CancelledError):
+                await main_module.main()
+
+        version_calls = [
+            call for call in mock_logger.info.call_args_list if str(call.args[1:2]).startswith("('version | ")
+        ]
+        assert len(version_calls) == 1, "exactly one version line belongs in system.log per boot"
+        assert version_calls[0].args[0] == "MAIN"
+        assert "fw=pg-fw-2026.07-a1b2c3d" in version_calls[0].args[1]
+
+        version_boot_lines = [line for line in boot_lines if line.startswith("[VERSION] ")]
+        assert len(version_boot_lines) == 1
+        assert "app=deadbee" in version_boot_lines[0]
+
     async def test_startup_drains_fallback_when_sd_mounted(self, monkeypatch):
         """main() drains the previous boot's fallback rows via migrate_fallback().
 

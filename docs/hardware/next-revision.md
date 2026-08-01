@@ -3,7 +3,7 @@
 > Canonical, append-only checklist of every change planned for the
 > next PCB / enclosure / wiring revision. Read this before opening
 > the schematic editor. Per
-> [.claude/rules/ecc/common/hardware-revision-notes.md](../../.claude/rules/ecc/common/hardware-revision-notes.md).
+> the hardware-revision-notes rule (internal).
 >
 > Sections follow the EasyEDA workflow: **Schematic** (nets,
 > components, BOM) → **PCB layout** (footprints, routing,
@@ -11,7 +11,7 @@
 > settings) → **Mechanical / enclosure** → **Wiring / harness**.
 >
 > Newest item on top within each section. Each item links to the
-> `docs/notes/chat-log.md` entry where the root cause / decision
+> `the internal chat-log` entry where the root cause / decision
 > was captured, so the full rationale is one click away.
 >
 > Use `[ ]` queued, `[x]` shipped on the new revision, `[~]` deferred
@@ -19,11 +19,78 @@
 
 ## Schematic — nets, components, BOM
 
+### [ ] Fans are audibly loud at any speed — the PCA9685 cannot reach inaudible PWM
+
+**Filed:** 2026-07-28 ·
+chat-log entry ·
+memory: project-fan-pwm-noise-revision
+
+Reopens the **2026-07-06 "no 25 kHz path" rejection** in the
+[fan power-return entry](#-fan-drive-cant-hard-off--move-the-mosfet-into-the-fans-power-return-was-inverting-gate-stage).
+That decision accepted an audible buzz because "silent PWM was its only
+benefit and it isn't wanted here". It is now wanted: the operator reports
+the fans as **loud enough to be a problem**, which is exactly the
+downside that was signed off.
+
+**The constraint.** Since the MOSFET moved into the fan's ground return,
+the PCA9685 chops the motor's own supply current, so the fan radiates a
+tone at the PWM frequency. The PCA9685 is an LED driver with a hard
+**24–1526 Hz** ceiling ([lib/pca9685.py](../../lib/pca9685.py)) and quiet
+fan PWM needs **≥ 20 kHz**. No firmware setting can bridge that — the
+part is the wrong part for the job. Filtering it out is also not
+available: at 12 V / 50 % / 1 kHz, holding ripple under ~0.5 A needs
+several mH per channel, which only becomes a sane inductor once the
+switching is already at 25 kHz.
+
+**Open question to settle first (cheap, no hardware):** the operator
+describes the noise as **constant at any speed**. `set_duty(0)` and
+`set_duty(100)` use the PCA9685 FULL_OFF / FULL_ON flags, so at 100 %
+there is *no switching at all* — a fan that is still noisy at duty 100
+is making **aerodynamic or bearing** noise and none of the options below
+will help it. Resolve via
+hw-test-log FAN.Q.1 before spending BOM on
+this.
+
+**Options if FAN.Q.1 confirms it is PWM noise** (pick one, not all):
+
+- **A — RP2040 hardware PWM at 25 kHz (cheapest, no new part).** The
+  Pico's own PWM slices reach 25 kHz trivially. Route five GPIOs to the
+  five fan gate stages instead of PCA9685 LED0–LED4; the gate network
+  (150 Ω series + 10 kΩ pull-down) is unchanged. **Pin budget is the
+  catch:** the free GPIOs are GP2 and the reserved relay lines
+  GP21/GP22/GP26/GP27 — exactly five, but GP26/GP27 are already spoken
+  for by the queued **hydroponics second I²C bus** (see "Hydroponics
+  monitoring — 2nd I²C bus" further down this section), so those two
+  collide. Needs a pin-map decision, not just a route.
+- **B — dedicated 25 kHz fan controller (EMC2305).** The part rejected
+  in 2026-07-06. Purpose-built, I²C, five channels, and it brings
+  closed-loop tach RPM control as a bonus. Costs a new IC + footprint
+  and one more I²C address.
+- **C — switch to 4-wire PWM fans and drive the fan's own PWM input.**
+  The fan stays permanently powered at 12 V and its internal controller
+  does the commutation, so the motor current is never chopped — this is
+  the canonical *silent* answer. But it reverses the
+  [power-return fix](#-fan-drive-cant-hard-off--move-the-mosfet-into-the-fans-power-return-was-inverting-gate-stage):
+  a fan whose power is always on cannot be hard-stopped, which is the
+  bug that fix exists to solve. Would need the MOSFET kept in the
+  ground return as an *enable* switch plus a separate 25 kHz PWM line
+  per fan — most wiring, most pins, quietest result.
+- **D — accept it, re-decide the frequency only.** Firmware is already
+  running trial **60 Hz** (below the whine band, a low drone instead of
+  a whine). If FAN.Q.1 says the 60 Hz drone is acceptable, this entry
+  closes with no hardware change at all.
+
+**Acceptance on the new board (only if A/B/C ships):** at every duty the
+regulation engine uses, the fan is inaudible over its own airflow at
+1 m; `set_duty(0)` still brings the rotor to a complete mechanical stop
+(the property the power-return fix bought — do not trade it away for
+quiet).
+
 ### [ ] Regulation matrix needs cooler relay feed, humidifier output, external SHT31
 
 **Filed:** 2026-07-06 ·
-[chat-log entry](../notes/chat-log.md#2026-07-06--regulation-matrix-35-d-situationreaction--architecture-decided) ·
-[memory: project-regulation-matrix-plan](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_regulation_matrix_plan.md)
+chat-log entry ·
+memory: project-regulation-matrix-plan
 
 The unified RegulationEngine
 ([spec](../prompts/regulation-matrix.md)) adds three outputs/inputs the
@@ -41,16 +108,16 @@ current board doesn't provide:
   the address to the I²C silkscreen map.
 - Growlight dimming needs **no new hardware** — MCP4725 + LM358 0–10 V
   path already shipped.
-- **Acceptance:** [hw-test-log REG.1](../test/hw-test-log.md) — both new
+- **Acceptance:** hw-test-log REG.1 — both new
   relay channels click/release under engine control honoring min-cycle,
   external sensor reads plausible values at 0x45 alongside 0x44.
 
 ### [ ] 5 V step-down can't drive the relay coil bank — size the supply for spool current
 
 **Filed:** 2026-07-05 ·
-[chat-log entry](../notes/chat-log.md#2026-07-05--relay-coil-faults-root-caused--5-v-step-down-starves-the-spools) ·
-[2026-05-19 VSYS-starvation trace](../notes/chat-log.md#2026-05-19--external-5-v-supply-starves-vsys--1n4002-drop-traced) ·
-[memory: project-power-input-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_power_input_revision.md)
+chat-log entry ·
+2026-05-19 VSYS-starvation trace ·
+memory: project-power-input-revision
 
 Bench REL.1 (2026-07-05) root-caused the GP18/GP19 relay faults to the
 **5 V step-down being current-bottlenecked** — it can't source the relay
@@ -60,6 +127,20 @@ closed). Same rail as the
 [2026-05-19 VSYS starvation](#2026-05-19--external-5-v-supply-starves-vsys--1n4002-drop-traced):
 XL4015 buck with its **CC trimpot already maxed**, behind two 1N4002 input
 diodes (~1.6 V drop under load).
+
+> **2026-07-31 field evidence — this fault may have cost a grow:** on
+> 2026-07-28 10:00–13:00 the tent dried to **61.1 %RH** while
+> `cmd_humidifier` sat at **100** (maximum) and the exhaust was on its floor of
+> 5 — full command, no effect, i.e. the GP19 channel had no authority. The
+> operator responded by wiring the humidifier **past the relay onto mains**,
+> which removed the engine's only humidity off-switch and put the regulation
+> engine into a latch deadlock at 100 %RH for 12.3 h with the heater and grow
+> light forced off. Full chain in
+> chat-log 2026-07-31.
+> An unreliable coil driver on this board is not a nuisance — it is the fault
+> that made a human bypass the control system. Verify the reservoir level as
+> the innocent explanation first (hw-test FIELD.1), but treat GP19 as the
+> prime suspect until measured.
 
 - **Quantify the load:** relay-coil bank = N coils × ~70–90 mA hold, plus
   inrush, on top of the Pico + I²C0 draw. Size the 5 V supply for the
@@ -80,14 +161,14 @@ diodes (~1.6 V drop under load).
   can be simultaneously active; the 5 V rail must hold **≥ 4.75 V** (relay
   module min) with **every** coil pulling in and releasing — no faint-LED
   / stuck-contact channel. Meter the rail under coil load per
-  [hw-test-log REL.1 follow-up](../test/hw-test-log.md).
+  hw-test-log REL.1 follow-up.
 
 ### [ ] Fan drive can't hard-off — move the MOSFET into the fan's power return (was: "inverting gate stage")
 
 **Filed:** 2026-07-05 · **root cause corrected 2026-07-06** ·
-[2026-07-06 root-cause + fix](../notes/chat-log.md#2026-07-06--fan-hard-off-root-caused--mosfet-switches-the-pwm-pin-not-the-power) ·
-[2026-07-05 bench observation](../notes/chat-log.md#2026-07-05--bring-up-re-run--firmware-cleared-three-hardware-faults-isolated) ·
-[memory: project-fan-hardware-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_fan_hardware_revision.md)
+2026-07-06 root-cause + fix ·
+2026-07-05 bench observation ·
+memory: project-fan-hardware-revision
 
 Two bench runs (2026-07-05) showed fan speed tracks `100 − duty` and
 **duty 0 never fully stops the fan** — it creeps/windmills. The earlier
@@ -126,12 +207,15 @@ choice; the fix is to change it, not to patch firmware.)
   tach/PWM pins are ignored. A 4-wire fan behaves like a 2-wire fan whose
   speed follows the switched-power duty. `set_duty(0)` = ground open = fan
   **fully dead**; mid-duty = ~proportional speed; 100 % = full.
-- **No 25 kHz path (decided 2026-07-06).** Power is PWM'd directly by the
-  PCA9685 (≤ 1526 Hz), so fans buzz audibly at low duty — **accepted** for
-  a greenhouse. Run the fan channels at the PCA9685 max **1526 Hz** to push
-  the whine as high as possible. A dedicated 25 kHz fan controller (EMC2305)
-  was considered and **rejected** — silent PWM was its only benefit and it
-  isn't wanted here. PCA9685 stays as-is for both fans and the ch5 solenoid.
+- **~~No 25 kHz path (decided 2026-07-06)~~ — REOPENED 2026-07-28.** Power is
+  PWM'd directly by the PCA9685 (≤ 1526 Hz), so fans buzz audibly — the
+  buzz was **accepted** as tolerable for a greenhouse and the plan was to
+  run the channels at the **1526 Hz** ceiling. In service the noise turned
+  out to be the operator's main complaint, so the rejection of a 25 kHz
+  path is reopened — see
+  [Fans are audibly loud at any speed](#-fans-are-audibly-loud-at-any-speed--the-pca9685-cannot-reach-inaudible-pwm).
+  Firmware is meanwhile running the opposite trial (**60 Hz**, below the
+  whine band) rather than 1526 Hz.
 - **Ratings check (fans confirmed ≤ 0.5 A each, 2026-07-06):** the MOSFET
   and flyback now carry full motor current, not a signal. At 0.5 A the
   **AO3400A** (SOT-23, ~5.7 A pulsed) has ample margin — **no FET change**.
@@ -140,18 +224,21 @@ choice; the fix is to change it, not to patch firmware.)
   (e.g. SS34, 3 A / 40 V).
 - **Firmware follow-through (lands with the board):** flip
   `DEVICE_CONFIG["pca9685"]["invert"]` back to **`False`** (non-inverting
-  low-side switch), set `pca9685.freq_hz` to **1526** (minimise whine;
-  solenoid PWM-hold is unaffected by the higher frequency), and correct the
+  low-side switch) — **done**; ~~set `pca9685.freq_hz` to **1526**~~ —
+  **superseded 2026-07-28**, the frequency now runs the 60 Hz sub-audible
+  trial instead (see the reopened 25 kHz entry); and correct the
   "inverting gate stage" wording in the `pca9685` config comment
   ([config.py:290-295](../../config.py#L290-L295)). Keep the `invert` flag +
   validator + test — the solenoid stage may still use it.
 - **Acceptance on the new board:** on a 2/3/4-wire fan, `set_duty(0)` brings
   it to a **complete mechanical stop** (no creep); duty sweep 0→100 raises
   speed **monotonically** (no inversion, `pca9685.invert=False`); confirm the
-  1526 Hz whine is tolerable and the MOSFET + flyback run cool at 0.5 A.
+  MOSFET + flyback run cool at 0.5 A. The "whine is tolerable" half of this
+  acceptance is **withdrawn** — it is not, which is why the 25 kHz question
+  is reopened; noise is judged under FAN.Q, not here.
 - **Verification:** trimmed FAN.1 in `prototypes/next_rev_bringup.py`
   (single channel, hard-stop check) +
-  [hw-test-log "Fan power-path switch" checklist](../test/hw-test-log.md).
+  hw-test-log "Fan power-path switch" checklist.
 
 **2026-07-22 — netlist confirmation and the bench path.** Read out of
 [`Sheet_1_2026-06-09.net`](EasyEDA-Files/Sheet_1_2026-06-09.net) and the
@@ -196,13 +283,13 @@ Two consequences:
   current. This stage **inverts**, so it runs with `pca9685.invert = True`
   (i.e. today's setting) and idles fans full-on until firmware takes over —
   the safe direction for a tent. Verification per
-  [hw-test-log FAN.PP](../test/hw-test-log.md).
+  hw-test-log FAN.PP.
 
 ### [x] HPA mist-solenoid driver — PCA9685 ch5 + IRLZ44N, broken out as a plug-in 12 V valve connector
 
 **Filed:** 2026-05-31 ·
-[chat-log entry](../notes/chat-log.md#2026-05-31--hpa-mist-solenoid-pwm-breakout-connector) ·
-[memory: project-hpa-solenoid-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_hpa_solenoid_revision.md)
+chat-log entry ·
+memory: project-hpa-solenoid-revision
 
 Companion to the
 [Hydroponics monitoring entry](#--hydroponics-monitoring--2nd-ic-bus-ds18b20-phec-wet-system-relays).
@@ -272,7 +359,7 @@ entirely.
   (~40), `pull_in_ms` (~150), plus mist-cycle timing (`burst_ms`,
   `interval_s`) — each with a `validate_config()` row + a
   `tests/test_config.py` row per
-  [configurability.md](../../../.claude/rules/ecc/common/configurability.md).
+  configurability.md.
   Validator: `pca9685_ch` int 0–15 and **distinct from every fan
   `pca9685_ch`** (extend the duplicate-channel check at
   [config.py:559-592](../../config.py#L559-L592) that today only spans
@@ -285,13 +372,13 @@ entirely.
   hardware dead-man fallback is fitted (see the hydro entry).
 
 **Verification:** post-fab checklist in
-[hw-test-log "HPA mist-solenoid driver bring-up"](../test/hw-test-log.md).
+hw-test-log "HPA mist-solenoid driver bring-up".
 
 ### [x] Hydroponics monitoring — 2nd I²C bus, DS18B20, pH/EC, wet-system relays
 
 **Filed:** 2026-05-31 ·
-[chat-log entry](../notes/chat-log.md#2026-05-31--hydroponics-monitoring-expansion-dwc--hpa-aeroponics) ·
-[memory: project-hydro-automation-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_hydro_automation_revision.md)
+chat-log entry ·
+memory: project-hydro-automation-revision
 
 Future-proofs the board for an automated **DWC reservoir now** and
 **HPA aeroponics later**. Scope is deliberately small: closed-loop on
@@ -427,7 +514,7 @@ instead of silent between daily checks. Refines, does not reverse, the
   `alarm_on` = `"low"`/`"high"`/`"both"`, `debounce_ms`, internal
   `pull` fallback) with a `validate_config()` row + `tests/test_config.py`
   row per
-  [configurability.md](../../../.claude/rules/ecc/common/configurability.md);
+  configurability.md;
   new `lib/water_level_monitor.py` reads the debounced pin, raises the
   existing buzzer/LED alarm, and logs an `EventLogger` row on each edge.
   **Monitor-only — never drives a pump/solenoid.**
@@ -435,7 +522,7 @@ instead of silent between daily checks. Refines, does not reverse, the
   `ph_logger` (`i2c_bus: 1`, `i2c_address: 0x63`),
   `ec_logger` (`i2c_bus: 1`, `i2c_address: 0x64`), each with
   `validate_config()` rows + `tests/test_config.py` rows per
-  [configurability.md](../../../.claude/rules/ecc/common/configurability.md).
+  configurability.md.
 - New loggers `lib/water_temp_logger.py`, `lib/ph_logger.py`,
   `lib/ec_logger.py`; I²C1 + 1-Wire init in `hardware_factory`;
   CSV trees under `sensor_root` (`water_temp`, `ph`, `ec`).
@@ -444,12 +531,12 @@ instead of silent between daily checks. Refines, does not reverse, the
   no hardware dead-man fallback fitted.
 
 **Verification:** post-fab checklist in
-[hw-test-log "Hydroponics monitoring bring-up"](../test/hw-test-log.md).
+hw-test-log "Hydroponics monitoring bring-up".
 
 ### [x] MCP1416 gate driver for HE_MOSFET (IRLZ44N)
 
 **Filed:** 2026-05-23 ·
-[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
+chat-log entry
 
 - Current PCB drives IRLZ44N gate directly from Pico GP3 (3.3 V).
   At V_GS = 3.3 V, R_DS(on) is ~0.05–0.08 Ω (linear region, not
@@ -479,7 +566,7 @@ instead of silent between daily checks. Refines, does not reverse, the
 ### [x] Power input connectors → XT60 across all three rails
 
 **Filed:** 2026-05-23 ·
-[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
+chat-log entry
 
 - Current PCB mixes connectors on the three input rails (5 V Phoenix
   block, 12 V JST B2B-XH, 19.5 V XT60). The 12 V JST B2B-XH is rated
@@ -496,7 +583,7 @@ instead of silent between daily checks. Refines, does not reverse, the
 ### [x] 5 V VSYS bulk cap voltage rating upgrade
 
 **Filed:** 2026-05-23 ·
-[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
+chat-log entry
 
 - Earlier entry pinned the 5 V VSYS bulk cap as **1000 µF / 6.3 V**.
   At 5 V nominal that's **79 % voltage derating** — tight for
@@ -513,7 +600,7 @@ instead of silent between daily checks. Refines, does not reverse, the
 ### [x] F1 fuse — 10 A 5×20 mm slow-blow (parallel-heater ready)
 
 **Filed:** 2026-05-23 · supersedes earlier "5 A fast-blow" placeholder ·
-[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
+chat-log entry
 
 - Parallel-heater case (two 100 W / 24 V heaters at 19.6 V) draws
   6.8 A steady-state. Single-heater case draws 3.4 A. Fuse must
@@ -532,15 +619,16 @@ instead of silent between daily checks. Refines, does not reverse, the
 
 **Filed:** 2026-05-23 · updated 2026-05-24 (chose DIP-8 LM358N to use
 the part already in stock) ·
-[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review) ·
-[chat-log: DIP-8 footprint decision](../notes/chat-log.md#2026-05-24--lm358-footprint-switch-to-dip-8-socket) ·
-[memory: project-grow-light-opamp-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_grow_light_opamp_revision.md)
+chat-log entry ·
+chat-log: DIP-8 footprint decision ·
+memory: project-grow-light-opamp-revision
 
 - **Critical — current part is operating above absolute maximum.**
   MCP6002T-I/SN abs-max V_DD-V_SS = **7.0 V**; the schematic powers it
   from the **12 V rail** (pin 8 to 12 V net). Chip degrades silently
   and will fail; explains any flaky grow-light dim behaviour.
-- **Use the LM358N (DIP-8) already in stock** (10 pcs on hand per
+- **Use the LM358N (DIP-8) already in stock** (10 pcs on hand per the
+  private parts inventory,
   most recent order). V_CC max
   32 V, pin-compatible with the dual op-amp layout the MCP6002 used.
   Not rail-to-rail at the top, which is a feature here: at 12 V
@@ -556,17 +644,17 @@ the part already in stock) ·
 - PCB footprint change (SOIC-8 land pattern → DIP-8 socket) tracked
   under "MCP6002 → LM358N — DIP-8 socket footprint" in the PCB
   layout section.
-- Verify with [hw-test-log](../test/hw-test-log.md) post-fab: sweep
+- Verify with hw-test-log post-fab: sweep
   DAC 0 → 0xFFF, measure GL_DIM+ output, confirm monotonic + clean
   ramp.
 
 ### [~] Senseair S8 UART RX level protection — divider over-attenuates, re-open
 
 **Filed:** 2026-05-23 · **Re-opened:** 2026-07-03 ·
-[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review) ·
-[2026-07-03 bench finding](../notes/chat-log.md#2026-07-03--next-rev-bench-run-findings) ·
-[memory: project-co2-uart-protection](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_co2_uart_protection.md) ·
-[memory: project-s8-uart-divider-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_s8_uart_divider_revision.md)
+chat-log entry ·
+2026-07-03 bench finding ·
+memory: project-co2-uart-protection ·
+memory: project-s8-uart-divider-revision
 
 > **2026-07-03 bench re-open (load-bearing):** measured Pico GP17 idle =
 > **1.9 V**, below the RP2040 V_IH (~0.7 × 3.3 = **2.31 V**) — the S8 idle-high
@@ -579,6 +667,22 @@ the part already in stock) ·
 > thin. Re-test: hw-test-log **S8.2** (static bench, USB-detached) + **S8.3**
 > (24 h retry soak). The 5 V-TTL assumption below is what this finding
 > contradicts.
+
+> **2026-07-31 field evidence (severity upgrade):** the 2026-07-27 → 07-31 SD
+> run puts numbers on "the margin is thin" —
+> chat-log.
+> **7427 read failures** over 4.5 days (99.8 % of every WARN line the system
+> emitted), at **87.6 / 43.7 / 77.6 / 71.5 / 100 %** failure rate per day, then
+> total silence from **2026-07-30 15:41** onward (1966 consecutive failures,
+> 17.5 h). Worse than the dropouts: **4.3 % of the reads that did parse are
+> physically impossible** (0, 2, 5, 48 ppm; 8320, 8903, 9470 ppm) — framing
+> errors, exactly what an under-threshold V_IH produces — and they reached the
+> actuators unfiltered. With temp and RH both within 10 of ideal (n = 1775) the
+> exhaust command averaged **50.3 at `dev_c > 55` versus 3.6 at `dev_c ≤ 55`**,
+> so the fan was mostly being driven by UART noise. This is no longer "works
+> with thin margin": the link is unusable as-is. Do not close this entry on a
+> firmware plausibility filter alone — the filter suppresses the symptom, the
+> divider is the cause.
 
 - Senseair S8 UART TXD is **5 V TTL** referenced to V+. Pico GPIO
   abs-max is **3.3 V + 0.5 V = 3.8 V**. Current R11 = 100 Ω in series
@@ -596,8 +700,8 @@ the part already in stock) ·
 ### [x] Bulk capacitance on 12 V and 19.5 V rails
 
 **Filed:** 2026-05-23 ·
-[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review) ·
-[memory: project-power-input-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_power_input_revision.md)
+chat-log entry ·
+memory: project-power-input-revision
 
 - Current PCB has **only 100 nF ceramics** on each rail — no
   electrolytics. Heater switching (3.4 A on the 19.5 V rail) and fan
@@ -618,8 +722,8 @@ the part already in stock) ·
 ### [x] TVS clamp diodes on all three power inputs
 
 **Filed:** 2026-05-23 ·
-[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review) ·
-[memory: project-power-input-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_power_input_revision.md)
+chat-log entry ·
+memory: project-power-input-revision
 
 - Three TVS diodes, same SMA-family footprint, three values:
   - **5 V input:** SMAJ5.0CA (working voltage 5 V, clamp ~9 V)
@@ -634,9 +738,9 @@ the part already in stock) ·
 
 **Filed:** 2026-05-23 · updated 2026-05-24 (topology corrected: drop
 GND-return diodes) ·
-[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review) ·
-[chat-log: topology correction](../notes/chat-log.md#2026-05-24--input-diode-topology-correction-drop-gnd-return-diodes) ·
-[memory: project-power-input-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_power_input_revision.md)
+chat-log entry ·
+chat-log: topology correction ·
+memory: project-power-input-revision
 
 - **Topology correction (2026-05-24):** the current PCB has **one
   1N4002 on each line of every input** — D1 on +5 V / D2 on 5 V GND
@@ -683,7 +787,7 @@ GND-return diodes) ·
   SS14).
 - **Post-fab cleanup:** revert the interim XL4015 buck setpoint from
   6.0 V back to 5.0 V once the swap is verified per
-  [hw-test-log "VSYS rail validation"](../test/hw-test-log.md).
+  hw-test-log "VSYS rail validation".
   Footprint-constrained fallback parts if MBR20100CT / MBRD1045
   cannot be sourced: SS14 (SMA, 1 A), 1N5817 (DO-41, 1 A), MBRS340
   (SMA, 3 A) — V_f benefit holds in all cases.
@@ -691,7 +795,7 @@ GND-return diodes) ·
 ### [x] F1 fuse position — upstream of D5
 
 **Filed:** 2026-05-23 ·
-[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
+chat-log entry
 
 - Current netlist order is **19V_IN → D5 → F1 → HE_CON**. A shorted
   D5 dumps all 19.5 V before F1 can react.
@@ -704,7 +808,7 @@ GND-return diodes) ·
 ### [x] Heater channel count — single-MOSFET, parallel heaters, PWM-later
 
 **Filed:** 2026-05-23 ·
-[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
+chat-log entry
 
 - **Decision: single MOSFET channel (option a).** Two 100 W / 24 V
   heaters wired in parallel on the one HE_MOSFET output, controlled
@@ -735,7 +839,7 @@ GND-return diodes) ·
 ### [x] R3 corrected to 10 kΩ pull-down on GP14 buzzer line
 
 **Filed:** 2026-05-23 ·
-[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
+chat-log entry
 
 - Current BOM lists R3 as **"10"** (10 Ω) — too low for a GPIO
   pull-down. If GP14 ever drives high (buzzer PWM start, glitch), 10 Ω
@@ -749,8 +853,8 @@ GND-return diodes) ·
 ### [x] I²C pull-ups R1/R2 → 2.2 kΩ for 400 kHz fast-mode rise time
 
 **Filed:** 2026-05-23 ·
-[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review) ·
-[memory: project-i2c-bus-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_i2c_bus_revision.md)
+chat-log entry ·
+memory: project-i2c-bus-revision
 
 - `config.py.system.i2c_freq = 400000` (fast mode). Bus carries
   Pico + DS3231 RTC + SSD1306 + MCP4725 DAC + SHT31 + (future)
@@ -767,18 +871,18 @@ GND-return diodes) ·
   A shared-bus `[Errno 110] ETIMEDOUT` on the OLED 1 KB framebuffer render
   watchdog-looped the board for ~9.5 h (short transfers passed, the long
   render didn't — exactly the marginal-rise-time signature above). See
-  [chat-log 2026-07-20](../notes/chat-log.md#2026-07-20--ic-etimedout-bootloop--root-cause--firmware-hardening).
+  chat-log 2026-07-20.
   Firmware now bounds + recovers the bus (`lib/i2c_guard.py`) and dropped it
   to **100 kHz as an interim mitigation** (`config.py system.i2c_freq`), but
   this 2.2 kΩ rework is the real fix and is **required before restoring
   400 kHz**. Acceptance:
-  [hw-test-log I2C.1](../test/hw-test-log.md#i2c1--the-board-survives-a-bad-bus-instead-of-bootlooping).
+  hw-test-log I2C.1.
 
 ### [x] Brownout supervisor on Pico RUN line
 
 **Filed:** 2026-05-23 · updated 2026-05-26 (part-number suffix + button-conflict resistor) ·
-[chat-log: original entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review) ·
-[chat-log: 2026-05-26 wiring clarification](../notes/chat-log.md#2026-05-26--brownout-supervisor-part--wiring-clarification)
+chat-log: original entry ·
+chat-log: 2026-05-26 wiring clarification
 
 - RP2040 internal POR threshold is ~2.0 V. A slow rail droop that
   doesn't cross 2.0 V can latch the MCU in undefined state — won't
@@ -811,7 +915,7 @@ GND-return diodes) ·
 ### [x] VBUS + DEBUG_CON 5 V backfeed protection
 
 **Filed:** 2026-05-23 ·
-[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
+chat-log entry
 
 - **INT_CON-4 = VBUS** (straight off Pico USB connector). Anything
   plugged into INT_CON can back-feed the USB host or sink VBUS.
@@ -830,9 +934,9 @@ GND-return diodes) ·
 ### [x] Power-good LEDs — ~0.2 mA per rail to match the Pico's onboard LED
 
 **Filed:** 2026-05-23 ·
-[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
+chat-log entry
 **Revised:** 2026-06-30 (target 2 mA → ~0.7 mA → bench-set ~0.2 mA) ·
-[chat-log entry](../notes/chat-log.md#2026-06-30--power-good-led-brightness-bench-set-to-02-ma)
+chat-log entry
 
 - One **0805 emerald-green LED** (KENTO KT-0805G, 525 nm, Vf bin
   2.6–3.1 V; ~2.6 V at the ~0.2 mA operating point) + series resistor on
@@ -868,7 +972,7 @@ GND-return diodes) ·
 ### [x] R8 stays — fix the firmware comment, not the schematic
 
 **Filed:** 2026-05-23 ·
-[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
+chat-log entry
 
 - `config.py:36-40` claims R8 was "removed" after the 2026-05-16/18
   SD bit-error incident. The current PCB still has R8 = 33 Ω on the
@@ -885,7 +989,7 @@ GND-return diodes) ·
 ### [x] Button connector rework — menu_btn debounced, reset_btn direct
 
 **Filed:** 2026-05-22 ·
-[chat-log entry](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes)
+chat-log entry
 
 - Combine `reset_btn` and `menu_btn` into a **single 3-pin connector,
   two-split layout** (one shared ground, two signal pins).
@@ -907,7 +1011,7 @@ GND-return diodes) ·
 ### [x] Relay connector cleanup — pull-ups, GND fix, mains-rated header
 
 **Filed:** 2026-05-22 ·
-[chat-log entry](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes)
+chat-log entry
 
 - Add a **10 kΩ pull-up on each relay IN line** to the relay module's
   VCC, so inputs sit at the inactive (HIGH) level during Pico boot
@@ -925,7 +1029,7 @@ GND-return diodes) ·
 ### [x] I²C / RJ12 connector — swap DHT21 port to RJ12 + add second outward bus
 
 **Filed:** 2026-05-22 ·
-[chat-log entry](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes)
+chat-log entry
 
 - Replace the existing **DHT21 connector with an I²C-friendly RJ12
   connector** so the SHT31 plugs in directly (current rev still has
@@ -944,19 +1048,19 @@ GND-return diodes) ·
 > is instead resolved by replacing the dead NE555 with a TLC555-class CMOS
 > sensor, keeping the **analog GP28/ADC2 path** — VCC → 3V3 (pin 36), AOUT
 > → GP28, **no divider** (reverts to the
-> [2026-05-15 bench decision](../notes/chat-log.md#2026-05-15--capacitive-soil-sensor-unresponsive--ne555-unit-replace)).
+> 2026-05-15 bench decision).
 > Hardware-only; **no firmware change** beyond a bench recalibration of
 > `adc_dry_raw`/`adc_wet_raw`. GP28/ADC2 is therefore **not** freed. See the
-> [2026-06-29 chat-log reversal](../notes/chat-log.md#decision--soil-stemma-ic-swap-deferred--revert-to-tlc555-analog-on-gp28)
-> and [docs/notes/sw-next-rev-migration.md](../notes/sw-next-rev-migration.md)
+> 2026-06-29 chat-log reversal
+> and the SW next-rev migration plan (internal notes)
 > §B1. Everything below is retained as the superseded STEMMA plan.
 
 **Filed:** 2026-05-22 · superseded 2026-05-26 (analog probe + divider
 plan dropped; switch to I²C STEMMA after the 2026-05-15 NE555 dead-end) ·
-[chat-log: original analog plan](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes) ·
-[chat-log: 2026-05-15 NE555 sensor dead](../notes/chat-log.md#2026-05-15--capacitive-soil-sensor-unresponsive--ne555-unit-replace) ·
-[chat-log: 2026-05-26 STEMMA swap](../notes/chat-log.md#2026-05-26--soil-sensor-swap--adafruit-stemma-4026-i2c) ·
-[memory: project-soil-sensor-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_soil_sensor_revision.md)
+chat-log: original analog plan ·
+chat-log: 2026-05-15 NE555 sensor dead ·
+chat-log: 2026-05-26 STEMMA swap ·
+memory: project-soil-sensor-revision
 
 **Chosen part:** [Adafruit STEMMA Soil Sensor #4026](https://www.adafruit.com/product/4026)
 — I²C capacitive moisture + temperature sensor, onboard Seesaw
@@ -996,7 +1100,7 @@ earlier 10 kΩ + 15 kΩ ADC divider entirely.
   on the Adafruit library — Pi Greenhouse is MicroPython, not
   CircuitPython.
 - **Verification:** post-fab eyes-on checklist in
-  [hw-test-log "Adafruit STEMMA #4026 soil sensor bring-up"](../test/hw-test-log.md).
+  hw-test-log "Adafruit STEMMA #4026 soil sensor bring-up".
   Address on bus, dry/wet sweep, probe temperature within 5 °C of
   SHT31 at room temp.
 
@@ -1012,14 +1116,14 @@ earlier 10 kΩ + 15 kΩ ADC divider entirely.
 - `validate_config()` and
   [tests/test_config.py](../../tests/test_config.py) rows move in
   lockstep per
-  [configurability.md](../../../.claude/rules/ecc/common/configurability.md).
+  configurability.md.
 - `main.py` drops the ADC construction and passes the existing
   `i2c0` instance to `SoilLogger`.
 
 ### [x] Case fan voltage selector + ambient fan Pico control
 
 **Filed:** 2026-05-22 ·
-[chat-log entry](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes)
+chat-log entry
 
 - Add a **second 2-pole voltage selector switch** for the case fan,
   mirroring the existing ambient fan voltage switch (so each fan can
@@ -1034,10 +1138,10 @@ earlier 10 kΩ + 15 kΩ ADC divider entirely.
 ### [x] SD card module → **Adafruit 4682** (3 V Micro SD SPI/SDIO Bypass)
 
 **Filed:** 2026-05-22 · updated 2026-05-24 (full module swap delta) ·
-[chat-log: original footprint note](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes) ·
-[chat-log: SD-MISO pull-up correction](../notes/chat-log.md#2026-05-24--sd-miso-pull-up-correction-supersedes-the-cs-draft) ·
-[chat-log: module switch + 74LVC125 correction](../notes/chat-log.md#2026-05-24--sd-card-module-switch--azdelivery--adafruit-4682) ·
-[memory: project-sd-card-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_sd_card_revision.md)
+chat-log: original footprint note ·
+chat-log: SD-MISO pull-up correction ·
+chat-log: module switch + 74LVC125 correction ·
+memory: project-sd-card-revision
 
 **Chosen part:** [Adafruit 4682 "Micro SD SPI or SDIO Card Breakout
 Board — 3V ONLY!"](https://www.adafruit.com/product/4682) — the 3 V
@@ -1082,7 +1186,7 @@ section.
   because there's no level shifter — the prior version of this entry
   described a 74LVC125 + "card-side" pull-ups, which is the
   **Adafruit 254**, not the 4682. Corrected
-  [in the 2026-05-24 chat-log](../notes/chat-log.md#2026-05-24--sd-card-module-switch--azdelivery--adafruit-4682).
+  in the 2026-05-24 chat-log.
 - **Add an external 10 kΩ 0603 from GP12 (MISO) to 3V3.** Not on the
   current PCB. Reason: MISO is tri-stated by the card outside response
   windows — CS high, no card inserted, or during the 80+ dummy clocks
@@ -1111,7 +1215,7 @@ section.
   module.
 - New `DEVICE_CONFIG["pins"]["sd_detect"]` entry, matching
   `validate_config()` row, and a `tests/test_config.py` row per
-  [configurability.md](../../../.claude/rules/ecc/common/configurability.md).
+  configurability.md.
   `HardwareFactory` and the
   [SD recovery loop](../../main.py) consume it to short-circuit
   retries when the card is absent.
@@ -1148,7 +1252,7 @@ section.
   new PCB lands and DET polarity is confirmed on the bench — not
   part of the hardware change itself. The refactor ships as its
   own commit per
-  [commit-granularity.md](../../../.claude/rules/ecc/common/commit-granularity.md),
+  commit-granularity.md,
   separate from the `sd_detect` config + factory wiring commits.
 
 **Firmware / config implications (next-rev firmware sweep):**
@@ -1165,24 +1269,24 @@ section.
   are conservative. Don't pre-tune speculatively — measure first.
 - The `spi.baudrate = 10 MHz` cap (versus the RP2040 ceiling of
   ~40 MHz) is from the
-  [2026-05-16 R8 incident](../notes/chat-log.md#2026-05-16-18--sd-bit-error-incident) — the module swap does not unblock raising it; that
+  2026-05-16 R8 incident — the module swap does not unblock raising it; that
   would need a separate signal-integrity pass on the rebuilt board.
 - `lib/sdcard.py` driver is unchanged — SPI-mode SD protocol is
   identical between breakouts.
 
 **Verification:** post-fab eyes-on checklist in
-[hw-test-log.md "SD module swap"](../test/hw-test-log.md).
+hw-test-log.md "SD module swap".
 
-**Inventory:** see
-[inventory.md → SD card storage](inventory.md) for the new line
+**Inventory:** see the private parts inventory
+for the new line
 item (Adafruit 4682 to order; AZDelivery module not currently
 catalogued).
 
 ### [x] Move fans from 2× relays to PCA9685 + IRLZ44N MOSFETs
 
 **Filed:** 2026-05-16 · updated 2026-05-22 ·
-[chat-log: 2026-05-22 planning](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes) ·
-[memory: project-fan-hardware-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_fan_hardware_revision.md)
+chat-log: 2026-05-22 planning ·
+memory: project-fan-hardware-revision
 
 - Replace 2-relay fan control with a **PCA9685** 16-ch PWM driver
   on I2C0 (shared with SHT31), each channel driving an **IRLZ44N**
@@ -1218,7 +1322,7 @@ catalogued).
 ### [ ] HPA mist-solenoid connector + ch5 MOSFET stage placement
 
 **Filed:** 2026-05-31 ·
-[chat-log entry](../notes/chat-log.md#2026-05-31--hpa-mist-solenoid-pwm-breakout-connector)
+chat-log entry
 
 Layout side of the
 [HPA mist-solenoid driver Schematic entry](#--hpa-mist-solenoid-driver--pca9685-ch5--irlz44n-broken-out-as-a-plug-in-12-v-valve-connector).
@@ -1240,7 +1344,7 @@ Layout side of the
 ### [ ] Hydroponics I²C1 + 1-Wire connectors and pull-up placement
 
 **Filed:** 2026-05-31 ·
-[chat-log entry](../notes/chat-log.md#2026-05-31--hydroponics-monitoring-expansion-dwc--hpa-aeroponics)
+chat-log entry
 
 Layout side of the
 [Hydroponics monitoring Schematic entry](#--hydroponics-monitoring--2nd-ic-bus-ds18b20-phec-wet-system-relays).
@@ -1271,7 +1375,7 @@ Layout side of the
 ### [ ] MCP6002 → LM358N — DIP-8 socket footprint
 
 **Filed:** 2026-05-24 ·
-[chat-log: DIP-8 footprint decision](../notes/chat-log.md#2026-05-24--lm358-footprint-switch-to-dip-8-socket)
+chat-log: DIP-8 footprint decision
 
 - Swap the existing **SOIC-8 land pattern** (was for MCP6002T-I/SN)
   for a **DIP-8 socket** footprint (2.54 mm pitch, 7.62 mm row
@@ -1285,7 +1389,7 @@ Layout side of the
 ### [ ] Power trace widths and default clearance
 
 **Filed:** 2026-05-23 · split from earlier combined "PCB stackup" entry ·
-[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
+chat-log entry
 
 - **Heater current path (19.5 V rail, F1 → D5 → bulk cap → HE_MOSFET
   drain → HE_CON):** **3 mm minimum trace width** on 2 oz copper
@@ -1306,8 +1410,8 @@ Layout side of the
 ### [ ] Star-ground topology for heater current return
 
 **Filed:** 2026-05-23 ·
-[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review) ·
-[memory: project-power-input-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_power_input_revision.md)
+chat-log entry ·
+memory: project-power-input-revision
 
 - Common GND plane stays, but **route HE_MOSFET source pad with a
   wide, short trace directly to the 19V_IN GND pin.** Logic ground
@@ -1322,8 +1426,8 @@ Layout side of the
 ### [ ] TO-220 thermal management — copper pour + clip-on heatsink
 
 **Filed:** 2026-05-23 ·
-[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review) ·
-[memory: project-thermal-management](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_thermal_management.md)
+chat-log entry ·
+memory: project-thermal-management
 
 - Apply to **every TO-220 power part** carrying significant load.
   Current scope: HE_MOSFET (IRLZ44N, heater). Future scope: any
@@ -1343,7 +1447,7 @@ Layout side of the
 ### [ ] Test-point row near input area
 
 **Filed:** 2026-05-23 ·
-[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
+chat-log entry
 
 - **Eight labelled THT pads** in a 2.54 mm-pitch row near the input
   regulators: `3V3 / 5V / 12V / 19.5V / GND / GND / SDA / SCL`.
@@ -1357,8 +1461,8 @@ Layout side of the
 ### [ ] I²C address map on silkscreen
 
 **Filed:** 2026-05-23 ·
-[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review) ·
-[memory: project-i2c-bus-revision](../../../.claude/projects/l--projects-Pi-Greenhouse-Git-codebase/memory/project_i2c_bus_revision.md)
+chat-log entry ·
+memory: project-i2c-bus-revision
 
 - Print the 7-bit hex address next to each I²C device's footprint.
   **I²C0** (GP0/GP1):
@@ -1385,7 +1489,7 @@ Layout side of the
 ### [ ] Pico V1 footprint label correction
 
 **Filed:** 2026-05-23 ·
-[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
+chat-log entry
 
 - BOM row 37 lists footprint as `RPI-PICO-V2 COPY`. The board uses
   the **original Pico (V1, RP2040)** — V2 was simply the
@@ -1396,7 +1500,7 @@ Layout side of the
 ### [ ] SD card module — Adafruit 4682 header footprint + mounting holes
 
 **Filed:** 2026-05-22 · updated 2026-05-24 ·
-[chat-log: module switch](../notes/chat-log.md#2026-05-24--sd-card-module-switch--azdelivery--adafruit-4682)
+chat-log: module switch
 
 - Replace the current AZDelivery-shaped land pattern with a header
   matching the **Adafruit 4682** pinout. Single-row, **7-pin in SPI
@@ -1411,7 +1515,7 @@ Layout side of the
 ### [ ] Relay connector — orientation flip + mains-rated spacing
 
 **Filed:** 2026-05-22 ·
-[chat-log entry](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes)
+chat-log entry
 
 - **Flip the relay connector orientation** — current orientation is
   wrong for the harness.
@@ -1426,7 +1530,7 @@ Layout side of the
 ### [ ] External power connectors and silkscreen polish
 
 **Filed:** 2026-05-22 ·
-[chat-log entry](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes)
+chat-log entry
 
 - **XT60 board-edge clearance:** the original 19.5 V XT60 body
   overhangs / doesn't seat because the board edge is too close. Now
@@ -1446,7 +1550,7 @@ Layout side of the
 ### [ ] Board size reduction, footprint clearances, enclosure simplification
 
 **Filed:** 2026-05-22 ·
-[chat-log entry](../notes/chat-log.md#2026-05-22--next-revision-planning-from-bench-notes)
+chat-log entry
 
 - Shrink overall board size — current revision is larger than the
   components warrant.
@@ -1465,7 +1569,7 @@ Layout side of the
 ### [ ] PCB fab order — 2 oz copper outer layers
 
 **Filed:** 2026-05-23 · split from earlier combined "PCB stackup" entry ·
-[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
+chat-log entry
 
 - **Fab order: 2 oz copper on both outer layers** (up from default
   1 oz). Roughly doubles current-carrying capacity per mm of trace
@@ -1492,7 +1596,7 @@ Layout side of the
 ### [ ] Hydroponics wet-zone wiring — isolation, RCD, drip loops
 
 **Filed:** 2026-05-31 ·
-[chat-log entry](../notes/chat-log.md#2026-05-31--hydroponics-monitoring-expansion-dwc--hpa-aeroponics)
+chat-log entry
 
 Harness side of the
 [Hydroponics monitoring Schematic entry](#--hydroponics-monitoring--2nd-ic-bus-ds18b20-phec-wet-system-relays).
@@ -1528,7 +1632,7 @@ pumps/heater in/near conductive water).
 ### [ ] Sensor cable & external connector moisture protection
 
 **Filed:** 2026-05-23 ·
-[chat-log entry](../notes/chat-log.md#2026-05-23--easyeda-files-design-review)
+chat-log entry
 
 - The PCB and enclosure sit **outside** the greenhouse — no
   conformal coat needed on the board.

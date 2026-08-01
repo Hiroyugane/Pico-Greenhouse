@@ -17,7 +17,10 @@
 
 import uasyncio as asyncio
 
-from lib.led_button import LED
+try:
+    from lib.led_button import LED
+except ImportError:  # frozen into the firmware as a top-level module
+    from led_button import LED
 
 # SD subsystem states (tri-state, set via set_sd_state()). With the
 # Adafruit 4682 card-detect line wired (next-rev PCB), the recovery loop

@@ -74,6 +74,12 @@ _SURFACE_PARAM_NAMES = tuple(p[0] for p in _SURFACE_PARAMS)
 # Deviation dimensions and the ordered regulator (command-vector) names. The
 # arbiter's target vector T[] is indexed by _REG_NAMES order — also load-bearing.
 _REG_DIMENSIONS = ("temp", "humidity", "co2")
+# Escalation CAUSES: one per dimension per direction, in the order the arbiter
+# bit-indexes them (dim_index * 2, +1 for the low side). These name which
+# deviation direction fired an emergency/latch, so a regulator can respond
+# differently to "too hot" than to "too wet" — forcing the heater off is
+# correct for the first and actively harmful for the second.
+_REG_CAUSES = tuple("{}_{}".format(d, side) for d in _REG_DIMENSIONS for side in ("high", "low"))
 _REG_NAMES = (
     "heater",
     "heater_follower",
@@ -312,6 +318,19 @@ DEVICE_CONFIG = {
     # i2c_address: A5..A0 strap pins on the PCA9685 select 0x40..0x7F;
     # 0x40 is the default with all straps tied LOW.
     # freq_hz: shared across all 16 channels per datasheet, 24..1526 Hz.
+    # Set to 60 Hz on 2026-07-28 as an audible-noise trial, SUPERSEDING the
+    # 2026-07-06 "run at the 1526 Hz ceiling" plan in
+    # docs/hardware/next-revision.md. Since the fan MOSFET moved into the
+    # motor's ground return, this frequency is the chopping rate of the fan's
+    # own supply current, so the motor radiates a tone at exactly this pitch.
+    # The PCA9685 is an LED driver and cannot reach the ~25 kHz that makes fan
+    # PWM inaudible, so the only choice is WHICH audible tone: 1000-1526 Hz
+    # sits near the ear's most sensitive band (a whine), while 60 Hz drops
+    # below it (a low drone). 60 Hz costs torque smoothness — at low duty the
+    # rotor coasts up to ~16 ms between pulses, so the minimum duty at which a
+    # fan STARTS from rest can rise. The regulation fan floors were
+    # characterised at 1000 Hz and must be re-checked here (hw-test-log
+    # FAN.Q). Revert to 1000 if a fan will not start at its configured floor.
     # invert: the next-rev fan/solenoid MOSFET gate stage is inverting —
     # bench (2026-07-05) showed a PWM ramp-DOWN spun the fans UP and duty 0
     # never fully stopped them, i.e. fan speed tracks (100 - duty). True
@@ -321,7 +340,7 @@ DEVICE_CONFIG = {
     "pca9685": {
         "enabled": True,
         "i2c_address": 0x40,
-        "freq_hz": 1000,
+        "freq_hz": 60,
         "invert": False,
     },
     # Soil Moisture Logger Configuration (GP28 / ADC2, single-probe)
@@ -362,6 +381,13 @@ DEVICE_CONFIG = {
     # The override_ppm thresholds drive the logger's is_override_active()
     # advisory flag (shown on the OLED CO2 page); actual venting is the
     # RegulationEngine's job via the CO2 deviation dimension.
+    # A 4.5-day field run (2026-07-27..31) logged 7427 read failures — 99.8 % of
+    # every warning the system emitted — and, worse, 4.3 % of the readings that
+    # DID parse were physically impossible (0, 2, 5, 48 ppm; 8320, 8903, 9470)
+    # and were fed straight to the actuators. Isolated on ticks where temp and
+    # RH were both within 10 of ideal, the exhaust averaged 50.3 when the CO2
+    # term was active against 3.6 when it was not: the fan was mostly being
+    # driven by UART framing errors. See the internal chat-log 2026-07-31.
     "co2_logger": {
         "interval_s": 30,  # Poll cadence (seconds)
         "warmup_s": 30,  # Sensor warm-up window where read failures don't escalate
@@ -369,6 +395,28 @@ DEVICE_CONFIG = {
         "override_ppm_on": 2500,  # Trip threshold (ppm)
         "override_ppm_off": 2200,  # Release threshold (ppm), must be < on
         "sensor_type": "co2",  # Folder + filename prefix under paths.sensor_root
+        # Frame integrity. The reply is Modbus RTU (FE 44 02 hi lo crc_lo
+        # crc_hi), so the header and CRC16 reject a misaligned or corrupted
+        # frame DETERMINISTICALLY — which a range check cannot, because a
+        # framing error is free to land on a value inside any plausible window.
+        # This is the primary filter; the window below is the backstop for a
+        # frame that is structurally valid but absurd.
+        "verify_checksum": True,
+        # Plausibility window (ppm), applied after the checksum. 300 is below
+        # outdoor air (~420) so it only ever catches a broken reading, not a
+        # well-ventilated tent. NOTE the ceiling is a FRUITING figure: the
+        # colonization phase legitimately runs several thousand ppm, so raise
+        # this before automating that phase or healthy readings will be
+        # discarded as implausible.
+        "plausible_min_ppm": 300,
+        "plausible_max_ppm": 5000,
+        # Age (seconds) past which the cached reading stops being offered to the
+        # regulation engine. Without this the engine keeps regulating on the
+        # last good value forever: the sensor died at 15:41 on 2026-07-30 and
+        # last_ppm was never invalidated — the only reason the deviation read
+        # neutral afterwards is that an unrelated reboot cleared the cache. 0
+        # disables the timeout.
+        "stale_after_s": 300,
     },
     # Grow light schedule + dimming live under regulation.regulators.growlight
     # (tod-driven, MCP4725 via adapter dac_i2c_address/dac_max_pct).
@@ -424,7 +472,7 @@ DEVICE_CONFIG = {
         # every rotation is now an atomic os.rename (O(1)), so the active log
         # stays tiny and rotation never blocks the async watchdog feed. (The old
         # 1 MB cap let system.log grow for days, then the rotation copy of a ~1 MB
-        # file starved the 8 s WDT -> bootloop; see docs/notes/chat-log 2026-07-20.)
+        # file starved the 8 s WDT -> bootloop; see the internal chat-log 2026-07-20.)
         "max_size": 131072,  # 128 KB — max active-log size (bytes) before rotation
         "info_flush_threshold": 5,  # Flush after N info-level entries buffered
         "warn_flush_threshold": 1,  # Flush after N warning-level entries (1=immediate, like ERROR)
@@ -456,8 +504,8 @@ DEVICE_CONFIG = {
     # 2026-07-19 build, leaving no headroom for the I2C error path. Turn on
     # explicitly for a soak run once heap has margin.
     "diagnostics": {
-        "mem_trend_log": False,
-        "metrics_log": False,
+        "mem_trend_log": True,
+        "metrics_log": True,
     },
     # Memory management (MicroPython gc tuning)
     #
@@ -615,6 +663,27 @@ DEVICE_CONFIG = {
         "verify_max_retries": 3,  # Per-file stat/hash retry count on SD glitch during verify
         "verify_retry_delay_ms": 200,  # Delay between verify retries (ms)
         "allowed_paths": ["main.py", "config.py", "config.mpy", "lib/"],  # Whitelist; anything outside fails verify
+        # Refuse payloads whose manifest declares an "mpy_abi" that the running
+        # firmware cannot import. A .mpy file is only loadable by the bytecode
+        # ABI its mpy-cross targeted; a mismatched payload passes SHA-256
+        # (integrity, not compatibility), applies, resets, and then fails every
+        # import on the next boot. With this True the mismatch is a logged
+        # verify_fail and live code is never touched. Manifests with no
+        # "mpy_abi" key (raw-.py payloads, and every payload built before this
+        # existed) are unaffected — they recompile on-device. Set False only to
+        # force a payload through when you know the ABI stamp is wrong.
+        "enforce_mpy_abi": True,
+        # After a successful apply, delete files under the allowed_paths roots
+        # that this payload did not ship. Without it flash is strictly additive:
+        # a lib/<mod>.mpy left over from a pre-freeze deploy keeps shadowing its
+        # frozen twin forever (imports resolve lib-first), so the freeze buys
+        # nothing for that module and nothing warns you. The sweep only ever
+        # deletes inside allowed_paths, only .py/.mpy, and only when the frozen
+        # fw_info.FROZEN_MODULES proves the firmware carries a replacement —
+        # except for same-stem twins of a shipped file (config.py next to a
+        # shipped config.mpy), which are safe to drop regardless. Set False to
+        # keep the pre-2026-07-28 additive behaviour.
+        "prune_stale": True,
         # Legacy update_dir locations checked when the canonical update_dir
         # holds no manifest. Lets payloads dropped at the pre-2026-05-15
         # path (/sd/update) still apply without re-copying. Empty the list
@@ -685,6 +754,31 @@ DEVICE_CONFIG = {
             "full_delta_rh": 10.0,
             "min_factor_rh": 0.4,
         },
+        # Fresh-air exchange fallback, for when the CO2 reading is unavailable.
+        #
+        # A fruiting chamber needs air exchange whether or not the sensor works,
+        # and on this hardware the sensor is GUARANTEED to be blind exactly when
+        # the tent is running correctly: the S8 is specified 0-95 %RH
+        # non-condensing, and the 2026-07-27..31 logs put its failure rate at
+        # 25.9 % below 82 %RH, 67 % at 95-98 %, and 100 % above 98 % (n=205).
+        # It went permanently silent within 90 minutes of the tent saturating.
+        #
+        # With no reading the normalizer neutralises the CO2 dimension, which is
+        # correct and defensive but leaves NO driver for air exchange at all —
+        # the additive CO2 term is the only path from CO2 to an actuator. This
+        # block replaces it with a timed floor on the CO2-carrying regulators
+        # (exhaust + circulation) so the chamber still breathes on a schedule.
+        #
+        # The window is derived from wall-clock minutes, not a tick counter, so
+        # it is deterministic across reboots. command must clear the exhaust
+        # fan's real start-from-rest duty or the guarantee is nominal only —
+        # hw-test CO2.2 measures that threshold.
+        "fresh_air_exchange": {
+            "enabled": True,
+            "interval_min": 30,  # start a window every N minutes
+            "duration_min": 5,  # hold the floor for this long
+            "command": 60.0,  # floor applied to the CO2-carrying regulators
+        },
         # Escalation gating — which deviation DIRECTIONS may escalate to the
         # forced emergency / latch vectors.
         #
@@ -694,7 +788,7 @@ DEVICE_CONFIG = {
         # system into the safe-state vector on the first tick — with the very
         # actuators that would fix it (humidifier, heater) forced off, so the
         # severity could never fall back under release_max. Deadlock; see
-        # docs/notes/chat-log.md 2026-07-21.
+        # the internal chat-log 2026-07-21.
         #
         # Only the hazardous HIGH side escalates: too hot cooks the culture and
         # too wet invites bacterial blotch, and both run away without
@@ -742,16 +836,51 @@ DEVICE_CONFIG = {
             # severity where a fruiting chamber genuinely is in trouble; at_0 =
             # 0 means low CO2 never registers as a fault, which is correct —
             # there is no such thing as too much fresh air for a fruiting body.
+            #
+            # Night runs deliberately cooler than day: ideal temp drops 3 C
+            # (24 -> 21) rather than tracking day, because the dark phase is
+            # where the cool/humid shift that favours pinning is cheapest to
+            # hold — no lamp load fighting the cooler.
+            #
+            # HUMIDITY at_100 IS DELIBERATELY UNREACHABLE (102 %RH), and that is
+            # the point of the anchor rather than an off-by-something.
+            # Deviation saturates at the outer anchor, and a saturated dimension
+            # pins severity at 50 — the latch edge. With at_100 = 100 %RH that
+            # ceiling sat on a reading the tent reaches routinely: a saturated
+            # chamber scored maximum severity, fired emergency + latch, and the
+            # safe-state vector then forced the heater to 0. Heater off cooled
+            # the tent, colder air raised RH further at unchanged absolute
+            # moisture, severity stayed pinned, and the latch release
+            # (emax <= 30) became unreachable — a closed loop the firmware could
+            # not exit. It held that way for 12.3 h on 2026-07-30/31, with the
+            # grow light dark for ~19 h (the internal chat-log 2026-07-31).
+            #
+            # 102 is chosen TIGHTLY, not generously. Saturation now scores
+            # deviation 85.7 / severity 35.7: past the conflict edge (30) so the
+            # mold-risk rule still arms and the exhaust still saturates at 100,
+            # but short of the emergency edge (40) so RH can never again be the
+            # dimension that latches the system. A looser 105 was tried first
+            # and rejected — it drops saturation to severity 25, which halves
+            # the exhaust (100 -> 57.5) and the circulation (100 -> 44) at
+            # exactly the condition they exist to correct, and demotes a
+            # saturated tent to the "organic" band where it reads as normal.
+            #
+            # at_50 = 95 %RH is the operator's fruiting target. The KPI +-10
+            # band is therefore RH 91.0-96.4, which is where a fruiting chamber
+            # actually lives. Day and night share it. TWO other things are
+            # calibrated against this ideal and had to move with it: the
+            # humidifier ramp (regulators.humidifier) and the mold-risk conflict
+            # rule's humidity threshold (see conflicts, below).
             "cubensis": {
                 "category": "mushroom",
                 "day": {
                     "temp": {"at_0": 16.0, "at_50": 24.0, "at_100": 30.0},
-                    "humidity": {"at_0": 75.0, "at_50": 92.0, "at_100": 100.0},
+                    "humidity": {"at_0": 75.0, "at_50": 95.0, "at_100": 102.0},
                     "co2": {"at_0": 0.0, "at_50": 600.0, "at_100": 2000.0},
                 },
                 "night": {
-                    "temp": {"at_0": 15.0, "at_50": 23.0, "at_100": 29.0},
-                    "humidity": {"at_0": 75.0, "at_50": 92.0, "at_100": 100.0},
+                    "temp": {"at_0": 15.0, "at_50": 21.0, "at_100": 29.0},
+                    "humidity": {"at_0": 75.0, "at_50": 95.0, "at_100": 102.0},
                     "co2": {"at_0": 0.0, "at_50": 600.0, "at_100": 2000.0},
                 },
             },
@@ -880,6 +1009,27 @@ DEVICE_CONFIG = {
                 "floor": 0.0,
                 "emergency_value": 0.0,  # heat source off in emergency
                 "safe_state": 0.0,
+                # ...but NOT when the emergency is "too wet". Relative humidity
+                # is temperature-coupled, so cutting the heat in a saturated
+                # tent raises RH further and the severity that fired the
+                # emergency can never fall — the 2026-07-30/31 deadlock, where
+                # the tent cooled 2.8 C over the 12.3 h it was held. Freeing the
+                # heater lets its own surface keep holding temperature, which is
+                # what stops the spiral; the surface commands 0 once the room is
+                # warm enough, so it cannot overheat.
+                #
+                # The cubensis anchors make RH-driven escalation unreachable on
+                # their own (at_100 = 102 %RH), so for that profile this is
+                # defence in depth. It is NOT redundant: every other profile
+                # still has a reachable humidity at_100 (oyster 98, lions_mane
+                # 100, ...) and the validator cannot enforce unreachability, so
+                # this is the fix that holds regardless of profile.
+                #
+                # Both vectors carry it because emergency is applied BEFORE the
+                # latch: freeing the heater only in safe_state would leave it
+                # already pinned to 0 by the time the latch stage runs.
+                "emergency_by_cause": {"humidity_high": None},
+                "safe_state_by_cause": {"humidity_high": None},
             },
             "heater_follower": {
                 "driven": "follower",
@@ -968,8 +1118,8 @@ DEVICE_CONFIG = {
                 # chill further). hy_lo1/hy_lo2 add a mild cold-side taper so a
                 # cold chamber backs off progressively rather than in one step.
                 #
-                # The RH response is still a proportional ramp that starts AT
-                # ideal (hx_lo1 = 1.4 from bx_lo1 = 43), and it deliberately
+                # The RH response is a proportional ramp that ends just ABOVE
+                # ideal (hx_lo1 = 1.4 from bx_lo1 = 53), and it deliberately
                 # carries no deadband of its own. A relay actuator only ever
                 # observes two points on the curve — where the command crosses
                 # the adapter's on_above / off_below — so a surface-level
@@ -977,13 +1127,33 @@ DEVICE_CONFIG = {
                 # deadband-below-40 version shipped before 2026-07-21 commanded
                 # 48.9 at RH 80.4% against an ideal of 92%, under an on_above of
                 # 60, and left the humidifier off in a drying tent
-                # (docs/notes/chat-log.md 2026-07-21). The hysteresis band lives
+                # (the internal chat-log 2026-07-21). The hysteresis band lives
                 # entirely in the adapter, which is what on_above/off_below are
                 # for.
                 #
                 # hx_hi1/-bx_hi1 and hx_hi2 cut the command back once the air is
                 # already humid, so the evaporative bias never adds moisture to
                 # a humid room.
+                #
+                # bx_lo1 moved 43 -> 53 on 2026-07-31 because the ramp ended
+                # SEVEN deviation points BELOW ideal, and off_below opened the
+                # contact earlier still: driving this surface through the
+                # shipped adapter, the relay opened at RH 89.6 against a 92 %
+                # ideal. The tent could not reach its own setpoint. On
+                # 2026-07-29, the last full day with the relay in control, RH
+                # averaged 89.9 % — the predicted ceiling to within a rounding
+                # error — and the operator bypassed the relay onto mains because
+                # the ideal "looked too low". It was not too low, it was
+                # unreachable.
+                #
+                # This is the same correction the heater received on 2026-07-22
+                # (bx_lo1 = 51, one point above its ideal, so it "trims
+                # continuously around the setpoint instead of waiting for the
+                # room to fall out of the band"). The humidifier never got it,
+                # which is exactly why temperature held 99.3 % inside the KPI
+                # band that day while humidity met it on no day at all. 53
+                # rather than 51 because the relay's own hysteresis costs a
+                # further ~2 points of RH before the contact opens.
                 "surface": _surface(
                     ca=-1.2,
                     sa=1.4,
@@ -993,7 +1163,7 @@ DEVICE_CONFIG = {
                     bx_hi1=55.0,
                     hx_hi2=0.2,
                     hx_lo1=1.4,
-                    bx_lo1=43.0,
+                    bx_lo1=53.0,
                     hy_lo1=0.2,
                     hy_lo2=0.1,
                 ),
@@ -1008,6 +1178,26 @@ DEVICE_CONFIG = {
                 # mists sooner, a cold one later. That bias is intended; cut
                 # gain/cross toward 0 if the band should be temperature-
                 # independent instead.
+                #
+                # off_below DELIBERATELY STAYS 7.0 while the surface's bx_lo1
+                # moved 43 -> 53 (2026-07-31). Measured at the ideal temperature
+                # against the 75/95/102 anchors, the relay opens at:
+                #   bx_lo1 43, off_below 7  →  RH 89.6   (old: 2.4 points short)
+                #   bx_lo1 53, off_below 7  →  RH 94.5   ← shipped, 0.5 short
+                #   bx_lo1 53, off_below 5  →  RH 94.9
+                #   bx_lo1 53, off_below 3  →  RH 95.1
+                # Moving the ramp alone recovers almost all of the shortfall,
+                # and the last half point is not worth buying. This surface's
+                # humid-AND-hot residue is 4.3 command units (evaluate at x=80,
+                # y=100), and a relay whose command never falls back under
+                # off_below can never be released — so off_below must stay above
+                # that residue. At 7.0 the guard keeps 2.7 units of margin; at
+                # 3.0 it inverts, and the humidifier could be held closed in a
+                # hot, near-saturated tent. tests/test_regulation_surface.py
+                # asserts exactly this, and it caught the 3.0 attempt.
+                #
+                # Resulting band at ideal temperature: RH 92.7 (close) .. 94.6
+                # (open), with min_on_s / min_off_s bounding the cycling.
                 "adapter": {
                     "type": "relay",
                     "pin_key": "relay_humidifier",  # GP19 (freed fan relay 2)
@@ -1058,7 +1248,7 @@ DEVICE_CONFIG = {
                 # minor edge. In every realistic tent state the exhaust was
                 # pinned at 40 and CO2 from 0 to 2000 ppm changed nothing; at
                 # the 1200 ppm actually observed on the OLED the term was 9.1
-                # (docs/notes/chat-log.md 2026-07-22).
+                # (the internal chat-log 2026-07-22).
                 #
                 # Gain and break are ONE calibration with the floor below — the
                 # term must be able to clear the floor well inside the profile's
@@ -1188,6 +1378,16 @@ DEVICE_CONFIG = {
                 "floor": 0.0,
                 "emergency_value": 0.0,
                 "safe_state": 0.0,
+                # Light-off is a real mitigation for an over-TEMPERATURE
+                # emergency: the panel is lamp load, and cutting it removes heat
+                # the tent cannot otherwise shed. It does nothing whatsoever for
+                # an over-humidity one — the lamp is not a moisture source — so
+                # there it is pure loss. Light is the pinning trigger for
+                # cubensis, and the tent went dark for ~19 h during the
+                # 2026-07-30/31 latch because the vector could not tell the two
+                # emergencies apart.
+                "emergency_by_cause": {"humidity_high": None},
+                "safe_state_by_cause": {"humidity_high": None},
             },
         },
         # Conflict override rules (global band >= 30), applied in order — later
@@ -1195,9 +1395,26 @@ DEVICE_CONFIG = {
         # severity threshold on the signed side of 50). force sets exact values;
         # prefer applies max(). Ship the mold-risk rule: hot+humid → humidifier
         # hard-cut, exhaust+cooler preferred.
+        #
+        # The humidity threshold is 0 — "at or above ideal" — and it is a
+        # re-derivation, not a loosening. It was 30 (deviation >= 80) when the
+        # humidity anchors were 75/92/100, where deviation 80 meant RH 96.8.
+        # Under 75/95/102 that same 30 would mean RH 99.2, leaving the rule dark
+        # through most of the band where blotch develops. Worse, the protection
+        # at 28 C / 96 %RH never came from this rule at all: it came from the
+        # humidifier surface's own high-side cut-back at deviation 55, which
+        # used to land on RH 92.8 and now lands on RH 95.7 — so raising the
+        # ideal quietly moved that guard 3 points up and opened a window where a
+        # 28 C, 96 %RH tent was commanded to mist (25.6, well over the relay's
+        # on_above of 18). Bacterial-blotch conditions, created by the anchor
+        # change itself. Threshold 0 restores the guard as an explicit rule
+        # rather than a side effect of surface geometry: above 27.6 C, stop
+        # adding water once humidity reaches ideal. Verified to hold the
+        # humidifier at 0 for 27.8/95.5, 28/96, 28.2/97.5 and 30/98, while 24 C
+        # misting and 26 C misting (below the temp gate) are untouched.
         "conflicts": [
             {
-                "when": [["humidity", "above", 30], ["temp", "above", 30]],
+                "when": [["humidity", "above", 0], ["temp", "above", 30]],
                 "force": {"humidifier": 0.0},
                 "prefer": {"exhaust": 60.0, "cooler": 100.0},
             },
@@ -1456,6 +1673,23 @@ def _validate_regulation(reg_cfg, pins_cfg, top_mode):
     if profiles[profile]["category"] != _REG_CATEGORY_MODE.get(top_mode):
         raise ValueError("regulation.profile category must match top-level mode {!r}".format(top_mode))
 
+    fae = reg_cfg.get("fresh_air_exchange")
+    if fae is not None:
+        for key in ("enabled", "interval_min", "duration_min", "command"):
+            if key not in fae:
+                raise ValueError("Missing config key: regulation.fresh_air_exchange.{}".format(key))
+        if not isinstance(fae["enabled"], bool):
+            raise ValueError("regulation.fresh_air_exchange.enabled must be a bool")
+        for key in ("interval_min", "duration_min"):
+            v = fae[key]
+            if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
+                raise ValueError("regulation.fresh_air_exchange.{} must be > 0".format(key))
+        if fae["duration_min"] >= fae["interval_min"]:
+            raise ValueError("regulation.fresh_air_exchange.duration_min must be < interval_min")
+        v = fae["command"]
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or not (0 < v <= 100):
+            raise ValueError("regulation.fresh_air_exchange.command must be 0-100 and > 0")
+
     regulators = reg_cfg.get("regulators")
     if not isinstance(regulators, dict):
         raise ValueError("regulation.regulators must be a dict")
@@ -1486,6 +1720,24 @@ def _validate_regulation(reg_cfg, pins_cfg, top_mode):
                 continue
             if not isinstance(v, (int, float)) or isinstance(v, bool) or not (0 <= v <= 100):
                 raise ValueError("{}.{} must be 0-100 or None".format(rctx, key))
+        # emergency_by_cause / safe_state_by_cause are OPTIONAL per-regulator
+        # overrides keyed by which deviation direction escalated ("temp_high",
+        # "humidity_low", ...). Absent = the scalar above applies to every
+        # cause, which is the pre-2026-07-31 behaviour. See the arbiter for the
+        # merge rule when several causes escalate at once.
+        for key in ("emergency_by_cause", "safe_state_by_cause"):
+            by_cause = rcfg.get(key)
+            if by_cause is None:
+                continue
+            if not isinstance(by_cause, dict):
+                raise ValueError("{}.{} must be a dict or absent".format(rctx, key))
+            for cause, v in by_cause.items():
+                if cause not in _REG_CAUSES:
+                    raise ValueError("{}.{} key {!r} must be one of {}".format(rctx, key, cause, _REG_CAUSES))
+                if v is None:
+                    continue
+                if not isinstance(v, (int, float)) or isinstance(v, bool) or not (0 <= v <= 100):
+                    raise ValueError("{}.{}.{} must be 0-100 or None".format(rctx, key, cause))
         if driven == "surface":
             dims = rcfg.get("dims")
             if not isinstance(dims, list) or len(dims) != 2 or any(d not in _REG_DIMENSIONS for d in dims):
@@ -1627,6 +1879,10 @@ def validate_config():
             "override_ppm_on",
             "override_ppm_off",
             "sensor_type",
+            "verify_checksum",
+            "plausible_min_ppm",
+            "plausible_max_ppm",
+            "stale_after_s",
         ],
         "soil_logger": [
             "interval_s",
@@ -1713,6 +1969,8 @@ def validate_config():
             "verify_retry_delay_ms",
             "allowed_paths",
             "legacy_update_dirs",
+            "enforce_mpy_abi",
+            "prune_stale",
         ],
         "updater_feedback": [
             "enabled",
@@ -1861,6 +2119,39 @@ def validate_config():
         raise ValueError("co2_logger.override_ppm_off must be >= 0")
     if not isinstance(co2_cfg["sensor_type"], str) or not co2_cfg["sensor_type"]:
         raise ValueError("co2_logger.sensor_type must be a non-empty string")
+    if not isinstance(co2_cfg["verify_checksum"], bool):
+        raise ValueError("co2_logger.verify_checksum must be a bool")
+    lo = co2_cfg["plausible_min_ppm"]
+    hi = co2_cfg["plausible_max_ppm"]
+    for key, v in (("plausible_min_ppm", lo), ("plausible_max_ppm", hi)):
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0:
+            raise ValueError("co2_logger.{} must be >= 0".format(key))
+    if lo >= hi:
+        raise ValueError("co2_logger.plausible_min_ppm must be < plausible_max_ppm")
+    # The window has to admit the active profile's whole CO2 anchor range, or
+    # readings the regulation engine is meant to act on get thrown away as
+    # implausible before they ever reach it. Skipped when the regulation section
+    # is malformed — that section's own validator reports it, and raising a
+    # confusing co2_logger error first would bury the real cause.
+    _reg = DEVICE_CONFIG.get("regulation")
+    _prof = None
+    if isinstance(_reg, dict) and isinstance(_reg.get("profiles"), dict):
+        _prof = _reg["profiles"].get(_reg.get("profile"))
+    if isinstance(_prof, dict):
+        for phase in ("day", "night"):
+            anchors = _prof.get(phase, {}).get("co2")
+            if isinstance(anchors, dict) and anchors.get("at_100", 0) > hi:
+                raise ValueError(
+                    "co2_logger.plausible_max_ppm ({}) must cover the active profile's {} at_100 ({})".format(
+                        hi, phase, anchors["at_100"]
+                    )
+                )
+    if not isinstance(co2_cfg["stale_after_s"], (int, float)) or isinstance(co2_cfg["stale_after_s"], bool):
+        raise ValueError("co2_logger.stale_after_s must be a number")
+    if co2_cfg["stale_after_s"] < 0:
+        raise ValueError("co2_logger.stale_after_s must be >= 0")
+    if 0 < co2_cfg["stale_after_s"] <= co2_cfg["interval_s"]:
+        raise ValueError("co2_logger.stale_after_s must exceed interval_s (or be 0 to disable)")
 
     soil_cfg = DEVICE_CONFIG["soil_logger"]
     if soil_cfg["interval_s"] <= 0:
@@ -2053,6 +2344,10 @@ def validate_config():
     for entry in upd_cfg["allowed_paths"]:
         if not isinstance(entry, str) or not entry:
             raise ValueError("updater.allowed_paths entries must be non-empty strings")
+    if not isinstance(upd_cfg["enforce_mpy_abi"], bool):
+        raise ValueError("updater.enforce_mpy_abi must be a bool")
+    if not isinstance(upd_cfg["prune_stale"], bool):
+        raise ValueError("updater.prune_stale must be a bool")
     if not isinstance(upd_cfg["legacy_update_dirs"], list):
         raise ValueError("updater.legacy_update_dirs must be a list")
     for entry in upd_cfg["legacy_update_dirs"]:

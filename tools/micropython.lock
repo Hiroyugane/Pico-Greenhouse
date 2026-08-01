@@ -1,0 +1,9 @@
+{
+  "source": "upstream",
+  "url": "https://github.com/micropython/micropython",
+  "ref": "v1.28.0",
+  "commit": "e0e9fbb17",
+  "board": "RPI_PICO",
+  "resolved_at": "2026-07-23T08:12:29Z",
+  "_comment": "Pinned MicroPython ref for tools/build_firmware.{ps1,sh}. Council 2026-07-22 (plan section 3.1): upstream, newest FINAL release, never 'latest master'. Resolved once and committed so builds are reproducible; re-resolve deliberately with --repin, which rewrites this file. Changing the ref may change the .mpy ABI, which makes every field unit's compiled payload stale - see plan section 7 step 6 before repinning."
+}

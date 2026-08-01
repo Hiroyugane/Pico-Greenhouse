@@ -13,7 +13,10 @@
 # resilience is delegated to BufferManager/WriteQueueManager; write_row is
 # best-effort and never raises into the health loop.
 
-from lib.sensor_paths import daily_csv_path
+try:
+    from lib.sensor_paths import daily_csv_path
+except ImportError:  # frozen into the firmware as a top-level module
+    from sensor_paths import daily_csv_path
 
 
 class MetricsLogger:
@@ -122,6 +125,9 @@ class MetricsLogger:
         """Write the CSV header once via BufferManager."""
         relpath = self._strip_sd_prefix(self.filename)
         header = ",".join(self.COLUMNS) + "\n"
+        setter = getattr(self.buffer_manager, "set_header", None)
+        if setter is not None:
+            setter(relpath, header)
         self.buffer_manager.write(relpath, header)
         self._created_files.add(relpath)
 

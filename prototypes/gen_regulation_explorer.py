@@ -169,6 +169,19 @@ def build_data():
             for name, p in reg_cfg["profiles"].items()
         },
         "activeProfile": reg_cfg["profile"],
+        # Anchor key ORDER, not just the names: the profile editor lays its
+        # three columns out in this order, so taking it from the validator's
+        # tuple keeps the editor from transposing "far too low" and "ideal" if
+        # config ever reorders them.
+        "anchorKeys": list(config._ANCHOR_KEYS),
+        # Day/night blend window. Editable on the page, where it drives the
+        # clock mode of the time-of-day control (b is derived from a wall-clock
+        # minute exactly as regulation_normalizer.blend_factor does it).
+        "schedule": {
+            "day_start_min": reg_cfg["day_start_min"],
+            "day_end_min": reg_cfg["day_end_min"],
+            "transition_min": reg_cfg["transition_min"],
+        },
         # The arbiter derives its four named thresholds from the last four
         # edges, so the page recomputes them whenever the edges are edited.
         "bandEdges": band_edges,
@@ -673,6 +686,47 @@ table.kv code { font-family:var(--font-mono); font-size:11.5px; color:var(--fg-1
 .edactions button.primary { background:var(--grow-600); border-color:var(--grow-600); color:#fff; }
 .edactions button.primary:hover { opacity:.9; color:#fff; }
 .edactions button:disabled { opacity:.45; cursor:not-allowed; border-color:var(--border-strong); color:var(--fg-3); }
+/* ── species-profile editor ─────────────────────────────────────────────── */
+/* Three anchor columns per row, captioned once per phase. The label column
+   flexes so the widest dimension name ("temperature") sets it; the inputs are
+   fixed-width so at_0/ideal/at_100 line up down the whole card. */
+.profgrid { display:grid; grid-template-columns:1fr repeat(3, 58px); gap:4px 6px; align-items:center; }
+.profgrid .cap {
+  font-family:var(--font-mono); font-size:9.5px; letter-spacing:.04em; text-transform:uppercase;
+  color:var(--fg-3); text-align:center; padding-bottom:2px;
+}
+.profgrid .rl { font-size:12px; color:var(--fg-2); }
+.profgrid .rl small { display:block; font-family:var(--font-mono); font-size:9.5px; color:var(--fg-3); }
+.profgrid input[type=number] {
+  width:100%; font-family:var(--font-mono); font-size:11.5px; padding:4px 5px; text-align:right;
+  color:var(--fg-1); background:var(--surface); border:1px solid var(--border-strong);
+  border-radius:var(--radius-sm); font-variant-numeric:tabular-nums;
+}
+.profgrid input.dirty { border-color:var(--grow-600); box-shadow:inset 0 0 0 1px var(--grow-600); }
+.profgrid input.bad { border-color:var(--led-red); box-shadow:inset 0 0 0 1px var(--led-red); }
+.schedrow { display:grid; grid-template-columns:1fr 72px auto; gap:4px 8px; align-items:center; margin-bottom:4px;
+  font-size:12px; }
+.schedrow label { color:var(--fg-2); }
+.schedrow input[type=number] {
+  width:100%; font-family:var(--font-mono); font-size:11.5px; padding:4px 5px; text-align:right;
+  color:var(--fg-1); background:var(--surface); border:1px solid var(--border-strong);
+  border-radius:var(--radius-sm); font-variant-numeric:tabular-nums;
+}
+.schedrow input.dirty { border-color:var(--grow-600); box-shadow:inset 0 0 0 1px var(--grow-600); }
+.schedrow input.bad { border-color:var(--led-red); box-shadow:inset 0 0 0 1px var(--led-red); }
+.schedrow .clk { font-family:var(--font-mono); font-size:10.5px; color:var(--fg-3);
+  font-variant-numeric:tabular-nums; }
+.profwarn {
+  margin-top:10px; padding:7px 10px; border-radius:var(--radius-sm);
+  border:1px solid var(--led-red); background:rgba(198,64,58,.08);
+  font-size:11.5px; color:var(--fg-1); line-height:1.45;
+}
+.profwarn:empty { display:none; }
+/* Compact rail for the two mode switches that sit under / beside a slider. */
+.segrail.mini { border-radius:var(--radius-sm); }
+.segrail.mini button { padding:5px 10px; font-size:11px; }
+.todmode { margin-top:9px; align-self:flex-start; }
+
 .dirtynote { font-size:11.5px; color:var(--fg-2); border-left:3px solid var(--grow-600); padding:4px 0 4px 9px;
   margin:10px 0 0; }
 #exportWrap { margin-top:12px; }
@@ -721,9 +775,10 @@ _HTML_BODY = """<div class="topbar">
     after the surface (or follower / time-of-day driver), the CO&#8322; additive term, the external-effectiveness
     multiplier, the floor, the conflict rules, and the device adapter. Click a cell to compare the
     <strong>raw surface value against what the actuator actually does</strong>. Generated from
-    <code>config.py</code>; the tuning parameters on the right are <strong>editable</strong> &mdash; the plot
-    recomputes live, and <em>Export changes</em> gives a paste-ready <code>config.py</code> fragment.
-    Nothing here writes to the repo.</p>
+    <code>config.py</code>; the species profile and the tuning parameters on the right are
+    <strong>editable</strong> &mdash; anchors, day/night schedule, surfaces, floors, adapter thresholds and
+    band edges &mdash; the plot recomputes live, and <em>Export changes</em> gives a paste-ready
+    <code>config.py</code> fragment. Nothing here writes to the repo.</p>
   </div>
   <div class="themetoggle" role="group" aria-label="Surface theme">
     <button id="thLight" aria-pressed="true">Paper</button>
@@ -745,10 +800,21 @@ _HTML_BODY = """<div class="topbar">
       <span class="eyebrow ctl-label">Species profile</span>
       <select id="prof"></select>
     </div>
+    <div class="ctl">
+      <span class="eyebrow ctl-label">Axis ticks</span>
+      <div class="segrail mini" id="axisMode" role="group" aria-label="Axis tick units">
+        <button type="button" data-axis="dev">deviation</button>
+        <button type="button" data-axis="phys">physical</button>
+      </div>
+    </div>
     <div class="ctl grow">
-      <div class="slider-head"><span class="eyebrow">Time of day (blend b)</span>
+      <div class="slider-head"><span class="eyebrow" id="todLabel">Time of day (blend b)</span>
         <span class="readout" id="todOut"></span></div>
       <input type="range" id="tod" min="0" max="1" step="0.05" value="1">
+      <div class="segrail mini todmode" id="todMode" role="group" aria-label="Time-of-day input mode">
+        <button type="button" data-mode="b">set b</button>
+        <button type="button" data-mode="clock">set clock</button>
+      </div>
     </div>
     <div class="ctl grow co2" id="co2Ctl">
       <div class="slider-head"><span class="eyebrow">CO&#8322; deviation</span>
@@ -802,6 +868,22 @@ _HTML_BODY = """<div class="topbar">
 
   <div class="editcol">
     <div class="card">
+      <div class="card-h"><h2>Species profile</h2><span class="tag mono" id="profTag"></span></div>
+      <div class="card-body">
+        <p class="note">Anchors are physical values: <strong>at&nbsp;0</strong> = far too low (deviation 0),
+        <strong>ideal</strong> = deviation 50, <strong>at&nbsp;100</strong> = far too high (deviation 100).
+        They define what each deviation <em>means</em> for this species &mdash; no surface reads &deg;C or %RH,
+        so editing them moves the axis values, the tooltips and the cell detail, not the plotted duty.
+        The effective anchor is <code>night + b&nbsp;&times;&nbsp;(day &minus; night)</code>.</p>
+        <div id="profeditor"></div>
+        <div id="profWarn" class="profwarn"></div>
+        <div class="edactions">
+          <button id="btnCopyNight">Night &larr; day</button>
+          <button id="btnResetProf">Reset profile</button>
+        </div>
+      </div>
+    </div>
+    <div class="card">
       <div class="card-h"><h2>Tuning</h2><span class="tag mono" id="edSubtitle"></span></div>
       <div class="card-body">
         <label class="toggle">
@@ -822,10 +904,11 @@ _HTML_BODY = """<div class="topbar">
           </div>
           <p class="note">Paste over the matching keys in
             <code>config.py</code>. Surface blocks are emitted as a full
-            <code>_surface(...)</code> call listing every non-default parameter, so
-            they replace the existing call outright. Then regenerate the golden
-            vectors &mdash; <code>python prototypes/plot_regulation_surfaces.py</code>
-            &mdash; or the surface tests will fail.</p>
+            <code>_surface(...)</code> call listing every non-default parameter, and profile
+            blocks as the whole species entry, so both replace what is there outright.
+            A changed <strong>surface</strong> also needs the golden vectors regenerated
+            &mdash; <code>python prototypes/plot_regulation_surfaces.py</code> &mdash; or the
+            surface tests will fail; profile, schedule and adapter edits do not touch them.</p>
         </div>
       </div>
     </div>
@@ -855,6 +938,11 @@ let state = {
   reg: localStorage.getItem("rse.reg") || "exhaust",
   profile: localStorage.getItem("rse.profile") || D.activeProfile,
   b: parseFloat(localStorage.getItem("rse.b") ?? "1"),
+  // Wall-clock minute behind the "set clock" mode of the time-of-day control.
+  // Defaults to noon, which is inside every sane day window.
+  clockMin: parseInt(localStorage.getItem("rse.clock") ?? "720", 10),
+  todMode: localStorage.getItem("rse.todmode") || "b",
+  axis: localStorage.getItem("rse.axis") || "dev",
   co2dev: parseInt(localStorage.getItem("rse.co2") ?? "50", 10),
   sel: null,
   showAll: false
@@ -863,17 +951,27 @@ if (!D.regNames.includes(state.reg)) state.reg = "exhaust";
 if (!D.profiles[state.profile]) state.profile = D.activeProfile;
 if (!Number.isFinite(state.b)) state.b = 1.0;
 state.b = Math.min(1, Math.max(0, state.b));
+if (!Number.isFinite(state.clockMin)) state.clockMin = 720;
+state.clockMin = Math.min(1435, Math.max(0, state.clockMin));
+if (state.todMode !== "clock") state.todMode = "b";
+if (state.axis !== "phys") state.axis = "dev";
 if (!Number.isFinite(state.co2dev)) state.co2dev = 50;
 state.co2dev = Math.min(100, Math.max(0, state.co2dev));
 
 /* ---------- live, editable config ------------------------------------
    D is the frozen baseline exactly as config.py has it. LIVE is the copy the
-   page edits and plots; every "has this changed?" question compares the two. */
+   page edits and plots; every "has this changed?" question compares the two.
+   Profiles and the day/night window get the same treatment as the regulators:
+   edited in place, diffed against D, exported as a config fragment. */
 
 const DEF = D.surfaceDefaults, META = D.surfaceMeta;
 const clone = o => JSON.parse(JSON.stringify(o));
 let LIVE = clone(D.regulators);
 let LIVE_EDGES = D.bandEdges.slice();
+let LIVE_PROFILES = clone(D.profiles);
+let LIVE_SCHED = Object.assign({}, D.schedule);
+const PHASES = ["day", "night"];
+const SCHED_KEYS = ["day_start_min", "day_end_min", "transition_min"];
 
 // The arbiter names its four thresholds off the LAST four band edges, so these
 // have to be recomputed rather than baked — the edges are editable.
@@ -931,10 +1029,40 @@ function surfaceGrid(reg) {
   return g;
 }
 
+/* ---------- time of day ------------------------------------------------
+   A port of lib/regulation_normalizer.blend_factor, so the "set clock" mode of
+   the ToD control derives b the way the device does — which is what makes the
+   editable day window mean anything on this page. */
+
+function blendFactor(minutes, dayStart, dayEnd, transition) {
+  if (minutes < dayStart || minutes >= dayEnd) return 0.0;
+  if (transition <= 0) return 1.0;
+  const half = (dayEnd - dayStart) * 0.5;
+  const ramp = transition < half ? transition : half;
+  if (ramp <= 0) return 1.0;
+  const into = minutes - dayStart, left = dayEnd - minutes;
+  if (into < ramp) return into / ramp;
+  if (left < ramp) return left / ramp;
+  return 1.0;
+}
+
+// The single source of b for the whole page: either dragged directly, or
+// derived from the clock through the (editable) day window.
+function currentB() {
+  if (state.todMode !== "clock") return state.b;
+  return blendFactor(state.clockMin, LIVE_SCHED.day_start_min,
+                     LIVE_SCHED.day_end_min, LIVE_SCHED.transition_min);
+}
+
+function hhmm(min) {
+  const m = ((Math.round(min) % 1440) + 1440) % 1440;
+  return String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0");
+}
+
 /* ---------- deviation <-> physical ---------------------------------- */
 
 function anchors(dim) {
-  const p = D.profiles[state.profile], b = state.b;
+  const p = LIVE_PROFILES[state.profile], b = currentB();
   const day = p.day[dim], night = p.night[dim];
   return {
     a0:   night.at_0   + b * (day.at_0   - night.at_0),
@@ -992,7 +1120,7 @@ function externalMultRange() {
 
 function organicCommand(reg, xi, yi) {
   const R = LIVE[reg];
-  if (R.driven === "tod") return clamp(state.b * R.lightLevelDay);
+  if (R.driven === "tod") return clamp(currentB() * R.lightLevelDay);
   return surfaceGrid(reg)[xi][yi];
 }
 
@@ -1162,9 +1290,41 @@ function buildControls() {
   prof.innerHTML = Object.keys(D.profiles)
     .map(n => `<option value="${n}">${n} · ${D.profiles[n].category}</option>`).join("");
   prof.value = state.profile;
-  prof.onchange = () => { state.profile = prof.value; localStorage.setItem("rse.profile", state.profile); render(); };
-  el("tod").value = state.b;
-  el("tod").oninput = e => { state.b = parseFloat(e.target.value); localStorage.setItem("rse.b", state.b); render(); };
+  prof.onchange = () => {
+    state.profile = prof.value;
+    localStorage.setItem("rse.profile", state.profile);
+    render(); renderProfileEditor();
+  };
+
+  const axis = el("axisMode");
+  axis.querySelectorAll("button").forEach(b => {
+    b.onclick = () => {
+      state.axis = b.dataset.axis;
+      localStorage.setItem("rse.axis", state.axis);
+      render();
+    };
+  });
+
+  const todm = el("todMode");
+  todm.querySelectorAll("button").forEach(b => {
+    b.onclick = () => {
+      state.todMode = b.dataset.mode;
+      localStorage.setItem("rse.todmode", state.todMode);
+      syncTodSlider();
+      render();
+    };
+  });
+  syncTodSlider();
+  el("tod").oninput = e => {
+    if (state.todMode === "clock") {
+      state.clockMin = parseInt(e.target.value, 10);
+      localStorage.setItem("rse.clock", state.clockMin);
+    } else {
+      state.b = parseFloat(e.target.value);
+      localStorage.setItem("rse.b", state.b);
+    }
+    render();
+  };
   el("co2").value = state.co2dev;
   el("co2").oninput = e => {
     state.co2dev = parseInt(e.target.value, 10);
@@ -1175,6 +1335,19 @@ function buildControls() {
   el("gridTag").textContent = `${N} × ${N} · ${N * N} cells`;
   el("thLight").onclick = () => setTheme("light");
   el("thDark").onclick = () => setTheme("dark");
+}
+
+// The ToD slider is one control in two units: blend factor 0-1, or minutes past
+// midnight. Retarget its range and value whenever the mode changes.
+function syncTodSlider() {
+  const s = el("tod"), clock = state.todMode === "clock";
+  s.min = 0;
+  s.max = clock ? 1435 : 1;
+  s.step = clock ? 5 : 0.05;
+  s.value = clock ? state.clockMin : state.b;
+  el("todLabel").textContent = clock ? "Time of day (clock)" : "Time of day (blend b)";
+  el("todMode").querySelectorAll("button")
+    .forEach(b => b.setAttribute("aria-pressed", b.dataset.mode === state.todMode));
 }
 
 function setTheme(t) {
@@ -1210,23 +1383,43 @@ function render() {
      regulators carrying <strong>co2_gain</strong> (${co2Regs().join(", ")}). No surface takes
      CO&#8322; as a dimension, so this slider has <strong>no effect</strong> here.`;
 
-  el("todOut").textContent = "b = " + state.b.toFixed(2) + " · "
-    + (state.b >= 1 ? "full day" : state.b <= 0 ? "full night" : "transition");
+  const b = currentB();
+  el("todOut").textContent = (state.todMode === "clock" ? hhmm(state.clockMin) + " · " : "")
+    + "b = " + b.toFixed(2) + " · "
+    + (b >= 1 ? "full day" : b <= 0 ? "full night" : "transition");
 
-  // Axes — deviation number every other tick (majors at 0/50/100 bold); the
-  // physical anchors live in the axis title, exact values in the detail panel.
+  // Axes. In deviation mode: the number every other tick (majors at 0/50/100
+  // bold), physical anchors in the axis title, exact values in the detail
+  // panel. In physical mode the ticks carry the profile's own units instead —
+  // at the quarters only, because "24.0" needs four times the room "40" does,
+  // and on the quarters specifically so that dev 50 (ideal, the one value an
+  // operator looks for) always carries a number.
+  // The cells never move: the deviation grid is evenly spaced, so physical
+  // ticks are unevenly VALUED either side of ideal whenever the profile's
+  // anchors are asymmetric. The axis title says so.
   const dx = R.dims[0], dy = R.dims[1];
   const ax = anchors(dx), ay = anchors(dy);
   const dp = d => d === "co2" ? 0 : 1;
-  el("xlab").innerHTML = `${D.dimLabels[dx]} deviation → <span class="mono" style="color:var(--fg-3)">`
-    + `${ax.a0.toFixed(dp(dx))} · ${ax.a50.toFixed(dp(dx))} · ${ax.a100.toFixed(dp(dx))} ${D.dimUnits[dx]}</span>`;
-  el("ylab").innerHTML = `${D.dimLabels[dy]} deviation → `
-    + `${ay.a0.toFixed(dp(dy))} · ${ay.a50.toFixed(dp(dy))} · ${ay.a100.toFixed(dp(dy))} ${D.dimUnits[dy]}`;
+  const phys = state.axis === "phys";
+  const axisTitle = (dim, a) => phys
+    ? `${D.dimLabels[dim]} → <span class="mono" style="color:var(--fg-3)">${D.dimUnits[dim]}`
+      + ` · non-linear at ideal ${a.a50.toFixed(dp(dim))}</span>`
+    : `${D.dimLabels[dim]} deviation → <span class="mono" style="color:var(--fg-3)">`
+      + `${a.a0.toFixed(dp(dim))} · ${a.a50.toFixed(dp(dim))} · ${a.a100.toFixed(dp(dim))}`
+      + ` ${D.dimUnits[dim]}</span>`;
+  el("xlab").innerHTML = axisTitle(dx, ax);
+  el("ylab").innerHTML = axisTitle(dy, ay);
   const tickCls = v => (v % 50 === 0) ? " maj" : "";
+  const tickText = (v, i, dim, a) => {
+    if (!phys) return i % 2 === 0 ? String(v) : "";
+    return v % 25 === 0 ? devToPhys(v, a).toFixed(dp(dim)) : "";
+  };
   el("xticks").innerHTML = G.map((v, i) =>
-    `<div class="xtick${tickCls(v)}">${i % 2 === 0 ? v : ""}</div>`).join("");
+    `<div class="xtick${tickCls(v)}">${tickText(v, i, dx, ax)}</div>`).join("");
   el("yticks").innerHTML = G.map((v, i) =>
-    `<div class="ytick${tickCls(v)}">${i % 2 === 0 ? v : ""}</div>`).join("");
+    `<div class="ytick${tickCls(v)}">${tickText(v, i, dy, ay)}</div>`).join("");
+  el("axisMode").querySelectorAll("button")
+    .forEach(b => b.setAttribute("aria-pressed", b.dataset.axis === state.axis));
 
   el("chartTitle").textContent = reg + " — final effective duty";
   el("chartNote").textContent = chartNote(R, reg);
@@ -1636,6 +1829,123 @@ function slicesHTML(reg, R, xi, yi) {
   </div>`;
 }
 
+/* ---------- species-profile editor -------------------------------------
+   The anchors and the day/night window, edited in physical units. These feed
+   the normalizer, not the surfaces, so a change here re-labels the plot rather
+   than reshaping it — the card says so, and the tuning card next to it is
+   where the shape lives. */
+
+// CO2 is tuned in coarse steps (a 25 ppm nudge is noise); temperature and
+// humidity in half-units, which is finer than any sensor this thing carries.
+const anchorStep = dim => dim === "co2" ? 25 : 0.5;
+const anchorCaps = { at_0: "at 0", at_50: "ideal", at_100: "at 100" };
+
+// A profile whose anchors are not strictly ascending is one validate_config()
+// would reject. The page still plots it — refusing the keystroke would make the
+// field impossible to retype through — but says so, and marks the export.
+function profileProblems(name) {
+  const P = LIVE_PROFILES[name], out = [];
+  for (const ph of PHASES) {
+    for (const dim of D.dimOrder) {
+      const a = P[ph][dim];
+      if (!(a.at_0 < a.at_50 && a.at_50 < a.at_100)) out.push(ph + " · " + D.dimLabels[dim]);
+    }
+  }
+  return out;
+}
+
+function schedProblems() {
+  const out = new Set();
+  for (const k of SCHED_KEYS) {
+    const v = LIVE_SCHED[k];
+    if (!Number.isInteger(v) || v < 0 || v > 1440) out.add(k);
+  }
+  if (LIVE_SCHED.day_start_min >= LIVE_SCHED.day_end_min) {
+    out.add("day_start_min"); out.add("day_end_min");
+  }
+  return out;
+}
+
+function profInput(path, value, base, step, dp) {
+  const dirty = value !== base ? " dirty" : "";
+  return `<input type="number" class="pe${dirty}" data-path="${path}" value="${value}" step="${step}"`
+    + ` title="config.py: ${fmt(base, dp)}">`;
+}
+
+function renderProfileEditor() {
+  const name = state.profile, P = LIVE_PROFILES[name], B = D.profiles[name];
+  el("profTag").textContent = name + " · " + P.category;
+
+  let h = "";
+  for (const ph of PHASES) {
+    const caps = D.anchorKeys.map(k => `<span class="cap">${anchorCaps[k]}</span>`).join("");
+    const rows = D.dimOrder.map(dim =>
+      `<span class="rl">${D.dimLabels[dim]}<small>${D.dimUnits[dim]}</small></span>`
+      + D.anchorKeys.map(k => profInput(
+          `anchor.${ph}.${dim}.${k}`, P[ph][dim][k], B[ph][dim][k],
+          anchorStep(dim), dim === "co2" ? 0 : 1)).join("")
+    ).join("");
+    h += `<div class="edgroup"><div class="gt">${ph} anchors</div>
+      <div class="profgrid"><span></span>${caps}${rows}</div></div>`;
+  }
+
+  const sched = SCHED_KEYS.map(k =>
+    `<div class="schedrow"><label>${k}</label>`
+    + profInput("sched." + k, LIVE_SCHED[k], D.schedule[k], 5, 0)
+    + `<span class="clk" id="clk-${k}"></span></div>`).join("");
+  h += `<div class="edgroup"><div class="gt">Day / night window (global)</div>${sched}
+    <p class="note">Minutes past midnight. The blend ramps 0→1 over
+    <em>transition</em> minutes just inside each edge, and is 0 outside the window.
+    Switch the time-of-day control to <strong>set clock</strong> to drive b from
+    these instead of dragging it.</p></div>`;
+
+  el("profeditor").innerHTML = h;
+  refreshProfMeta();
+  updateDirty();
+}
+
+// Everything in the card that is NOT an input: safe to rewrite on every
+// keystroke without stealing focus mid-number.
+function refreshProfMeta() {
+  for (const k of SCHED_KEYS) {
+    const span = el("clk-" + k);
+    if (span) span.textContent = k === "transition_min" ? "min" : hhmm(LIVE_SCHED[k]);
+  }
+  const bad = schedProblems();
+  const profBad = profileProblems(state.profile);
+  document.querySelectorAll("#profeditor input[data-path]").forEach(inp => {
+    const p = inp.dataset.path;
+    if (p.startsWith("sched.")) { inp.classList.toggle("bad", bad.has(p.slice(6))); return; }
+    const [, ph, dim] = p.split(".");
+    inp.classList.toggle("bad", profBad.includes(ph + " · " + D.dimLabels[dim]));
+  });
+
+  const msgs = [];
+  if (profBad.length) {
+    msgs.push(`Anchors must be strictly ascending (at 0 &lt; ideal &lt; at 100):
+      <strong>${profBad.join(", ")}</strong>. <code>validate_config()</code> would reject this profile.`);
+  }
+  if (bad.size) {
+    msgs.push(`Window must satisfy 0 ≤ minutes ≤ 1440 and day_start_min &lt; day_end_min
+      (<strong>${[...bad].join(", ")}</strong>).`);
+  }
+  el("profWarn").innerHTML = msgs.map(m => `<div>${m}</div>`).join("");
+}
+
+function applyProfileEdit(path, rawValue) {
+  const v = parseFloat(rawValue);
+  if (!Number.isFinite(v)) return false;
+  if (path.startsWith("sched.")) {
+    // The validator wants ints here, so round rather than carry a fractional
+    // minute into an export that would then fail to load.
+    LIVE_SCHED[path.slice(6)] = Math.round(v);
+  } else {
+    const [, ph, dim, key] = path.split(".");
+    LIVE_PROFILES[state.profile][ph][dim][key] = v;
+  }
+  return true;
+}
+
 /* ---------- editor ----------------------------------------------------- */
 
 // Hinge pairs are shown as one row because that is how they are tuned: a slope
@@ -1768,15 +2078,44 @@ function edgesChanged() {
   return LIVE_EDGES.some((v, i) => v !== D.bandEdges[i]);
 }
 
+// Anchor diffs are counted per profile, not just for the selected one: switching
+// species mid-session must not quietly drop the edits made to the previous.
+function profChanges(name) {
+  const P = LIVE_PROFILES[name], B = D.profiles[name], out = [];
+  for (const ph of PHASES) {
+    for (const dim of D.dimOrder) {
+      for (const k of D.anchorKeys) {
+        if (P[ph][dim][k] !== B[ph][dim][k]) out.push(`${ph}.${dim}.${k}`);
+      }
+    }
+  }
+  return out;
+}
+
+function schedChanges() {
+  return SCHED_KEYS.filter(k => LIVE_SCHED[k] !== D.schedule[k]);
+}
+
 function updateDirty() {
   const per = D.regNames.map(n => [n, regChanges(n).length]).filter(e => e[1]);
-  const total = per.reduce((s, e) => s + e[1], 0) + (edgesChanged() ? 1 : 0);
+  const profPer = Object.keys(LIVE_PROFILES).map(n => [n, profChanges(n).length]).filter(e => e[1]);
+  const sched = schedChanges();
+  const total = per.reduce((s, e) => s + e[1], 0)
+    + profPer.reduce((s, e) => s + e[1], 0)
+    + sched.length
+    + (edgesChanged() ? 1 : 0);
   el("btnExport").disabled = total === 0;
-  el("dirtySummary").innerHTML = total === 0
-    ? `<p class="note">No changes — every value matches <code>config.py</code>.</p>`
-    : `<p class="dirtynote">${total} changed value${total === 1 ? "" : "s"}:
-       ${per.map(([n, c]) => `${n} (${c})`).join(", ")}${edgesChanged()
-         ? (per.length ? ", " : "") + "band edges" : ""}.</p>`;
+  if (total === 0) {
+    el("dirtySummary").innerHTML =
+      `<p class="note">No changes — every value matches <code>config.py</code>.</p>`;
+    return;
+  }
+  const parts = per.map(([n, c]) => `${n} (${c})`)
+    .concat(profPer.map(([n, c]) => `profile ${n} (${c})`));
+  if (sched.length) parts.push(`day/night window (${sched.length})`);
+  if (edgesChanged()) parts.push("band edges");
+  el("dirtySummary").innerHTML =
+    `<p class="dirtynote">${total} changed value${total === 1 ? "" : "s"}: ${parts.join(", ")}.</p>`;
 }
 
 // config.py writes floats with a decimal point and ints without; match that so
@@ -1786,11 +2125,46 @@ function pyNum(v) {
   return String(parseFloat(v.toFixed(6)));
 }
 
+// One species entry, formatted the way config.py writes them (one line per
+// dimension). Emitted WHOLE for the same reason _surface() is: a partial anchor
+// list pasted over the existing block would leave the other phase behind.
+function profileBlockPy(name) {
+  const P = LIVE_PROFILES[name];
+  const lines = [`"${name}": {`, `    "category": "${P.category}",`];
+  for (const ph of PHASES) {
+    lines.push(`    "${ph}": {`);
+    for (const dim of D.dimOrder) {
+      const a = P[ph][dim];
+      lines.push(`        "${dim}": {`
+        + D.anchorKeys.map(k => `"${k}": ${pyNum(a[k])}`).join(", ") + "},");
+    }
+    lines.push("    },");
+  }
+  lines.push("},");
+  return lines;
+}
+
 function buildExport() {
   const out = [];
-  if (edgesChanged()) {
+  const sched = schedChanges();
+  if (edgesChanged() || sched.length) {
     out.push("# --- regulation ---");
-    out.push('"band_edges": [' + LIVE_EDGES.map(v => String(v)).join(", ") + "],", "");
+    if (edgesChanged()) out.push('"band_edges": [' + LIVE_EDGES.map(v => String(v)).join(", ") + "],");
+    for (const k of sched) {
+      const v = Math.round(LIVE_SCHED[k]);
+      out.push(`"${k}": ${v},` + (k === "transition_min" ? "" : `  # ${hhmm(v)}`));
+    }
+    out.push("");
+  }
+  for (const name of Object.keys(LIVE_PROFILES)) {
+    if (!profChanges(name).length) continue;
+    const bad = profileProblems(name);
+    out.push(`# --- regulation.profiles.${name} ---`);
+    if (bad.length) {
+      out.push(`# WARNING: anchors are not strictly ascending (${bad.join(", ")}) —`,
+               "# validate_config() will reject this as pasted.");
+    }
+    out.push(...profileBlockPy(name), "");
   }
   for (const name of D.regNames) {
     const R = LIVE[name], B = D.regulators[name];
@@ -1878,6 +2252,36 @@ el("editor").addEventListener("input", ev => {
   t.classList.toggle("dirty", parseFloat(t.value) !== base);
 });
 
+// Profile edits never touch gridCache — no surface reads a physical unit, so
+// the grids are unaffected and only the labels have to be redrawn.
+el("profeditor").addEventListener("input", ev => {
+  const t = ev.target;
+  if (!t.dataset || !t.dataset.path) return;
+  if (!applyProfileEdit(t.dataset.path, t.value)) return;
+  render();
+  refreshProfMeta();
+  updateDirty();
+  const p = t.dataset.path;
+  let base;
+  if (p.startsWith("sched.")) base = D.schedule[p.slice(6)];
+  else { const [, ph, dim, key] = p.split("."); base = D.profiles[state.profile][ph][dim][key]; }
+  t.classList.toggle("dirty", parseFloat(t.value) !== base);
+});
+
+el("btnResetProf").onclick = () => {
+  LIVE_PROFILES[state.profile] = clone(D.profiles[state.profile]);
+  LIVE_SCHED = Object.assign({}, D.schedule);
+  syncTodSlider();
+  render(); renderProfileEditor();
+};
+// Most shipped profiles differ between day and night in temperature only, so
+// mirroring the day column is the usual starting point for a night edit.
+el("btnCopyNight").onclick = () => {
+  const P = LIVE_PROFILES[state.profile];
+  P.night = clone(P.day);
+  render(); renderProfileEditor();
+};
+
 el("showAll").onchange = e => { state.showAll = e.target.checked; renderEditor(); };
 el("btnResetReg").onclick = () => {
   LIVE[state.reg] = clone(D.regulators[state.reg]);
@@ -1887,9 +2291,12 @@ el("btnResetReg").onclick = () => {
 el("btnResetAll").onclick = () => {
   LIVE = clone(D.regulators);
   LIVE_EDGES = D.bandEdges.slice();
+  LIVE_PROFILES = clone(D.profiles);
+  LIVE_SCHED = Object.assign({}, D.schedule);
   gridCache = {};
   el("exportWrap").hidden = true;
-  render(); renderEditor();
+  syncTodSlider();
+  render(); renderEditor(); renderProfileEditor();
 };
 el("btnExport").onclick = () => {
   el("exportText").value = buildExport();
@@ -1920,6 +2327,7 @@ el("btnCopy").onclick = async () => {
   selfCheck();
   setTheme(t);   // sets the attribute, the toggle state, and runs render()
   renderEditor();
+  renderProfileEditor();
 })();
 """
 

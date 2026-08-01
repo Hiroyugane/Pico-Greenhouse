@@ -137,6 +137,7 @@ heap_baseline.py          compare steady-state heap across firmware/deploy varia
 build_update_payload.py   build a SHA-256 manifest + file tree for an SD OTA drop
 deploy_device.py          push the mutable app set to a Pico over mpremote (--prune)
 gen_case_legend.py        render the printable enclosure legend PDF
+gen_readme_banner.py      render the README banner pair from the live exhaust surface
 relay_diag.py             standalone relay diagnostic script
 ```
 
@@ -165,6 +166,8 @@ regulation_explorer.html      the generated tuning explorer
 configuration.md            every DEVICE_CONFIG section explained
 repository-layout.md        this file
 conventions.md              architecture, naming, GPIO, logging and error-handling rules
+images/banner-light.svg           README banner, light ground (generated)
+images/banner-dark.svg            README banner, dark ground (generated)
 hardware/case-legend.pdf          printable enclosure legend (generated)
 hardware/firmware-build-runbook.md  build, flash, verify, and the .mpy ABI invariant
 hardware/next-revision.md         queued changes for the next PCB / enclosure / harness

@@ -109,7 +109,7 @@ def _run_scenario(temp, hum, co2, minutes=720, external_read=None):
 
 class TestScenarioTable:
     def test_cold_drives_heater_not_cooler(self):
-        # cubensis day temp ideal 24; 20C is cold-ish → heater on, cooler off.
+        # cubensis day temp ideal 21; 20C is cold-ish → heater on, cooler off.
         cmd = _run_scenario(temp=20.0, hum=92.0, co2=700.0)
         assert cmd["heater"] > 0.0
         assert cmd["cooler"] == 0.0
@@ -120,20 +120,29 @@ class TestScenarioTable:
         assert cmd["heater"] == 0.0
 
     def test_dry_drives_humidifier(self):
-        # RH modestly below the 92 ideal (dev ~38, minor band) → humidifier on
-        # without tripping the emergency band that would force it off.
-        cmd = _run_scenario(temp=24.0, hum=88.0, co2=700.0)
+        # RH modestly below the 95 ideal (dev ~33, minor band) → humidifier on
+        # without tripping the emergency band that would force it off. Temp
+        # sits at ideal so the humidifier's temp coupling contributes nothing
+        # and dryness alone is what drives the command.
+        cmd = _run_scenario(temp=21.0, hum=88.0, co2=700.0)
         assert cmd["humidifier"] > 0.0
 
     def test_high_co2_drives_exhaust(self):
-        cmd = _run_scenario(temp=24.0, hum=92.0, co2=1400.0)
+        # At ideal temp and RH the surface contributes nothing, so the additive
+        # CO2 term is the only thing that can open the fan.
+        cmd = _run_scenario(temp=21.0, hum=95.0, co2=1400.0)
         assert cmd["exhaust"] > 0.0
 
     def test_hot_humid_conflict_cuts_humidifier(self):
-        # temp dev ~85 (sev 35) + humidity dev ~84 (sev 34): both in the major
-        # band [30,40) so the mold-risk conflict rule fires WITHOUT tipping into
-        # emergency → humidifier forced 0, exhaust & cooler preferred up.
-        cmd = _run_scenario(temp=28.2, hum=97.5, co2=700.0)
+        # temp dev 82 (sev 32, major band) + humidity dev 68, which is above
+        # ideal and so clears the rule's humidity threshold of 0. The rule
+        # fires WITHOUT tipping into emergency → humidifier forced 0, exhaust
+        # & cooler preferred up.
+        #
+        # Temp must stay under deviation 90: at the 2026-08-01 anchors 28.2 C
+        # IS severity 40, so the old fixture would have asserted the emergency
+        # vector's humidifier cut and never exercised the conflict rule at all.
+        cmd = _run_scenario(temp=26.8, hum=97.5, co2=700.0)
         assert cmd["humidifier"] == 0.0
         assert cmd["exhaust"] >= 60.0
         assert cmd["cooler"] >= 100.0
@@ -152,16 +161,17 @@ class TestScenarioTable:
         # exhaust further as the air gets staler. The earlier 28 C anchor no
         # longer works: the retuned surface saturates the fan on temperature
         # alone there, and both cases tie at 100 for a different reason.
-        indoor = _run_scenario(temp=24.0, hum=92.0, co2=1300.0)
-        stale = _run_scenario(temp=24.0, hum=92.0, co2=2200.0)
+        indoor = _run_scenario(temp=21.0, hum=95.0, co2=1300.0)
+        stale = _run_scenario(temp=21.0, hum=95.0, co2=2200.0)
         assert indoor["exhaust"] > 0.0
         assert stale["exhaust"] > indoor["exhaust"]
 
     def test_external_hotter_suppresses_exhaust(self):
-        # temp 28.5 keeps the exhaust surface above its floor so the external
-        # gate's suppression is visible (below the floor both would read 40).
-        hot_inside = _run_scenario(temp=28.5, hum=92.0, co2=700.0)
-        gated = _run_scenario(temp=28.5, hum=92.0, co2=700.0, external_read=lambda: (35.0, 50.0))
+        # temp 24.5 keeps the exhaust surface above its floor so the external
+        # gate's suppression is visible, and below the deviation where the
+        # surface saturates at 100 — where gated and ungated would tie.
+        hot_inside = _run_scenario(temp=24.5, hum=92.0, co2=700.0)
+        gated = _run_scenario(temp=24.5, hum=92.0, co2=700.0, external_read=lambda: (35.0, 50.0))
         assert gated["exhaust"] < hot_inside["exhaust"]
 
 
@@ -203,8 +213,15 @@ def _settle(adapter, cmd, t0):
     return t0 + 3600.0
 
 
-def _relay_state_at(rh, temp=24.0, co2=700.0, start_on=False):
-    """Settle the shipped humidifier relay at one (temp, RH) point."""
+def _relay_state_at(rh, temp=21.0, co2=700.0, start_on=False):
+    """Settle the shipped humidifier relay at one (temp, RH) point.
+
+    The default temperature is the cubensis day ideal, because the humidifier
+    surface takes temp deviation as its y axis: hot → humidify more
+    (evaporative cooling). Reading the RH band at any other temperature
+    measures that coupling as well as the band, which is not what these tests
+    are pinning.
+    """
     adapter, switch = _humidifier_relay()
     t = 0.0
     if start_on:

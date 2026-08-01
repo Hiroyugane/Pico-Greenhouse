@@ -90,7 +90,7 @@ class TestCalm:
         # contact would be held closed forever at the setpoint. Asserting
         # against off_below (not a bare number) keeps this tied to the shipped
         # calibration, which is the pair that has to move together.
-        engine, adapters, names = _engine(temp=21.0, hum=95.0, co2=600.0, minutes=0)
+        engine, adapters, names = _engine(temp=20.0, hum=95.0, co2=600.0, minutes=0)
         engine.tick(now_s=0.0)
         heater = _adapter(adapters, names, "heater").value
         follower = _adapter(adapters, names, "heater_follower").value
@@ -128,7 +128,7 @@ class TestReactions:
 
     def test_co2_additive_lifts_exhaust(self):
         # Ideal temp/hum but very high CO2 → exhaust driven by the additive term.
-        engine, adapters, names = _engine(temp=24.0, hum=92.0, co2=1400.0, minutes=720)
+        engine, adapters, names = _engine(temp=21.0, hum=95.0, co2=1400.0, minutes=720)
         engine.tick(now_s=0.0)
         assert _adapter(adapters, names, "exhaust").value > 0.0
 
@@ -145,8 +145,8 @@ class TestReactions:
         # of each axis, so a dry room leaves it at 0 and the floor is the sole
         # contributor — which is exactly the case the ceiling used to swallow.
         floor = 5.0  # regulation.regulators.exhaust.floor
-        engine_low, ad_low, names = _engine(temp=24.0, hum=85.0, co2=600.0, minutes=720)
-        engine_high, ad_high, _ = _engine(temp=24.0, hum=85.0, co2=1200.0, minutes=720)
+        engine_low, ad_low, names = _engine(temp=21.0, hum=85.0, co2=600.0, minutes=720)
+        engine_high, ad_high, _ = _engine(temp=21.0, hum=85.0, co2=1200.0, minutes=720)
         # slew_normal caps the per-tick climb, so let both settle.
         for i in range(10):
             engine_low.tick(now_s=float(i * 30))
@@ -166,8 +166,8 @@ class TestReactions:
         # tent the dead zones between the blocks never reach it. Hold temp and
         # RH at the day ideal so the circulation surface contributes nothing and
         # the CO2 term is the only thing that can move the pair.
-        engine_low, ad_low, names = _engine(temp=24.0, hum=95.0, co2=600.0, minutes=720)
-        engine_high, ad_high, _ = _engine(temp=24.0, hum=95.0, co2=1400.0, minutes=720)
+        engine_low, ad_low, names = _engine(temp=21.0, hum=95.0, co2=600.0, minutes=720)
+        engine_high, ad_high, _ = _engine(temp=21.0, hum=95.0, co2=1400.0, minutes=720)
         for i in range(10):  # slew_normal caps the per-tick climb
             engine_low.tick(now_s=float(i * 30))
             engine_high.tick(now_s=float(i * 30))
@@ -419,7 +419,11 @@ class TestEmergencyLatch:
         # emergency: before the escalation gate it latched the safe-state
         # vector on tick 1 with the humidifier forced off, so the deviation
         # could never recover and no relay ever switched again.
-        engine, adapters, names = _engine(temp=22.6, hum=60.0, co2=2400.0, minutes=720)
+        #
+        # Temperature sits one degree BELOW the day ideal on purpose: cold is a
+        # non-escalating direction, so the startup point is far from ideal in
+        # three dimensions and still must not escalate.
+        engine, adapters, names = _engine(temp=20.0, hum=60.0, co2=2400.0, minutes=720)
         for i in range(10):
             engine.tick(now_s=float(i * 30))
         state = engine.get_state()
@@ -446,11 +450,13 @@ class TestEmergencyLatch:
 
 class TestExternalGate:
     def test_external_hotter_outside_suppresses_exhaust(self):
-        # Outside hotter than inside → exhaust effectiveness floored. temp 28.5
-        # puts the surface output above the exhaust floor so the external
-        # suppression is observable (not masked by the floor).
-        engine_gated, ad_gated, names = _engine(temp=28.5, minutes=720, external_read=lambda: (35.0, 50.0))
-        engine_open, ad_open, _ = _engine(temp=28.5, minutes=720)
+        # Outside hotter than inside → exhaust effectiveness floored. temp 24.5
+        # (deviation 69) puts the surface output well above the exhaust floor
+        # so the suppression is observable, while staying under the deviation
+        # at which the surface saturates at 100 — where both cases would tie
+        # and the assertion could not see a difference.
+        engine_gated, ad_gated, names = _engine(temp=24.5, minutes=720, external_read=lambda: (35.0, 50.0))
+        engine_open, ad_open, _ = _engine(temp=24.5, minutes=720)
         engine_gated.tick(now_s=0.0)
         engine_open.tick(now_s=0.0)
         assert _adapter(ad_gated, names, "exhaust").value < _adapter(ad_open, names, "exhaust").value

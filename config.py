@@ -837,10 +837,18 @@ DEVICE_CONFIG = {
             # 0 means low CO2 never registers as a fault, which is correct —
             # there is no such thing as too much fresh air for a fruiting body.
             #
-            # Night runs deliberately cooler than day: ideal temp drops 3 C
-            # (24 -> 21) rather than tracking day, because the dark phase is
+            # Night runs deliberately cooler than day: ideal temp drops 1 C
+            # (21 -> 20) rather than tracking day, because the dark phase is
             # where the cool/humid shift that favours pinning is cheapest to
-            # hold — no lamp load fighting the cooler.
+            # hold — no lamp load fighting the cooler. Operator retune
+            # 2026-08-01 brought both ideals down (day 24 -> 21, night
+            # 21 -> 20) and narrowed the day/night swing from 3 C to 1 C.
+            # Because at_0/at_100 did not move with them, the deviation scale
+            # is now asymmetric: 5 C of span below ideal against 9 C above, so
+            # a Kelvin of cold counts roughly twice a Kelvin of heat. Every
+            # temperature quoted in the regulator comments below was
+            # re-derived against these anchors — deviation-space figures
+            # (breakpoints, switch points, band edges) are unchanged.
             #
             # HUMIDITY at_100 IS DELIBERATELY UNREACHABLE (102 %RH), and that is
             # the point of the anchor rather than an off-by-something.
@@ -874,12 +882,12 @@ DEVICE_CONFIG = {
             "cubensis": {
                 "category": "mushroom",
                 "day": {
-                    "temp": {"at_0": 16.0, "at_50": 24.0, "at_100": 30.0},
+                    "temp": {"at_0": 16.0, "at_50": 21.0, "at_100": 30.0},
                     "humidity": {"at_0": 75.0, "at_50": 95.0, "at_100": 102.0},
                     "co2": {"at_0": 0.0, "at_50": 600.0, "at_100": 2000.0},
                 },
                 "night": {
-                    "temp": {"at_0": 15.0, "at_50": 21.0, "at_100": 29.0},
+                    "temp": {"at_0": 15.0, "at_50": 20.0, "at_100": 29.0},
                     "humidity": {"at_0": 75.0, "at_50": 95.0, "at_100": 102.0},
                     "co2": {"at_0": 0.0, "at_50": 600.0, "at_100": 2000.0},
                 },
@@ -975,9 +983,9 @@ DEVICE_CONFIG = {
                 # before the heater did anything about it.
                 #
                 # With mult 1.5 the ramp is command = 3.75 * (51 - dev):
-                #   dev 50 (24.0 °C, ideal)  →  3.8 %
-                #   dev 40 (22.4 °C)         → 41 %
-                #   dev 24.3 (19.9 °C)       → 100 % (clamped from here down)
+                #   dev 50 (21.0 °C, ideal)  →  3.8 %
+                #   dev 40 (20.0 °C)         → 41 %
+                #   dev 24.3 (18.4 °C)       → 100 % (clamped from here down)
                 # so the breakpoint deliberately sits ONE point above ideal —
                 # the heater trims continuously around the setpoint instead of
                 # waiting for the room to fall out of the band. The trim is
@@ -1074,9 +1082,9 @@ DEVICE_CONFIG = {
                 ),
                 # Switch points on the ramp above, with d = temp deviation and
                 # command = 2.5 * (d - 53):
-                #   on_above  12.0 → closes at dev 57.8 (24.9 °C day cubensis)
-                #   off_below  2.5 → opens  at dev 54.0 (24.5 °C)
-                # so the compressor works a ~0.5 °C band just above ideal
+                #   on_above  12.0 → closes at dev 57.8 (22.4 °C day cubensis)
+                #   off_below  2.5 → opens  at dev 54.0 (21.7 °C)
+                # so the compressor works a ~0.7 °C band just above ideal
                 # instead of a 3 °C band starting well outside it. The band is
                 # deliberately tight because min_on_s / min_off_s — not the
                 # hysteresis width — are what bound the cycle rate here: the
@@ -1408,10 +1416,17 @@ DEVICE_CONFIG = {
         # 28 C, 96 %RH tent was commanded to mist (25.6, well over the relay's
         # on_above of 18). Bacterial-blotch conditions, created by the anchor
         # change itself. Threshold 0 restores the guard as an explicit rule
-        # rather than a side effect of surface geometry: above 27.6 C, stop
+        # rather than a side effect of surface geometry: above 26.4 C, stop
         # adding water once humidity reaches ideal. Verified to hold the
         # humidifier at 0 for 27.8/95.5, 28/96, 28.2/97.5 and 30/98, while 24 C
         # misting and 26 C misting (below the temp gate) are untouched.
+        #
+        # The gate is stated in DEVIATION (severity 30 above ideal), so the
+        # 2026-08-01 temp retune moved it in physical terms without anyone
+        # editing this rule: 27.6 C -> 26.4 C. All four hold-at-0 points above
+        # still fire and both misting points still mist, but 26 C now clears
+        # the gate by 0.4 C rather than 1.6 C. Re-check this line whenever the
+        # temp anchors move — the rule and the anchors are one calibration.
         "conflicts": [
             {
                 "when": [["humidity", "above", 0], ["temp", "above", 30]],

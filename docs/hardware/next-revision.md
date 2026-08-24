@@ -142,6 +142,34 @@ diodes (~1.6 V drop under load).
 > the innocent explanation first (hw-test FIELD.1), but treat GP19 as the
 > prime suspect until measured.
 
+> **2026-08-07 field evidence — GP19 is exonerated, the rail is not:** with the
+> humidifier back on the relay, the 2026-07-31 → 08-07 run shows the channel
+> **working**: in six of eight full-command episodes the chamber humidity rose
+> under engine control, by **+6.3, +7.5, +8.0 and +10.8 points**. The GP19 coil
+> had authority for a week. The one episode that failed (08-07 10:15–17:17,
+> seven hours at command 100 while RH *fell* 66.3 → 48.3 %) has the shape of an
+> **empty reservoir**, not a dead coil — it is the last episode before shutdown
+> and nothing else on the board misbehaved during it.
+>
+> The supply, however, produced two events this entry should own. On 08-06 the
+> log stops mid-stream and resumes with a fresh boot **twice**: 06:47:35 →
+> 06:55:03 (**7.5 min**) and 08:01:28 → 08:22:07 (**20.6 min**). Neither can be
+> a watchdog timeout — the WDT fires within 8 s, so a stall would leave a
+> seconds-long gap, not twenty minutes. Both look like the board losing power
+> and coming back. `reset_cause` reads `WDT_RESET`, which on the RP2040 does not
+> discriminate (the reset path runs through the watchdog block either way), so
+> the cause code is not evidence here; the **gap length** is. A third event in
+> the same family: the SD card dropped out at **08-01 03:57–04:20** (~23 min,
+> `StatusMgr: SD state changed: mount_failed`) and returned on its own.
+>
+> - **Add to the acceptance for the new board:** log a rail-voltage trace across
+>   a full day, not just a coil-pull-in spot check. Three unexplained
+>   multi-minute outages in seven days, with no watchdog explanation for any of
+>   them, is a supply problem hiding behind a healthy-looking firmware.
+> - The tiered write path absorbed the SD event exactly as designed — 615
+>   fallback writes, nine migrations back to the card, **zero `write_failures`**
+>   and no data loss. That is not a reason to leave the supply alone.
+
 - **Quantify the load:** relay-coil bank = N coils × ~70–90 mA hold, plus
   inrush, on top of the Pico + I²C0 draw. Size the 5 V supply for the
   worst-case simultaneously-energised coil count with margin.
@@ -683,6 +711,32 @@ memory: project-s8-uart-divider-revision
 > with thin margin": the link is unusable as-is. Do not close this entry on a
 > firmware plausibility filter alone — the filter suppresses the symptom, the
 > divider is the cause.
+
+> **2026-08-07 field evidence (link is dead, filter works):** the
+> 2026-07-31 → 08-07 SD run (7.2 days, firmware `9437f98`) removes the last
+> doubt. The S8 failed **34 s after the first boot** (`failures=2` at
+> 11:47:34), produced its last usable reading at **2026-08-01 08:39**, and then
+> returned nothing for six consecutive days — through **five boots**, two of
+> them full power cycles. The failure counter reached **12 848 consecutive**
+> before the 08-06 reboot and was climbing again at shutdown. The daily CSVs
+> for 08-02 … 08-07 contain the header row and nothing else.
+>
+> Two things this run settles. First, the **frame-integrity filter
+> (`efab3fe`) works**: where the previous run pushed 4.3 % physically
+> impossible values straight to the actuators, this run served **zero** bad
+> readings — `dev_c` sat at the neutral 50 for 9 162 of 10 327 metric rows
+> instead of driving the exhaust from noise. Second, the **fresh-air fallback
+> (`7036863`) works**: minutes 1–4 of every 30-minute cycle show an exhaust
+> command ≥ 60 in 93–97 % of CO₂-blind rows, exactly the configured
+> `interval_min 30 / duration_min 5 / command 60`. The chamber kept breathing
+> on a dead sensor.
+>
+> So the firmware side is done and proven, and the remaining fault is entirely
+> the physical link. One firmware defect does fall out of this run and is
+> separate from the divider: the dead sensor emitted **20 533 WARN lines —
+> 100 % of every warning the system produced in seven days** — which alone
+> drove 3–4 log rotations per day. A sensor that has failed N times in a row
+> should warn once and then rate-limit.
 
 - Senseair S8 UART TXD is **5 V TTL** referenced to V+. Pico GPIO
   abs-max is **3.3 V + 0.5 V = 3.8 V**. Current R11 = 100 Ω in series

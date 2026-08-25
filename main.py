@@ -272,6 +272,43 @@ def _enter_sd_failure_state(status_manager, wdt, countdown_s):
         machine.reset()
 
 
+# Handles of the long-lived tasks main() spawns in Step 9, plus the count that
+# was live once spawning finished. MicroPython's uasyncio has no all_tasks(),
+# so the metrics loop cannot ask the scheduler how many tasks exist — which is
+# why the `tasks` column was empty in all 10 327 rows of the 2026-08-07 field
+# run. Keeping our own handles works on both runtimes, and reporting the
+# DELTA from the boot-time baseline turns the column into a leak detector: a
+# healthy run reads 0, and anything else means a task died or multiplied.
+_spawned_tasks = []
+_task_baseline = 0
+
+
+def _track_task(task):
+    """Record a spawned task handle for the leak-detector metric."""
+    _spawned_tasks.append(task)
+    return task
+
+
+def _live_task_count() -> int:
+    """How many of the tracked tasks are still running.
+
+    ``done()`` is absent on some MicroPython builds; a handle we cannot
+    interrogate counts as live, which keeps the delta at 0 rather than
+    inventing a phantom leak.
+    """
+    live = 0
+    for task in _spawned_tasks:
+        done = getattr(task, "done", None)
+        if done is not None:
+            try:
+                if done():
+                    continue
+            except Exception:
+                pass
+        live += 1
+    return live
+
+
 def _get_runtime_load_snapshot() -> dict:
     """Collect lightweight runtime load indicators for diagnostics."""
     snapshot = {}
@@ -291,10 +328,12 @@ def _get_runtime_load_snapshot() -> dict:
             # Telemetry is best-effort; never fail the control loop.
             pass
 
-    # Useful in host simulation to correlate with accidental task fan-out.
+    # Task-leak indicator: live tracked tasks minus however many were live once
+    # Step 9 finished. 0 on a healthy run; nonzero means the task set changed.
+    # Deliberately NOT asyncio.all_tasks() — that exists only on CPython, so the
+    # device (the only runtime that matters here) always skipped it.
     try:
-        if hasattr(asyncio, "all_tasks"):
-            snapshot["task_count"] = len(asyncio.all_tasks())
+        snapshot["task_count"] = _live_task_count() - _task_baseline
     except Exception:
         pass
 
@@ -344,7 +383,7 @@ async def main():
 
     # Step 1b: Initialize watchdog timer (early, before any other hardware)
     # If the system freezes during init or runtime, the watchdog will reset it.
-    global _wdt
+    global _wdt, _task_baseline
     system_config = DEVICE_CONFIG.get("system", {})
     wdt_timeout_ms = system_config.get("watchdog_timeout_ms", 8000)
     wdt_feed_interval_ms = system_config.get("watchdog_feed_interval_ms", 2000)
@@ -1113,61 +1152,71 @@ async def main():
         long_press=_on_long_press,
     )
 
-    # Step 9: Spawn all async tasks
+    # Step 9: Spawn all async tasks.
+    #
+    # Every handle goes through _track_task() so the health loop can report a
+    # task-leak delta; without it the metrics `tasks` column is blank on the
+    # device, which is exactly what the 2026-08-07 field run recorded.
     logger.info("MAIN", "Spawning async tasks...")
+    _spawned_tasks.clear()
 
     # Spawn watchdog feed task first (highest priority for system stability)
-    asyncio.create_task(feed_watchdog(wdt, wdt_feed_interval_ms, logger))
+    _track_task(asyncio.create_task(feed_watchdog(wdt, wdt_feed_interval_ms, logger)))
     logger.debug("MAIN", "task spawned", task="feed_watchdog")
 
     # Spawn SD-LED blink task (blinks GP5 while the SD state is mount_failed;
     # no_card is solid on and mounted is off, both held by set_sd_state)
-    asyncio.create_task(status_manager.sd_blink_loop(status_led_config.get("sd_fault_blink_ms", 500)))
+    _track_task(asyncio.create_task(status_manager.sd_blink_loop(status_led_config.get("sd_fault_blink_ms", 500))))
     logger.debug("MAIN", "task spawned", task="status_manager.sd_blink_loop")
 
     # Spawn write queue drain task (async SD write batching)
     # Drain task is resilient and catches all exceptions internally (never dies)
-    asyncio.create_task(write_queue.start_drain_task())
+    _track_task(asyncio.create_task(write_queue.start_drain_task()))
     logger.debug("MAIN", "task spawned", task="write_queue.start_drain_task")
 
     # Spawn fallback pruning task (async file maintenance, decoupled from drain)
     # Periodically trims fallback file when it exceeds max size limit
-    asyncio.create_task(buffer_manager.start_fallback_prune_task(check_interval=10))
+    _track_task(asyncio.create_task(buffer_manager.start_fallback_prune_task(check_interval=10)))
     logger.debug("MAIN", "task spawned", task="buffer_manager.start_fallback_prune_task")
 
     # Spawn fan cycle tasks
     for fan in fans:
-        asyncio.create_task(fan.start_cycle())
+        _track_task(asyncio.create_task(fan.start_cycle()))
         logger.debug("MAIN", "task spawned", task=f"{fan.name}.start_cycle")
 
     # Spawn the regulation engine tick loop (owns every regulated actuator)
     if regulation_engine is not None:
-        asyncio.create_task(regulation_engine.run())
+        _track_task(asyncio.create_task(regulation_engine.run()))
         logger.debug("MAIN", "task spawned", task="regulation_engine.run")
 
     # Spawn other async tasks
-    asyncio.create_task(th_logger.log_loop())
+    _track_task(asyncio.create_task(th_logger.log_loop()))
     logger.debug("MAIN", "task spawned", task="th_logger.log_loop")
     if co2_logger_obj is not None:
-        asyncio.create_task(co2_logger_obj.log_loop())
+        _track_task(asyncio.create_task(co2_logger_obj.log_loop()))
         logger.debug("MAIN", "task spawned", task="co2_logger.log_loop")
     if soil_logger_obj is not None:
-        asyncio.create_task(soil_logger_obj.log_loop())
+        _track_task(asyncio.create_task(soil_logger_obj.log_loop()))
         logger.debug("MAIN", "task spawned", task="soil_logger.log_loop")
-    asyncio.create_task(reminder.monitor())
+    _track_task(asyncio.create_task(reminder.monitor()))
     logger.debug("MAIN", "task spawned", task="reminder.monitor")
-    asyncio.create_task(
-        led_handler.poll_button(
-            interval_ms=system_config.get("button_poll_ms", 50),
+    _track_task(
+        asyncio.create_task(
+            led_handler.poll_button(
+                interval_ms=system_config.get("button_poll_ms", 50),
+            )
         )
     )
     logger.debug("MAIN", "task spawned", task="led_handler.poll_button")
 
     if oled is not None:
-        asyncio.create_task(oled.refresh_loop())
+        _track_task(asyncio.create_task(oled.refresh_loop()))
         logger.debug("MAIN", "task spawned", task="oled.refresh_loop")
 
-    logger.info("MAIN", "All tasks spawned. System running.")
+    # Baseline for the task-leak delta: whatever is live right now is "normal",
+    # so a healthy run reports 0 forever and any drift is visible immediately.
+    _task_baseline = _live_task_count()
+    logger.info("MAIN", f"All tasks spawned. System running. ({_task_baseline} tasks)")
 
     # Main event loop with adaptive health-check interval:
     # - Normal: 60 s (configurable via system.health_check_interval_s)
@@ -1250,6 +1299,12 @@ async def main():
         if load_snapshot and logger.debug_enabled:
             logger.debug("MAIN", "runtime load", **load_snapshot)
 
+        # One figure, both sinks. The mem-trend line used to print -1 while the
+        # CSV cell for the same missing value was left empty, so a reader could
+        # not tell whether the two disagreed or simply spelled "unknown" two
+        # different ways.
+        task_count = load_snapshot.get("task_count", -1)
+
         # Persistent heap-trend sample (INFO, greppable) when enabled. Unlike
         # the debug "runtime load" line above, this reaches system.log without
         # debug_to_file, so a headless greenhouse records the slow climb toward
@@ -1257,7 +1312,6 @@ async def main():
         # this gc.collect(); post_alloc_b is the leak signal to watch.
         if diagnostics_config.get("mem_trend_log", False) and mem_alloc_pre is not None:
             reclaimed = mem_alloc_pre - mem_alloc
-            task_count = load_snapshot.get("task_count", -1)
             logger.info(
                 "MAIN",
                 "mem trend | "
@@ -1276,7 +1330,7 @@ async def main():
                 "mem_free_b": load_snapshot.get("mem_free_b"),
                 "mem_alloc_b": load_snapshot.get("mem_alloc_b"),
                 "mem_used_pct": load_snapshot.get("mem_used_pct"),
-                "tasks": load_snapshot.get("task_count"),
+                "tasks": task_count,
                 "queue_depth": write_queue.get_queue_size(),
                 "buffered": buffered,
                 "sd_fallback_writes": metrics["writes_to_fallback"],

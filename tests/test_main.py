@@ -455,6 +455,77 @@ class TestDescribeResetCause:
         assert main_module._describe_reset_cause() == "unknown"
 
 
+class _FakeTask:
+    """Minimal task handle stand-in with a settable done() result."""
+
+    def __init__(self, finished=False):
+        self._finished = finished
+
+    def done(self):
+        return self._finished
+
+
+class _OpaqueTask:
+    """A handle with no done() — some MicroPython builds hand these back."""
+
+
+class TestTaskLeakMetric:
+    """The metrics `tasks` column reports a DELTA, not an absolute count.
+
+    MicroPython's uasyncio has no all_tasks(), so the old hasattr() guard left
+    the cell empty in all 10 327 rows of the 2026-08-07 field run. Tracking the
+    handles main() spawns works on both runtimes, and a delta makes a healthy
+    run read 0 while any drift shows up immediately.
+    """
+
+    @staticmethod
+    def _seed(monkeypatch, tasks, baseline):
+        import main as main_module
+
+        monkeypatch.setattr(main_module, "_spawned_tasks", list(tasks))
+        monkeypatch.setattr(main_module, "_task_baseline", baseline)
+        return main_module
+
+    def test_healthy_run_reports_zero(self, monkeypatch):
+        m = self._seed(monkeypatch, [_FakeTask() for _ in range(9)], 9)
+        assert m._get_runtime_load_snapshot()["task_count"] == 0
+
+    def test_a_dead_task_reports_a_negative_delta(self, monkeypatch):
+        tasks = [_FakeTask() for _ in range(9)]
+        tasks[3] = _FakeTask(finished=True)
+        m = self._seed(monkeypatch, tasks, 9)
+        assert m._get_runtime_load_snapshot()["task_count"] == -1
+
+    def test_an_extra_task_reports_a_positive_delta(self, monkeypatch):
+        m = self._seed(monkeypatch, [_FakeTask() for _ in range(11)], 9)
+        assert m._get_runtime_load_snapshot()["task_count"] == 2
+
+    def test_handles_without_done_count_as_live(self, monkeypatch):
+        """No done() on the runtime must read as "healthy", not as a phantom leak."""
+        m = self._seed(monkeypatch, [_OpaqueTask() for _ in range(9)], 9)
+        assert m._live_task_count() == 9
+        assert m._get_runtime_load_snapshot()["task_count"] == 0
+
+    def test_a_throwing_done_counts_as_live(self, monkeypatch):
+        class _Angry:
+            def done(self):
+                raise RuntimeError("nope")
+
+        m = self._seed(monkeypatch, [_Angry(), _FakeTask()], 2)
+        assert m._live_task_count() == 2
+
+    def test_track_task_returns_the_handle(self, monkeypatch):
+        m = self._seed(monkeypatch, [], 0)
+        handle = _FakeTask()
+        assert m._track_task(handle) is handle
+        assert m._live_task_count() == 1
+
+    def test_snapshot_never_omits_the_key(self, monkeypatch):
+        """Both metric sinks read this key; an absent one is what left the CSV blank."""
+        m = self._seed(monkeypatch, [], 0)
+        assert "task_count" in m._get_runtime_load_snapshot()
+
+
 @pytest.mark.asyncio
 class TestMainHealthCheck:
     """Tests for main loop health-check logic."""
@@ -510,6 +581,80 @@ class TestMainHealthCheck:
                 await main_module.main()
 
         mock_logger.check_size.assert_called()
+
+    async def test_task_count_matches_in_both_metric_sinks(self, monkeypatch):
+        """The mem-trend line and the metrics CSV must print the same figure.
+
+        They used to disagree on how to spell "unknown": the log printed -1
+        while the CSV cell was left empty for the very same missing value.
+        """
+        import main as main_module
+
+        monkeypatch.setattr(main_module, "validate_config", lambda: True)
+        monkeypatch.setitem(DEVICE_CONFIG["diagnostics"], "mem_trend_log", True)
+        monkeypatch.setitem(DEVICE_CONFIG["diagnostics"], "metrics_log", True)
+
+        fake_gc = Mock()
+        fake_gc.mem_alloc = Mock(return_value=100_000)
+        fake_gc.mem_free = Mock(return_value=150_000)
+        fake_gc.collect = Mock()
+        monkeypatch.setattr(main_module, "gc", fake_gc)
+
+        rows = []
+        mock_metrics = Mock()
+        mock_metrics.write_row = Mock(side_effect=rows.append)
+        monkeypatch.setattr(main_module, "MetricsLogger", lambda *a, **kw: mock_metrics)
+
+        mock_hw = Mock()
+        mock_hw.setup.return_value = True
+        mock_hw.get_rtc.return_value = Mock()
+        mock_hw.is_sd_mounted.return_value = True
+        monkeypatch.setattr(main_module, "HardwareFactory", lambda *a, **kw: mock_hw)
+
+        mock_buffer = Mock()
+        mock_buffer.get_metrics.return_value = {
+            "buffer_entries": 0,
+            "writes_to_fallback": 0,
+            "fallback_migrations": 0,
+            "writes_to_primary": 0,
+            "write_failures": 0,
+        }
+        mock_buffer.is_primary_available.return_value = True
+        mock_buffer._buffers = {}
+        monkeypatch.setattr(main_module, "BufferManager", lambda *a, **kw: mock_buffer)
+
+        mock_logger = Mock()
+        monkeypatch.setattr(main_module, "EventLogger", lambda *a, **kw: mock_logger)
+        monkeypatch.setattr(main_module, "TempHumidityLogger", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "ServiceReminder", lambda *a, **kw: Mock())
+        mock_buzzer = Mock()
+        mock_buzzer.startup = AsyncMock()
+        monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
+        monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: Mock(run_post=AsyncMock(return_value=True)))
+        monkeypatch.setattr(main_module.asyncio, "create_task", _mock_create_task)
+
+        call_count = 0
+
+        async def limited_sleep(duration):
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 2:
+                raise asyncio.CancelledError()
+
+        monkeypatch.setattr(main_module.asyncio, "sleep", limited_sleep)
+        monkeypatch.setattr(main_module.asyncio, "sleep_ms", limited_sleep)
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with pytest.raises(asyncio.CancelledError):
+                await main_module.main()
+
+        assert rows, "no metrics row was written"
+        csv_tasks = rows[-1]["tasks"]
+        assert csv_tasks is not None  # the field-run symptom: an empty cell
+        trend_lines = [c.args[1] for c in mock_logger.info.call_args_list if "mem trend" in str(c.args[1])]
+        assert trend_lines, "no mem-trend line was logged"
+        assert f"tasks={csv_tasks} " in trend_lines[-1]
 
     async def test_health_check_warns_on_buffered_entries(self, monkeypatch):
         """When buffer has entries, main loop logs warning."""

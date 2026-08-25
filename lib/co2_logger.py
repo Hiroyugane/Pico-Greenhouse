@@ -159,6 +159,10 @@ class CO2Logger:
         self.override_active = False
         self.read_failures = 0
         self.write_failures = 0
+        # Cause of the most recent failed read, so the single edge WARN can
+        # name it. Set only on the failure path; never cleared, because a
+        # recovery message has no use for it.
+        self._last_read_error = "unknown"
         self._started_ms = _ticks_ms()
         self._sensor_root = sensor_root
         self._sensor_type = sensor_type
@@ -252,8 +256,10 @@ class CO2Logger:
         if self.health.record_failure():
             self.logger.warning(
                 "CO2Logger",
-                "sensor unreachable after {} failed reads; polling backed off to {}s".format(
-                    self.health.consecutive_failures, self.health.interval_s()
+                # The per-attempt detail is DEBUG by design, so this one line
+                # has to carry the cause or nobody ever sees it.
+                "sensor unreachable after {} failed reads; polling backed off to {}s ({})".format(
+                    self.health.consecutive_failures, self.health.interval_s(), self._last_read_error
                 ),
             )
             self._update_unreachable_alert(True)
@@ -374,6 +380,7 @@ class CO2Logger:
         # await between attempts gives the sensor time to respond
         # (~50-200 ms typical) without burning watchdog cycles.
         frame = None
+        read_error = None
         for attempt in range(self.max_retries):
             try:
                 if self.uart.any():
@@ -381,6 +388,7 @@ class CO2Logger:
                     if frame:
                         break
             except Exception as exc:
+                read_error = str(exc)[:80]
                 self.logger.debug("CO2Logger", f"uart read attempt failed: {exc}")
             if attempt < self.max_retries - 1:
                 await asyncio.sleep_ms(self.retry_delay_ms)
@@ -393,6 +401,15 @@ class CO2Logger:
         )
         if ppm is None:
             self.read_failures += 1
+            # No exception on this path when the sensor simply says nothing, so
+            # spell that out rather than leaving the edge WARN cause-less.
+            # Allocates only on the failure path.
+            if read_error is not None:
+                self._last_read_error = read_error
+            elif frame is None:
+                self._last_read_error = "no reply frame on the UART"
+            else:
+                self._last_read_error = "reply rejected (checksum or range)"
             in_warmup = (_ticks_ms() - self._started_ms) < self.warmup_s * 1000
             if in_warmup:
                 # Warm-up misses are expected, so they neither escalate nor

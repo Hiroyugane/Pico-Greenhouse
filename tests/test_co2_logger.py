@@ -552,6 +552,17 @@ class TestUnreachableReporting:
         assert "60s" in unreachable[0]
         assert log.read_failures == 50  # the existing counter still counts them all
 
+    def test_the_edge_warning_names_the_last_failure_cause(
+        self, time_provider, buffer_manager, mock_event_logger, fake_uart
+    ):
+        """Nothing raises on this path, so the cause has to be spelled out."""
+        log = self._logger(time_provider, buffer_manager, mock_event_logger, fake_uart)
+        for _ in range(3):
+            self._run(log._poll_once())
+        unreachable = [c.args[1] for c in mock_event_logger.warning.call_args_list if "unreachable" in c.args[1]]
+        assert len(unreachable) == 1
+        assert "no reply frame" in unreachable[0]
+
     def test_early_failures_stay_at_debug(self, time_provider, buffer_manager, mock_event_logger, fake_uart):
         """Two missed reads are a blip, not an outage."""
         log = self._logger(time_provider, buffer_manager, mock_event_logger, fake_uart)

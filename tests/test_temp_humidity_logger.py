@@ -726,6 +726,16 @@ class TestTHUnreachableReporting:
         assert "60s" in unreachable[0]
         assert th.read_failures == 50  # the existing counter is untouched
 
+    def test_the_edge_warning_names_the_last_failure_cause(self, time_provider, buffer_manager, mock_event_logger):
+        """The per-attempt detail is DEBUG, so the one WARN has to carry the cause."""
+        th = self._logger(time_provider, buffer_manager, mock_event_logger)
+        with patch("time.sleep"):
+            for _ in range(3):
+                th.read_sensor()
+        unreachable = [c.args[1] for c in mock_event_logger.warning.call_args_list if "unreachable" in c.args[1]]
+        assert len(unreachable) == 1
+        assert "bus wedged" in unreachable[0]
+
     def test_early_failures_stay_at_debug(self, time_provider, buffer_manager, mock_event_logger):
         th = self._logger(time_provider, buffer_manager, mock_event_logger)
         with patch("time.sleep"):

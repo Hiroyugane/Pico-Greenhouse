@@ -146,6 +146,10 @@ class SoilLogger:
         self.last_root_temp_c = None
         self.read_failures = 0
         self.write_failures = 0
+        # Cause of the most recent failed read, so the single edge WARN can
+        # name it. Set only on the failure path; never cleared, because a
+        # recovery message has no use for it.
+        self._last_read_error = "unknown"
         self._warn_active = False
         self._unreachable_flagged = False
         self._root_low_flagged = False
@@ -275,10 +279,14 @@ class SoilLogger:
     def _note_read_failure(self) -> None:
         """Report a missed reading per the shared edge-triggered policy."""
         if self.health.record_failure():
+            # The per-failure detail is DEBUG (it has to be — that is the whole
+            # point of the edge policy), so the ONE line an operator sees has
+            # to carry the cause with it. "no answer on the bus" and "short
+            # read" want different cables checked.
             self.logger.warning(
                 "SoilLogger",
-                "sensor unreachable after {} failed reads; polling backed off to {}s".format(
-                    self.health.consecutive_failures, self.health.interval_s()
+                "sensor unreachable after {} failed reads; polling backed off to {}s ({})".format(
+                    self.health.consecutive_failures, self.health.interval_s(), self._last_read_error
                 ),
             )
             self._update_unreachable_alert(True)
@@ -320,6 +328,9 @@ class SoilLogger:
             root_temp_c = self.sensor.temperature()
         except Exception as exc:
             self.read_failures += 1
+            # Allocates only on the failure path; truncated so a driver that
+            # stringifies a whole frame cannot blow the log line up.
+            self._last_read_error = str(exc)[:80]
             self.logger.debug("SoilLogger", f"sensor read failed: {exc}")
             self._note_read_failure()
             return

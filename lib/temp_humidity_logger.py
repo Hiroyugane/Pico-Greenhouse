@@ -131,6 +131,10 @@ class TempHumidityLogger:
         self.last_humidity = None
         self.read_failures = 0
         self.write_failures = 0
+        # Cause of the most recent failed read, so the single edge WARN can
+        # name it. Set only on the failure path; never cleared, because a
+        # recovery message has no use for it.
+        self._last_read_error = "unknown"
         self._consecutive_failures = 0
         self._unreachable_flagged = False
         self.current_date = None
@@ -258,8 +262,12 @@ class TempHumidityLogger:
                         hum=hum,
                         attempt=attempt + 1,
                     )
+                    self._last_read_error = "out of range: {}C {}%".format(temp, hum)
                     self.logger.warning("TempHumidityLogger", f"Reading out of range: {temp}degC, {hum}%")
             except Exception as e:
+                # Allocates only on the failure path; truncated so a driver
+                # that stringifies a frame cannot blow the log line up.
+                self._last_read_error = str(e)[:80]
                 self.logger.debug(
                     "TempHumidityLogger",
                     f"Read attempt {attempt + 1}/{self.max_retries} failed: {e}",
@@ -349,8 +357,10 @@ class TempHumidityLogger:
         if self.health.record_failure():
             self.logger.warning(
                 "TempHumidityLogger",
-                "sensor unreachable after {} failed reads; polling backed off to {}s".format(
-                    self.health.consecutive_failures, self.health.interval_s()
+                # The per-attempt detail is DEBUG by design, so this one line
+                # has to carry the cause or nobody ever sees it.
+                "sensor unreachable after {} failed reads; polling backed off to {}s ({})".format(
+                    self.health.consecutive_failures, self.health.interval_s(), self._last_read_error
                 ),
             )
             self._update_unreachable_alert(True)

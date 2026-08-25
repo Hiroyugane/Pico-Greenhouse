@@ -226,6 +226,20 @@ PAGE2 = [
                 ("Soil STEMMA", "moisture + root temp, I2C"),
             ],
         ),
+        ("gap", None),
+        # Moved here from column 3: the alert-key list outgrew its column when
+        # the intake-sensor, clock-hold and task-leak keys were added.
+        ("head", "FIRST AID"),
+        (
+            "kv",
+            [
+                ("PHASENWECHSEL", "not a fault; press to confirm"),
+                ("SD LED on", "reseat the card, then SD screen, hold"),
+                ("LATCHED", "fix climate, then power cycle"),
+                ("Blank screen", "tap the button; it sleeps at 120 s"),
+                ("Nothing runs", "check 12 V input and the fuse"),
+            ],
+        ),
     ],
     # ---- column 3 -------------------------------------------------------
     [
@@ -250,18 +264,10 @@ PAGE2 = [
                 ("WRN soil_unreach", "soil probe silent; check its plug"),
                 ("WRN root_temp_low", "root zone under 20 C"),
                 ("WRN root_temp_hig", "root zone over 26 C"),
-            ],
-        ),
-        ("gap", None),
-        ("head", "FIRST AID"),
-        (
-            "kv",
-            [
-                ("PHASENWECHSEL", "not a fault; press to confirm"),
-                ("SD LED on", "reseat the card, then SD screen, hold"),
-                ("LATCHED", "fix climate, then power cycle"),
-                ("Blank screen", "tap the button; it sleeps at 120 s"),
-                ("Nothing runs", "check 12 V input and the fuse"),
+                ("WRN ext_sht31_unr", "intake air sensor silent; check its plug"),
+                ("WRN rtc_phase_held", "clock date wrong, grow phase frozen:"),
+                ("", "replace the clock battery and set the time"),
+                ("WRN task_leak", "a background job stopped; power cycle"),
             ],
         ),
     ],

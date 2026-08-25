@@ -623,21 +623,38 @@ async def main():
         )
     except Exception as e:
         logger.error("MAIN", f"TempHumidityLogger init failed: {e}")
-        # Create a minimal logger without status manager to keep system running
-        th_logger = TempHumidityLogger(
-            sensor=sht31,
-            time_provider=time_provider,
-            buffer_manager=buffer_manager,
-            logger=logger,
-            interval=th_config.get("interval_s", 30),
-            sensor_root=DEVICE_CONFIG["paths"]["sensor_root"],
-            sensor_type=th_config.get("sensor_type", "th"),
-            max_retries=th_config.get("max_retries", 3),
-            retry_delay_s=th_config.get("retry_delay_s", 0.5),
-            max_history=DEVICE_CONFIG.get("display", {}).get("max_history", 120),
-            write_queue=write_queue,
-            **health_kwargs,
-        )
+        # Create a minimal logger without status manager to keep system running.
+        minimal_kwargs = {
+            "sensor": sht31,
+            "time_provider": time_provider,
+            "buffer_manager": buffer_manager,
+            "logger": logger,
+            "interval": th_config.get("interval_s", 30),
+            "sensor_root": DEVICE_CONFIG["paths"]["sensor_root"],
+            "sensor_type": th_config.get("sensor_type", "th"),
+            "max_retries": th_config.get("max_retries", 3),
+            "retry_delay_s": th_config.get("retry_delay_s", 0.5),
+            "max_history": DEVICE_CONFIG.get("display", {}).get("max_history", 120),
+            "write_queue": write_queue,
+        }
+        with_health = dict(minimal_kwargs)
+        with_health.update(health_kwargs)
+        try:
+            th_logger = TempHumidityLogger(**with_health)
+        except TypeError as te:
+            # The logger is a FROZEN module and an SD/OTA payload deliberately
+            # skips frozen modules — so a new main.py can meet an old frozen
+            # TempHumidityLogger that has never heard of the sensor-health
+            # arguments. Without this second attempt the TypeError escapes
+            # main(), the watchdog resets, and the only way back in is a
+            # reflash. Degrade instead, and say exactly what to do about it.
+            logger.error(
+                "MAIN",
+                "TempHumidityLogger rejected the sensor-health arguments "
+                f"({te}) — running with a pre-freeze logger signature. "
+                "This release must be FLASHED; an OTA drop cannot replace frozen modules.",
+            )
+            th_logger = TempHumidityLogger(**minimal_kwargs)
 
     wdt.feed()  # Feed after TempHumidityLogger init
 
@@ -801,6 +818,16 @@ async def main():
                 f"root {soil_config.get('root_temp_min_c', 20.0)}-"
                 f"{soil_config.get('root_temp_max_c', 26.0)}C)",
             )
+        except TypeError as e:
+            # Same frozen-module hazard as the TH logger above, but this one
+            # already degrades safely (soil monitoring simply stays absent),
+            # so name the cause rather than adding a second construction.
+            logger.warning(
+                "MAIN",
+                f"SoilLogger rejected its arguments ({e}) — pre-freeze module signature; "
+                "soil monitoring stays off until the firmware is FLASHED.",
+            )
+            soil_logger_obj = None
         except Exception as e:
             logger.warning("MAIN", f"SoilLogger init failed (non-critical): {e}")
             soil_logger_obj = None

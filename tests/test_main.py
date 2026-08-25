@@ -1634,3 +1634,128 @@ class TestBootPhaseNotice:
         assert "cb" in captured
         captured["cb"]("stretch", "bloom", (2026, 10, 6), {"rh_ideal": 43.0})
         oled.show_phase_notice.assert_called_once_with("stretch", "bloom", (2026, 10, 6), {"rh_ideal": 43.0})
+
+
+def _standard_boot(monkeypatch, oled_factory=None, sleeps=1, needs_notice=False, acknowledged="stretch"):
+    """Stub everything main() reaches for and stop it in the health loop.
+
+    Returns the handles a test asserts against. ``sleeps=1`` cancels at the
+    first health-loop sleep (nothing before the loop awaits asyncio.sleep);
+    ``sleeps=2`` lets exactly one health iteration run first.
+    """
+    import main as main_module
+
+    oled = Mock(display_on=True)
+    monkeypatch.setattr(main_module, "OLEDDisplay", oled_factory or (lambda *a, **kw: oled))
+
+    store = Mock()
+    store.needs_notice = Mock(return_value=needs_notice)
+    store.last_acknowledged = Mock(return_value=acknowledged)
+    monkeypatch.setattr(main_module, "PhaseNoticeStore", lambda *a, **kw: store)
+
+    monkeypatch.setattr(main_module, "validate_config", lambda: True)
+
+    hw = Mock()
+    hw.setup.return_value = True
+    hw.get_rtc.return_value = Mock()
+    hw.is_sd_mounted.return_value = True
+    monkeypatch.setattr(main_module, "HardwareFactory", lambda *a, **kw: hw)
+
+    buffer_manager = Mock()
+    buffer_manager.get_metrics.return_value = {
+        "buffer_entries": 0,
+        "writes_to_fallback": 0,
+        "fallback_migrations": 0,
+        "writes_to_primary": 0,
+        "write_failures": 0,
+    }
+    buffer_manager.is_primary_available.return_value = True
+    buffer_manager._buffers = {}
+    monkeypatch.setattr(main_module, "BufferManager", lambda *a, **kw: buffer_manager)
+
+    logger = Mock()
+    monkeypatch.setattr(main_module, "EventLogger", lambda *a, **kw: logger)
+    monkeypatch.setattr(main_module, "TempHumidityLogger", lambda *a, **kw: Mock())
+    led = Mock()
+    monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: led)
+    monkeypatch.setattr(main_module, "ServiceReminder", lambda *a, **kw: Mock())
+    buzzer = Mock()
+    buzzer.startup = AsyncMock()
+    # A real dict: main() lists the pattern keys in its boot log, and a bare
+    # Mock is not iterable — which would send the buzzer down the init-failed
+    # path and quietly make every "did it beep?" assertion below vacuous.
+    buzzer.patterns = {"phase_pattern": [200, 100]}
+    monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: buzzer)
+    status = Mock(run_post=AsyncMock(return_value=True))
+    monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: status)
+    monkeypatch.setattr(main_module.asyncio, "create_task", _mock_create_task)
+
+    seen = {"n": 0}
+
+    async def limited_sleep(_):
+        seen["n"] += 1
+        if seen["n"] >= sleeps:
+            raise asyncio.CancelledError()
+
+    monkeypatch.setattr(main_module.asyncio, "sleep", limited_sleep)
+    monkeypatch.setattr(main_module.asyncio, "sleep_ms", limited_sleep)
+
+    return {
+        "main": main_module,
+        "oled": oled,
+        "store": store,
+        "logger": logger,
+        "led": led,
+        "buzzer": buzzer,
+        "status": status,
+        "hw": hw,
+    }
+
+
+async def _run_main(rig):
+    with patch("time.localtime", return_value=FAKE_LOCALTIME):
+        with pytest.raises(asyncio.CancelledError):
+            await rig["main"].main()
+
+
+@pytest.mark.asyncio
+class TestPreFreezeLoggerSignature:
+    """An SD/OTA payload skips frozen modules, so a new main.py can meet an old one.
+
+    TempHumidityLogger is frozen (tools/freeze_manifest.py TIER2) and gained
+    sensor-health arguments this release. The fallback construction used to
+    pass them too, so BOTH attempts raised TypeError, the exception escaped
+    main(), and the watchdog reset the board — a bootloop with no way in but
+    a reflash.
+    """
+
+    HEALTH_KEYS = ("warn_after_failures", "backoff_start_s", "backoff_max_s", "unreachable_heartbeat_s")
+
+    async def test_a_logger_that_rejects_the_health_kwargs_still_boots(self, monkeypatch):
+        rig = _standard_boot(monkeypatch)
+        built = []
+
+        def th_factory(*a, **kw):
+            if any(key in kw for key in self.HEALTH_KEYS):
+                raise TypeError("unexpected keyword argument 'warn_after_failures'")
+            built.append(kw)
+            return Mock()
+
+        monkeypatch.setattr(rig["main"], "TempHumidityLogger", th_factory)
+
+        await _run_main(rig)  # the symptom was this raising TypeError instead
+
+        assert len(built) == 1  # the second fallback, without the health kwargs
+        assert "status_manager" not in built[0]
+        errors = [str(c) for c in rig["logger"].error.call_args_list]
+        assert any("FLASHED" in e for e in errors), errors
+
+    async def test_a_current_logger_never_takes_the_degraded_path(self, monkeypatch):
+        rig = _standard_boot(monkeypatch)
+        built = []
+        monkeypatch.setattr(rig["main"], "TempHumidityLogger", lambda *a, **kw: built.append(kw) or Mock())
+
+        await _run_main(rig)
+
+        assert len(built) == 1
+        assert "warn_after_failures" in built[0]

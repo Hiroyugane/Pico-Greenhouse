@@ -1308,6 +1308,148 @@ class TestImplausibleRtcDate:
         assert engine.get_state()["phase"] == "stretch"
 
 
+class _StubRelay:
+    """Stand-in for RelayHysteresisAdapter with a directly settable state."""
+
+    def __init__(self):
+        self.active = False
+
+
+class _StubHealth:
+    def __init__(self, unreachable=False):
+        self.unreachable = unreachable
+
+    def is_unreachable(self):
+        return self.unreachable
+
+
+def _watchdog_rig(window_s=100.0, min_rise=0.5):
+    """Humidifier rig whose relay state and sensor health the test controls.
+
+    The detector is driven through _check_humidifier directly: the states that
+    matter here (a command wobbling across the hysteresis band, a frozen
+    reading behind a dead sensor) cannot be produced by feeding physical
+    numbers into the surface, and steering the surface into them would test
+    the surface rather than the watchdog.
+    """
+    rig = _HumidifierRig(window_s=window_s, min_rise=min_rise)
+    relay = _StubRelay()
+    rig.engine._hum_adapter = relay
+    rig.engine._hum_use_adapter = True
+    return rig, relay
+
+
+class TestHumidifierWatchdogRelease:
+    """The warning has to be able to end, and it has to judge the right signal.
+
+    A warning that can never clear is not a conservative choice: StatusManager
+    sounds the buzzer only on the empty→non-empty edge of the warning set, so
+    one stuck key silences the audible alert for every warning raised after it
+    — soil_low, root_temp_*, rh_target_unreachable, the lot.
+    """
+
+    KEY = "humidifier_ineffective"
+
+    def test_advancing_into_bloom_clears_a_raised_warning(self):
+        """Bloom unplugs the humidifier; the RH-rise edge can never come."""
+        status = FakeStatus()
+
+        def mutate(reg):
+            reg["humidifier_watchdog"]["ineffective_window_s"] = 100.0
+
+        engine, adapters, names, clock = _sched_engine(
+            offset_days=34, temp=23.0, hum=15.0, mutate=mutate, status_manager=status
+        )
+        for i in range(10):  # a full window of unanswered demand in stretch
+            engine.tick(now_s=float(i * 30))
+        assert self.KEY in status.active
+
+        clock.date = _date_at(35)
+        engine.tick(now_s=400.0)
+        assert engine.get_state()["phase"] == "bloom"
+        assert self.KEY not in status.active
+
+    def test_a_window_with_the_relay_open_releases_the_warning(self):
+        """'Runs without effect' stops being true once it stops running."""
+        rig, relay = _watchdog_rig()
+        relay.active = True
+        for t in range(0, 160, 30):
+            rig.engine._check_humidifier(100.0, 60.0, float(t))
+        assert self.KEY in rig.status.active
+
+        relay.active = False
+        for t in range(180, 330, 30):  # a full window with the relay open
+            rig.engine._check_humidifier(0.0, 60.0, float(t))
+        assert self.KEY not in rig.status.active
+        assert rig.status.calls == [(self.KEY, True), (self.KEY, False)]
+
+    def test_a_short_off_spell_does_not_release_it(self):
+        rig, relay = _watchdog_rig()
+        relay.active = True
+        for t in range(0, 160, 30):
+            rig.engine._check_humidifier(100.0, 60.0, float(t))
+        assert self.KEY in rig.status.active
+
+        relay.active = False
+        for t in (180.0, 210.0, 240.0):  # 60 s of a 100 s window
+            rig.engine._check_humidifier(0.0, 60.0, t)
+        assert self.KEY in rig.status.active
+
+    def test_a_command_oscillating_inside_the_hysteresis_band_still_fires(self):
+        """The relay closes above 18 and only opens below 7.
+
+        A command bouncing 10-25 therefore holds the appliance CONTINUOUSLY
+        energised while a command-threshold window restarts on every dip — a
+        dry tank under a wobbling command was invisible. Judge the relay.
+        """
+        rig, relay = _watchdog_rig()
+        relay.active = True  # never opens: every command stays above off_below
+        commands = (25.0, 10.0, 25.0, 10.0, 25.0, 10.0)
+        for i, command in enumerate(commands):
+            rig.engine._check_humidifier(command, 60.0, float(i * 30))
+        assert self.KEY in rig.status.active
+        assert rig.alarms == ["supply"]
+
+    def test_a_dead_sensor_disarms_instead_of_convicting_a_full_tank(self):
+        """last_humidity FREEZES on failure, so a dead SHT31 reads as flat RH."""
+        rig, relay = _watchdog_rig()
+        rig.engine._th_health = _StubHealth(unreachable=True)
+        relay.active = True
+        for t in range(0, 400, 30):
+            rig.engine._check_humidifier(100.0, 60.0, float(t))
+        assert rig.status.calls == []
+        assert rig.alarms == []
+
+    def test_the_sensor_coming_back_re_arms_the_watchdog(self):
+        rig, relay = _watchdog_rig()
+        health = _StubHealth(unreachable=True)
+        rig.engine._th_health = health
+        relay.active = True
+        for t in range(0, 400, 30):
+            rig.engine._check_humidifier(100.0, 60.0, float(t))
+        assert rig.status.calls == []
+
+        health.unreachable = False
+        for t in range(400, 560, 30):
+            rig.engine._check_humidifier(100.0, 60.0, float(t))
+        assert self.KEY in rig.status.active
+
+    def test_a_sensor_dying_does_not_clear_a_standing_warning(self):
+        """Loss of evidence is not evidence of recovery — the tank is still dry."""
+        rig, relay = _watchdog_rig()
+        health = _StubHealth()
+        rig.engine._th_health = health
+        relay.active = True
+        for t in range(0, 160, 30):
+            rig.engine._check_humidifier(100.0, 60.0, float(t))
+        assert self.KEY in rig.status.active
+
+        health.unreachable = True
+        for t in range(180, 600, 30):
+            rig.engine._check_humidifier(100.0, 60.0, float(t))
+        assert self.KEY in rig.status.active
+
+
 # --- RH-target reachability monitor --------------------------------------
 
 
@@ -1448,6 +1590,33 @@ class TestRhTargetUnreachable:
         assert rig.reads > 0
         assert rig.warned is False
         assert rig.status.calls == []
+
+    def test_a_sensor_gap_discards_the_accumulated_window(self):
+        """Otherwise the first reading after an outage trips it on one sample."""
+        rig = _RoomRig(offset_days=35, room=(21.0, 55.0))
+        rig.run(60.0)  # 60 s of a 100 s window banked
+        rig.room = None
+        rig.tick()  # the sensor goes quiet
+        rig.room = (21.0, 55.0)
+        rig.run(60.0)  # 60 s more: enough only if the gap kept the bank
+        assert rig.warned is False
+        rig.run(100.0)  # a full fresh window does fire it
+        assert rig.warned is True
+
+    def test_a_silent_sensor_releases_a_raised_warning(self):
+        """A warning that can only clear from a dead sensor's readings never clears."""
+        rig = _RoomRig(offset_days=35, room=(21.0, 55.0))
+        rig.run(150.0)
+        assert rig.warned is True
+
+        rig.room = None
+        rig.tick()
+        assert rig.warned is False
+        assert rig.status.calls == [(rig.KEY, True), (rig.KEY, False)]
+
+        rig.room = (21.0, 55.0)  # and it re-establishes within one window
+        rig.run(150.0)
+        assert rig.warned is True
 
     def test_disabled_sensor_is_never_even_read(self):
         """enabled: False (the shipped default) → no I2C read, no verdict."""

@@ -166,9 +166,19 @@ class RegulationEngine:
         self._hum_window_s = float(watchdog["ineffective_window_s"]) if watchdog else 0.0
         self._hum_min_rise = float(watchdog["ineffective_min_rise"]) if watchdog else 0.0
         self._hum_on_since = None  # monotonic start of the current on-window
+        self._hum_off_since = None  # monotonic start of the current off-window
         self._hum_win_rh = 0.0  # RH when that window opened
         self._hum_warned = False  # warning currently raised (edge guard)
         self._hum_warn_rh = 0.0  # RH when it was raised (the recovery baseline)
+        # The relay, not the raw command, is what "running" means: the adapter
+        # holds the appliance on from on_above all the way down to off_below,
+        # so a command oscillating between those two never interrupts it.
+        # Bound once — the per-tick path reads a flag and an attribute.
+        self._hum_adapter = adapters[self._i_humidifier]
+        self._hum_use_adapter = hasattr(self._hum_adapter, "active")
+        # The TH logger's health machine, so the watchdog can tell a real flat
+        # RH from the frozen last_humidity a dead sensor leaves behind.
+        self._th_health = getattr(th_logger, "health", None)
 
         follower = regulators["heater_follower"]
         self._follower_gain = float(follower["follower_gain"])
@@ -297,6 +307,16 @@ class RegulationEngine:
         # the surfaces were frozen from.
         hum_over = overrides.get("humidifier") if overrides else None
         self._humidifier_silenced = bool(hum_over) and float(hum_over.get("mult", 1.0)) == 0.0
+        # A phase that silences the humidifier retires every claim about its
+        # effectiveness: the command is 0 for the whole phase, so a raised
+        # warning could never clear on its own — and a warning set that is
+        # permanently non-empty silences the buzzer for EVERY later warning,
+        # because StatusManager only sounds it on the empty→non-empty edge.
+        # (hasattr: __init__ activates a profile before the watchdog exists.)
+        if self._humidifier_silenced and hasattr(self, "_hum_warned"):
+            self._release_hum_warning()
+            self._hum_on_since = None
+            self._hum_off_since = None
         self._profile_name = name
 
     def _phase_for_day(self, day_offset):
@@ -530,7 +550,17 @@ class RegulationEngine:
         """
         room = self._ext_h
         if room is None:
-            return  # sensor disabled or not answering: no opinion either way
+            # Sensor disabled or not answering: no opinion either way, and
+            # crucially no MEMORY either. A surviving _rh_over_since would let
+            # the first reading after an outage trip the whole window
+            # instantly on one sample, and a surviving warning could never
+            # clear while the sensor stayed dead. Both are re-established
+            # within one window once readings come back.
+            self._rh_over_since = None
+            if self._rh_warned:
+                self._rh_warned = False
+                self._set_warning("rh_target_unreachable", False)
+            return
         ideal = self._norm.ideal(self._hum_idx, self._b)
         if room - ideal <= self._rh_margin:
             self._rh_over_since = None
@@ -587,13 +617,41 @@ class RegulationEngine:
         interruption of the on-state restarts the window, because a humidifier
         that was off for part of it was never given the chance.
 
-        Clearing is one rule, not two: the warning drops as soon as RH climbs
-        ineffective_min_rise above where it stood when the warning fired. That
-        covers both recoveries — a refilled tank under an unchanged command, and
-        a command that dropped away while the room came back on its own.
+        Clearing has three routes, all of them "the claim is no longer
+        supported": RH climbs ineffective_min_rise above where it stood when
+        the warning fired (a refilled tank, or a room that recovered on its
+        own); the appliance has not been energised for a full window, so
+        "running without effect" describes nothing; or the phase schedule
+        silences the humidifier outright (handled in _activate_profile). A
+        warning with no exit is worse than no warning — it pins the
+        StatusManager's warning set permanently non-empty, and the buzzer only
+        sounds on the empty→non-empty edge.
 
-        Allocation-free: four scalars and an early return.
+        Allocation-free: a handful of scalars and an early return.
         """
+        on = self._humidifier_on(command)
+
+        # Off-window: track how long the relay has been open, and release a
+        # standing warning once that reaches a full judgement window.
+        if on:
+            self._hum_off_since = None
+        elif self._hum_off_since is None:
+            self._hum_off_since = now_s
+        elif self._hum_warned and now_s - self._hum_off_since >= self._hum_window_s:
+            self._release_hum_warning()
+
+        health = self._th_health
+        if health is not None and health.is_unreachable():
+            # last_humidity FREEZES on sensor failure — it is never reset to
+            # None — so a dead SHT31 presents as a perfectly flat RH and would
+            # convict a full reservoir, then latch, because the frozen delta
+            # can never rise either. Lost evidence is not evidence: disarm the
+            # window and judge nothing. A raised warning is deliberately NOT
+            # cleared here (that would be evidence of recovery, which this is
+            # not); the off-window and the RH-rise edge above own the release.
+            self._hum_on_since = None
+            return
+
         if hum is None:
             # A blind sensor cannot testify either way. Disarm rather than
             # accumulate a window against readings that are not there.
@@ -601,11 +659,10 @@ class RegulationEngine:
             return
 
         if self._hum_warned and hum - self._hum_warn_rh >= self._hum_min_rise:
-            self._hum_warned = False
+            self._release_hum_warning()
             self._hum_on_since = None
-            self._set_warning("humidifier_ineffective", False)
 
-        if command <= self._hum_on_above:
+        if not on:
             self._hum_on_since = None
             return
 
@@ -627,10 +684,29 @@ class RegulationEngine:
                 self._event("warning", "humidifier commanded on with no RH response")
                 self._alarm("supply")
         elif self._hum_warned:
-            self._hum_warned = False
-            self._set_warning("humidifier_ineffective", False)
+            self._release_hum_warning()
         self._hum_on_since = now_s
         self._hum_win_rh = hum
+
+    def _humidifier_on(self, command):
+        """Is the appliance actually energised right now?
+
+        The command is not the answer. RelayHysteresisAdapter closes above
+        on_above (18) and only opens below off_below (7), so a command
+        oscillating 10-25 holds the relay CONTINUOUSLY on while resetting a
+        command-threshold window on every dip — a dry tank under a wobbling
+        command would never be detected. Ask the adapter that owns the relay;
+        fall back to the threshold compare for adapters that cannot say.
+        """
+        if self._hum_use_adapter:
+            return bool(self._hum_adapter.active)
+        return command > self._hum_on_above
+
+    def _release_hum_warning(self):
+        """Drop the effectiveness warning if it is raised (idempotent)."""
+        if self._hum_warned:
+            self._hum_warned = False
+            self._set_warning("humidifier_ineffective", False)
 
     # -- target vector build ----------------------------------------------
 

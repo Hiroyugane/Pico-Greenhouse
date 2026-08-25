@@ -1718,6 +1718,19 @@ async def _run_main(rig):
             await rig["main"].main()
 
 
+def _capture_engine_kwargs(monkeypatch, main_module):
+    """Record the kwargs main() builds the RegulationEngine with."""
+    captured = {}
+    real = main_module.RegulationEngine
+
+    def factory(*a, **kw):
+        captured.update(kw)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(main_module, "RegulationEngine", factory)
+    return captured
+
+
 @pytest.mark.asyncio
 class TestPreFreezeLoggerSignature:
     """An SD/OTA payload skips frozen modules, so a new main.py can meet an old one.
@@ -1759,3 +1772,112 @@ class TestPreFreezeLoggerSignature:
 
         assert len(built) == 1
         assert "warn_after_failures" in built[0]
+
+
+@pytest.mark.asyncio
+class TestIntakeSensorHealth:
+    """The intake SHT31 was the one sensor whose failures vanished entirely.
+
+    external_read() swallowed every exception into a None — no log, no warning
+    key, no backoff — so a dead intake probe presented to the exhaust gate and
+    the RH-reachability monitor as "nothing to report", forever.
+    """
+
+    KEY = "ext_sht31_unreachable"
+
+    @staticmethod
+    def _flaky_sht31(monkeypatch, main_module, state):
+        class FlakySHT31:
+            def __init__(self, *a, **kw):
+                pass
+
+            def measure(self):
+                state["reads"] += 1
+                if state["fail"]:
+                    raise OSError("intake bus wedged")
+
+            @property
+            def temperature(self):
+                return 21.0
+
+            @property
+            def humidity(self):
+                return 55.0
+
+        monkeypatch.setattr(main_module, "SHT31", FlakySHT31)
+
+    @staticmethod
+    def _controllable_health(monkeypatch, main_module, clock):
+        real = main_module.SensorHealth
+        monkeypatch.setattr(
+            main_module,
+            "SensorHealth",
+            lambda **kw: real(time_source=lambda: clock["t"], **kw),
+        )
+
+    async def test_failures_warn_once_and_recovery_clears(self, monkeypatch):
+        rig = _standard_boot(monkeypatch)
+        state = {"fail": True, "reads": 0}
+        clock = {"t": 0.0}
+        self._flaky_sht31(monkeypatch, rig["main"], state)
+        self._controllable_health(monkeypatch, rig["main"], clock)
+        kwargs = _capture_engine_kwargs(monkeypatch, rig["main"])
+
+        await _run_main(rig)
+
+        read = kwargs["external_read"]
+        assert read is not None
+        for _ in range(3):
+            assert read() is None
+        warnings = [str(c) for c in rig["logger"].warning.call_args_list if "intake SHT31" in str(c)]
+        assert len(warnings) == 1
+        assert "intake bus wedged" in warnings[0]  # the cause, not just the count
+        assert [c.args for c in rig["status"].set_warning.call_args_list if c.args[0] == self.KEY] == [
+            (self.KEY, True)
+        ]
+
+        clock["t"] = 400.0  # past the backoff
+        state["fail"] = False
+        assert read() == (21.0, 55.0)
+        assert [c.args for c in rig["status"].set_warning.call_args_list if c.args[0] == self.KEY] == [
+            (self.KEY, True),
+            (self.KEY, False),
+        ]
+        recovered = [str(c) for c in rig["logger"].info.call_args_list if "intake SHT31 recovered" in str(c)]
+        assert len(recovered) == 1
+
+    async def test_a_dead_probe_is_not_hammered_every_tick(self, monkeypatch):
+        """Backoff has to reach the actual I2C attempt, not just the log line."""
+        rig = _standard_boot(monkeypatch)
+        state = {"fail": True, "reads": 0}
+        clock = {"t": 0.0}
+        self._flaky_sht31(monkeypatch, rig["main"], state)
+        self._controllable_health(monkeypatch, rig["main"], clock)
+        kwargs = _capture_engine_kwargs(monkeypatch, rig["main"])
+
+        await _run_main(rig)
+
+        read = kwargs["external_read"]
+        for _ in range(3):
+            read()
+        assert state["reads"] == 3  # unreachable now, backed off to 60 s
+        for _ in range(20):
+            assert read() is None
+        assert state["reads"] == 3  # not one more bus transaction
+
+    async def test_a_healthy_probe_is_never_throttled(self, monkeypatch):
+        """The engine already paces this at tick_s; a None every other tick
+        would disarm the RH-reachability window it feeds."""
+        rig = _standard_boot(monkeypatch)
+        state = {"fail": False, "reads": 0}
+        clock = {"t": 0.0}
+        self._flaky_sht31(monkeypatch, rig["main"], state)
+        self._controllable_health(monkeypatch, rig["main"], clock)
+        kwargs = _capture_engine_kwargs(monkeypatch, rig["main"])
+
+        await _run_main(rig)
+
+        read = kwargs["external_read"]
+        for _ in range(10):
+            assert read() == (21.0, 55.0)
+        assert state["reads"] == 10

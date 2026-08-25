@@ -149,6 +149,10 @@ _feed_boot_wdt()
 from lib.relay import RelayController
 
 try:
+    from lib.sensor_health import SensorHealth
+except ImportError:  # frozen into the firmware as a top-level module
+    from sensor_health import SensorHealth
+try:
     from lib.sht31 import SHT31
 except ImportError:  # frozen into the firmware as a top-level module
     from sht31 import SHT31
@@ -1013,19 +1017,63 @@ async def main():
         }
         reg_adapters = [adapter_by_name[n] for n in _REG_NAMES]
 
-        # Optional second SHT31 (external air) gates exhaust effectiveness.
+        # Optional second SHT31 (external air) gates exhaust effectiveness and
+        # feeds the RH-reachability monitor. It used to be the ONE sensor whose
+        # failures were swallowed whole — no log, no warning key, no backoff —
+        # so a dead intake probe presented as "the room is fine" forever.
         external_read = None
         ext_cfg = reg_cfg["external_sensor"]
         if ext_cfg["enabled"]:
             try:
                 ext_sht = SHT31(i2c=hardware.get_i2c(), address=ext_cfg["i2c_address"])
+                # normal_interval_s = 0: the engine already paces this read at
+                # regulation.tick_s, and throttling a HEALTHY sensor here would
+                # feed the monitors a None every other tick. The health machine
+                # is here for the backoff ladder while the probe is dead and
+                # for the one-WARN/one-INFO edge policy every other sensor has.
+                ext_health = SensorHealth(normal_interval_s=0, **health_kwargs)
+                ext_state = {"err": "", "flagged": False}
+
+                def _ext_alert(active):
+                    """Edge-triggered operator warning; repeated calls are free."""
+                    if active == ext_state["flagged"]:
+                        return
+                    ext_state["flagged"] = active
+                    try:
+                        status_manager.set_warning("ext_sht31_unreachable", active)
+                    except Exception as exc:
+                        logger.debug("MAIN", f"intake SHT31 alert failed: {exc}")
 
                 def external_read():
+                    """(t, h) or None. None means "no fresh reading", nothing more."""
+                    if not ext_health.poll_due():
+                        return None  # backed off: do not touch a wedged bus
                     try:
                         ext_sht.measure()
-                        return (ext_sht.temperature, ext_sht.humidity)
-                    except Exception:
+                        reading = (ext_sht.temperature, ext_sht.humidity)
+                    except Exception as exc:
+                        ext_state["err"] = str(exc)[:80]
+                        if ext_health.record_failure():
+                            logger.warning(
+                                "MAIN",
+                                "intake SHT31 unreachable after {} failed reads; "
+                                "polling backed off to {}s ({})".format(
+                                    ext_health.consecutive_failures,
+                                    ext_health.interval_s(),
+                                    ext_state["err"],
+                                ),
+                            )
+                            _ext_alert(True)
                         return None
+                    if ext_health.record_success():
+                        logger.info(
+                            "MAIN",
+                            "intake SHT31 recovered after {}s unreachable ({} failed reads total)".format(
+                                ext_health.last_outage_s, ext_health.total_failures
+                            ),
+                        )
+                    _ext_alert(False)
+                    return reading
 
                 logger.info("MAIN", f"External SHT31 at 0x{ext_cfg['i2c_address']:02X} gates exhaust")
             except Exception as e:

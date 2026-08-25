@@ -1529,3 +1529,108 @@ class TestMainSDFailHard:
         # set_sd_status is called at least twice: once before POST (initial
         # reflection) and once immediately after POST (re-assert).
         assert mock_sm.set_sd_status.call_count >= 2
+
+
+@pytest.mark.asyncio
+class TestBootPhaseNotice:
+    """Boot-time re-raise of an unacknowledged grow-phase change."""
+
+    @staticmethod
+    def _boot(monkeypatch, needs_notice, acknowledged="stretch"):
+        """Run main() to its first sleep and return (oled, store) mocks."""
+        import main as main_module
+
+        oled = Mock(display_on=True)
+        monkeypatch.setattr(main_module, "OLEDDisplay", lambda *a, **kw: oled)
+
+        store = Mock()
+        store.needs_notice = Mock(return_value=needs_notice)
+        store.last_acknowledged = Mock(return_value=acknowledged)
+        monkeypatch.setattr(main_module, "PhaseNoticeStore", lambda *a, **kw: store)
+
+        monkeypatch.setattr(main_module, "validate_config", lambda: True)
+
+        mock_hw = Mock()
+        mock_hw.setup.return_value = True
+        mock_hw.get_rtc.return_value = Mock()
+        mock_hw.is_sd_mounted.return_value = True
+        monkeypatch.setattr(main_module, "HardwareFactory", lambda *a, **kw: mock_hw)
+
+        mock_buffer = Mock()
+        mock_buffer.get_metrics.return_value = {
+            "buffer_entries": 0,
+            "writes_to_fallback": 0,
+            "fallback_migrations": 0,
+            "writes_to_primary": 0,
+            "write_failures": 0,
+        }
+        mock_buffer.is_primary_available.return_value = True
+        monkeypatch.setattr(main_module, "BufferManager", lambda *a, **kw: mock_buffer)
+        monkeypatch.setattr(main_module, "EventLogger", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "TempHumidityLogger", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "ServiceReminder", lambda *a, **kw: Mock())
+        mock_buzzer = Mock()
+        mock_buzzer.startup = AsyncMock()
+        monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
+        monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: Mock(run_post=AsyncMock(return_value=True)))
+        monkeypatch.setattr(main_module.asyncio, "create_task", _mock_create_task)
+
+        async def stop_sleep(_):
+            raise asyncio.CancelledError()
+
+        monkeypatch.setattr(main_module.asyncio, "sleep", stop_sleep)
+        monkeypatch.setattr(main_module.asyncio, "sleep_ms", stop_sleep)
+        return main_module, oled, store
+
+    async def test_unacknowledged_phase_raises_the_notice_at_boot(self, monkeypatch):
+        """A reset must not swallow a change nobody has confirmed yet."""
+        main_module, oled, _store = self._boot(monkeypatch, needs_notice=True)
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with pytest.raises(asyncio.CancelledError):
+                await main_module.main()
+
+        oled.show_phase_notice.assert_called_once()
+        args = oled.show_phase_notice.call_args[0]
+        assert args[0] == "stretch"  # the phase the operator last confirmed
+        assert args[2] is None  # no invented start date for an old change
+        assert "rh_ideal" in args[3]
+
+    async def test_acknowledged_phase_boots_silently(self, monkeypatch):
+        """The common boot: nothing changed, so nothing is announced."""
+        main_module, oled, _store = self._boot(monkeypatch, needs_notice=False)
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with pytest.raises(asyncio.CancelledError):
+                await main_module.main()
+
+        oled.show_phase_notice.assert_not_called()
+
+    async def test_the_engine_notice_sink_is_wired_to_the_display(self, monkeypatch):
+        """A live phase change reaches the OLED, not just the boot comparison."""
+        main_module, oled, _store = self._boot(monkeypatch, needs_notice=False)
+        captured = {}
+
+        real_engine_cls = main_module.RegulationEngine
+
+        def _engine(*a, **kw):
+            engine = real_engine_cls(*a, **kw)
+            original = engine.set_phase_change_callback
+
+            def _set(cb):
+                captured["cb"] = cb
+                original(cb)
+
+            engine.set_phase_change_callback = _set
+            return engine
+
+        monkeypatch.setattr(main_module, "RegulationEngine", _engine)
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with pytest.raises(asyncio.CancelledError):
+                await main_module.main()
+
+        assert "cb" in captured
+        captured["cb"]("stretch", "bloom", (2026, 10, 6), {"rh_ideal": 43.0})
+        oled.show_phase_notice.assert_called_once_with("stretch", "bloom", (2026, 10, 6), {"rh_ideal": 43.0})

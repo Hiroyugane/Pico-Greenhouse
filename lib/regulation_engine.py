@@ -273,6 +273,14 @@ class RegulationEngine:
                 self._dim_order.index(r["dims"][1]),
             )
         self._light_level_day = float(profile.get("light_level_day", self._base_light_day))
+        # Is the humidifier switched off for the whole of this phase? A surface
+        # override that pins mult to 0 collapses the hinge plane to a constant
+        # zero command, which sits permanently under the adapter's off_below —
+        # i.e. a dead appliance (see cannabis_bloom in config.py). Resolved here
+        # rather than at notice time so the operator notice reads the same fact
+        # the surfaces were frozen from.
+        hum_over = overrides.get("humidifier") if overrides else None
+        self._humidifier_silenced = bool(hum_over) and float(hum_over.get("mult", 1.0)) == 0.0
         self._profile_name = name
 
     def _phase_for_day(self, day_offset):
@@ -340,10 +348,30 @@ class RegulationEngine:
                     previous,
                     self._phase_name,
                     date,
-                    {"profile": phase["profile"], "light_level_day": self._light_level_day},
+                    self.phase_summary(),
                 )
             except Exception as exc:  # a notice sink must never stop the engine
                 self._event("warning", "phase-change notice failed: {}".format(exc))
+
+    def phase_summary(self):
+        """What the ACTIVE profile means for the operator, as a plain dict.
+
+        The three numbers a phase change actually costs someone attention for,
+        not just the profile's name: the RH setpoint (the DAY anchor, b=1 — the
+        notice is about the phase, not about what time it happens to be), the
+        light level, and whether the humidifier runs at all this phase.
+
+        Built on demand rather than cached so a notice raised at BOOT — from
+        the acknowledgement store, with no live transition behind it — reads
+        identically to one raised by the transition itself. Allocates: only
+        ever called on a phase change or at boot, never per tick.
+        """
+        return {
+            "profile": self._profile_name,
+            "light_level_day": self._light_level_day,
+            "rh_ideal": self._norm.ideal(self._hum_idx, 1.0),
+            "humidifier_silenced": self._humidifier_silenced,
+        }
 
     def set_phase_change_callback(self, callback):
         """Set the operator-notice sink: callback(old, new, date_tuple, summary).

@@ -21,6 +21,11 @@
 #                  heater 5 s, growlight pulse, growlight dim sweep) and
 #                  long-press executes the highlighted action (destructive
 #                  actions require a second long-press to confirm).
+#
+# Above the menu ring sits ONE notice slot (_pending_notice). While it is
+# filled, render() draws the notice instead of whatever page is current and a
+# button press acknowledges it instead of navigating — it is not a page, so no
+# timeout clears it. Only the grow-phase change raises it today.
 
 import gc
 import os
@@ -70,6 +75,10 @@ class OLEDDisplay:
     - fans:             list of FanController instances
     - growlight:        GrowlightController instance
     - sd_remount_cb:    callable() → triggers SD remount from outside
+    - notice_raise_cb:  callable() → side effects when a notice is raised
+                        (main.py: reminder LED on + one buzzer pattern)
+    - notice_ack_cb:    callable(phase) → the acknowledgement was given
+                        (main.py: persist the phase + release the LED)
     - start_time_ms:    ticks_ms at system boot (for uptime calculation)
     - logger:           EventLogger (optional)
     - width, height:    display dimensions (default 128×64)
@@ -122,6 +131,8 @@ class OLEDDisplay:
         debug_test_growlight_dim_step_s: float = 1.0,
         debug_test_relay_pulse_s: float = 1.0,
         relays=None,
+        notice_raise_cb=None,
+        notice_ack_cb=None,
     ):
         self._i2c = i2c
         self._time_provider = time_provider
@@ -176,6 +187,14 @@ class OLEDDisplay:
         self._debug_status: str = ""
         self._debug_status_until_ms: int = 0
         self._debug_actions = self._build_debug_actions()
+
+        # Acknowledge-required notice slot, ABOVE the menu ring. None or
+        # (lines_tuple, phase_name); the lines are formatted once at raise
+        # time so the render path stays a single attribute test on the
+        # overwhelmingly common "nothing pending" case.
+        self._pending_notice = None
+        self._notice_raise_cb = notice_raise_cb
+        self._notice_ack_cb = notice_ack_cb
 
         self.current_menu: int = 0
         self.display_on: bool = False
@@ -247,10 +266,108 @@ class OLEDDisplay:
             else:
                 print(f"[OLEDDisplay] Init failed: {e}")
 
+    # ── Acknowledge-required notice ───────────────────────────────────────
+
+    @staticmethod
+    def _fmt_pct(value) -> str:
+        """A percentage as whole digits, or '--' when the value is missing."""
+        if value is None:
+            return "--"
+        return "{:.0f}".format(value)
+
+    def show_phase_notice(self, old, new, date_tuple, summary=None) -> None:
+        """Raise the grow-phase-change notice. Stays up until a press clears it.
+
+        The controller advances the grow phase on its own, weeks apart and
+        often while nobody is in the room, and every advance moves setpoints
+        the operator has to know about. So this is not a timed banner: it
+        occupies the display until acknowledged, survives a reset through the
+        acknowledgement store in main.py, and comes back up when the display
+        wakes from sleep.
+
+        The three body lines are what actually changed for the person standing
+        at the tent — the RH target, the light level, and whether the
+        humidifier still runs — rather than just the phase's name.
+
+        Args:
+            old: previous phase name, or None when unknown (e.g. raised at
+                boot from a stored phase that no longer matches).
+            new: the phase now active. Also the acknowledgement key.
+            date_tuple: (year, month, day) the change took effect.
+            summary: the engine's phase-change payload (rh_ideal,
+                light_level_day, humidifier_silenced).
+        """
+        summary = summary or {}
+        try:
+            effective = "ab {:04d}-{:02d}-{:02d}".format(date_tuple[0], date_tuple[1], date_tuple[2])
+        except Exception:
+            effective = "ab sofort"
+        lines = (
+            "{} -> {}".format(old if old else "?", new),
+            effective,
+            "rF {}% Licht{}%".format(
+                self._fmt_pct(summary.get("rh_ideal")),
+                self._fmt_pct(summary.get("light_level_day")),
+            ),
+            "Befeuchter " + ("AUS" if summary.get("humidifier_silenced") else "AN"),
+            "Taste=verstanden",
+        )
+        self._pending_notice = (lines, new)
+        if self._logger:
+            self._logger.info("OLEDDisplay", f"Phase-change notice raised: {old} -> {new}")
+        if self._notice_raise_cb:
+            try:
+                self._notice_raise_cb()
+            except Exception as exc:
+                if self._logger:
+                    self._logger.warning("OLEDDisplay", f"Notice raise callback failed: {exc}")
+        # Deliberately no wake-up: a sleeping display stays asleep and shows
+        # the notice on the next press. The buzzer and the reminder LED are
+        # what reach an operator who is not looking at the case.
+        self.render()
+
+    def has_pending_notice(self) -> bool:
+        """True while a notice is waiting for its acknowledgement."""
+        return self._pending_notice is not None
+
+    def _acknowledge_notice(self) -> None:
+        """Clear the notice and hand the acknowledged phase to main.py."""
+        phase = self._pending_notice[1]
+        self._pending_notice = None
+        if self._logger:
+            self._logger.info("OLEDDisplay", f"Phase-change notice acknowledged: {phase}")
+        if self._notice_ack_cb:
+            try:
+                self._notice_ack_cb(phase)
+            except Exception as exc:
+                if self._logger:
+                    self._logger.warning("OLEDDisplay", f"Notice ack callback failed: {exc}")
+        self.render()
+
+    def _consume_press_for_notice(self, woke: bool) -> bool:
+        """Handle a button press while a notice is pending.
+
+        Returns True when the press belonged to the notice and must not reach
+        the menu. A press that WOKE the display only reveals the notice — the
+        acknowledgement has to come from someone who has seen it, and the
+        first press after a sleep is routinely just "let me look at the
+        screen". The second press acknowledges.
+        """
+        if self._pending_notice is None:
+            return False
+        if woke:
+            self.render()
+            return True
+        self._acknowledge_notice()
+        return True
+
     # ── Public API ────────────────────────────────────────────────────────
 
     def next_menu(self) -> None:
         """Advance to next menu (wraps around). Called on short button press.
+
+        While a notice is pending the press acknowledges it instead of
+        navigating; the next press moves the menu as usual.
 
         Inside the debug sub-menu, short press cycles through debug actions
         instead of advancing the top-level menu. A short press also cancels
@@ -258,9 +375,16 @@ class OLEDDisplay:
         """
         self._last_interaction_ms = _ticks_ms()
         self._last_activity_ms = self._last_interaction_ms
-        # Turn on display if it was off
+        # Turn on display if it was off. `woke` is taken from the flag rather
+        # than the branch: with a dead/absent panel the display never becomes
+        # active, and a notice there must still be dismissible.
+        woke = False
         if not self._display_active:
             self._turn_on_display()
+            woke = self._display_active
+
+        if self._consume_press_for_notice(woke):
+            return
 
         if self._debug_mode:
             if self._debug_running:
@@ -292,6 +416,12 @@ class OLEDDisplay:
         """
         Execute context-sensitive action for the current menu.
 
+        While a notice is pending the hold ACKNOWLEDGES it and performs no
+        page action. The operator is looking at the notice, not at the page
+        underneath it, and some of those actions are destructive — firing
+        "wipe logs" because a notice happened to be covering the debug page
+        would be the worst possible surprise.
+
         Menu → action:
         - temp / humidity: clear reading history
         - service:         reset service reminder
@@ -304,8 +434,13 @@ class OLEDDisplay:
         menu = MENUS[self.current_menu]
         self._last_interaction_ms = _ticks_ms()
         self._last_activity_ms = self._last_interaction_ms
+        woke = False
         if not self._display_active:
             self._turn_on_display()
+            woke = self._display_active
+
+        if self._consume_press_for_notice(woke):
+            return
 
         if menu == "debug":
             self._handle_debug_long_press()
@@ -547,15 +682,24 @@ class OLEDDisplay:
                 pass
 
     def render(self) -> None:
-        """Render the current menu to the display. No-op if display is off or inactive."""
+        """Render the pending notice, else the current menu. No-op if the display is off.
+
+        The notice check is first and is a single attribute test, so a
+        pending notice needs no special-casing anywhere else: the refresh
+        loop, a menu change and a wake from sleep all land here and all draw
+        the notice while it is up.
+        """
         if not self.display_on or not self._display_active or self._oled is None:
             return
         try:
             self._oled.fill(0)
-            menu = MENUS[self.current_menu]
-            if self._logger:
-                self._logger.debug("OLEDDisplay", f"rendering menu={menu}")
-            getattr(self, f"_render_{menu}")()
+            if self._pending_notice is not None:
+                self._render_notice()
+            else:
+                menu = MENUS[self.current_menu]
+                if self._logger:
+                    self._logger.debug("OLEDDisplay", f"rendering menu={menu}")
+                getattr(self, f"_render_{menu}")()
             self._oled.show()
             self._render_error_count = 0  # a clean render clears the fault streak
         except Exception as e:
@@ -706,6 +850,20 @@ class OLEDDisplay:
             return f"{hours}h {mins}m"
         return f"{mins}m {total_s % 60}s"
 
+    # ── Notice renderer ───────────────────────────────────────────────────
+
+    def _render_notice(self) -> None:
+        """Draw the pending notice: title plus its five preformatted rows.
+
+        Rows 0-4 fill the panel exactly, so there is no room for the
+        bottom-right "[HOLD]" hint the pages carry — the last row IS the
+        hint, and it says which press clears the screen.
+        """
+        self._header("PHASENWECHSEL")
+        lines = self._pending_notice[0]
+        for i in range(len(lines)):
+            self._row(lines[i], i)
+
     # ── Menu renderers ────────────────────────────────────────────────────
 
     def _render_temp(self) -> None:
@@ -834,16 +992,25 @@ class OLEDDisplay:
             row += 1
 
     def _render_reg(self) -> None:
-        """Regulation engine state: band + latch, deviations, commanded vector."""
-        self._header("REGULATION")
+        """Regulation engine state: phase, band + latch, deviations, commands.
+
+        The active grow phase rides in the TITLE rather than on a row of its
+        own: all five rows are already spoken for, and the phase is the one
+        piece of context that makes the rest of the page readable — the same
+        commanded vector means different things in seedling and in bloom.
+        """
         if self._regulation is None:
+            self._header("REGULATION")
             self._row("Not active", 0)
             return
         try:
             s = self._regulation.get_state()
         except Exception:
+            self._header("REGULATION")
             self._row("State error", 0)
             return
+        phase = s.get("phase")
+        self._header(("REG " + phase[:11]) if phase else "REGULATION")
         if s["latched"]:
             mode = "LATCHED"
         elif s["emergency"]:

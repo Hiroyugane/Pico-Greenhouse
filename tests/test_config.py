@@ -3306,3 +3306,77 @@ class TestRhUnreachableConfig:
         ideal = reg["profiles"]["cannabis_bloom"]["day"]["humidity"]["at_50"]
         margin = reg["external_sensor"]["rh_unreachable_margin"]
         assert ideal + margin < 70.0  # the top of the assumed room range
+
+
+class TestPhaseNoticeConfig:
+    """The acknowledge-required phase-change notice: its melody and its store."""
+
+    # -- buzzer.phase_pattern ---------------------------------------------
+
+    def test_phase_pattern_present_and_distinct(self):
+        """A rising interval sounded twice — no other pattern repeats a figure."""
+        from config import DEVICE_CONFIG
+
+        buzzer = DEVICE_CONFIG["buzzer"]
+        phase = buzzer["phase_pattern"]
+        assert len(phase) >= 2
+        for name in ("startup_melody", "error_pattern", "alert_pattern", "reminder_pattern", "supply_pattern"):
+            assert buzzer[name] != phase, name
+        # Two identical rising pairs: the repeat IS the signature.
+        assert phase[0][0] < phase[1][0]
+        assert [step[0] for step in phase[:2]] == [step[0] for step in phase[2:4]]
+
+    def test_phase_pattern_is_picked_up_by_the_main_wiring(self):
+        """main.py hands the buzzer every *_melody / *_pattern list it finds."""
+        from config import DEVICE_CONFIG
+
+        selected = {
+            k for k, v in DEVICE_CONFIG["buzzer"].items() if isinstance(v, list) and k.endswith(("_melody", "_pattern"))
+        }
+        assert "phase_pattern" in selected
+
+    def test_missing_phase_pattern_raises(self):
+        """play_named() shrugs at an unknown name, so a silent notice must not ship."""
+        import config
+
+        buzzer = config.DEVICE_CONFIG["buzzer"]
+        original = buzzer.pop("phase_pattern")
+        try:
+            with pytest.raises(ValueError, match="buzzer.phase_pattern must be a non-empty list"):
+                config.validate_config()
+        finally:
+            buzzer["phase_pattern"] = original
+
+    # -- regulation.phase_schedule.ack_storage_path -----------------------
+
+    def test_ack_storage_path_defaults_to_internal_flash(self):
+        """The notice has to survive with the SD card pulled, so: not /sd."""
+        from config import DEVICE_CONFIG
+
+        path = DEVICE_CONFIG["regulation"]["phase_schedule"]["ack_storage_path"]
+        assert path.startswith("/")
+        assert not path.startswith("/sd")
+
+    def test_missing_ack_storage_path_raises(self):
+        import config
+
+        sched = config.DEVICE_CONFIG["regulation"]["phase_schedule"]
+        original = sched.pop("ack_storage_path")
+        try:
+            with pytest.raises(ValueError, match="ack_storage_path must be an absolute path"):
+                config.validate_config()
+        finally:
+            sched["ack_storage_path"] = original
+
+    def test_relative_ack_storage_path_raises(self):
+        """A relative path lands wherever the process happens to be; refuse it."""
+        import config
+
+        sched = config.DEVICE_CONFIG["regulation"]["phase_schedule"]
+        original = sched["ack_storage_path"]
+        sched["ack_storage_path"] = "phase_ack.txt"
+        try:
+            with pytest.raises(ValueError, match="ack_storage_path must be an absolute path"):
+                config.validate_config()
+        finally:
+            sched["ack_storage_path"] = original

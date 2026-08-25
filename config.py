@@ -83,6 +83,7 @@ _BUZZER_PATTERNS = (
     "alert_pattern",
     "reminder_pattern",
     "supply_pattern",
+    "phase_pattern",
 )
 
 # Deviation dimensions and the ordered regulator (command-vector) names. The
@@ -607,6 +608,20 @@ DEVICE_CONFIG = {
             (1319, 120, 40),  # E6
             (1047, 120, 40),  # C6
             (784, 320, 0),  # G5 — the fall is the signature
+        ],
+        # The controller changed grow phase by itself and the OLED is holding a
+        # notice that only a button press clears. Played ONCE at the moment the
+        # notice is raised — it is a "come and look", not an alarm, so nothing
+        # repeats it; the reminder LED and the notice itself do the waiting.
+        # A rising two-note figure sounded TWICE: every other pattern is either
+        # one run of three tones (startup, supply) or a repeated single pitch
+        # (error, alert, reminder), so a repeated interval is recognisable from
+        # the next room without counting beeps.
+        "phase_pattern": [
+            (988, 120, 40),  # B5
+            (1319, 200, 160),  # E6
+            (988, 120, 40),  # B5
+            (1319, 200, 0),  # E6
         ],
     },
     # OLED Display Configuration (SSD1306 on shared I2C1 bus)
@@ -1216,6 +1231,13 @@ DEVICE_CONFIG = {
         "phase_schedule": {
             "enabled": True,
             "start_date": (2026, 9, 1),  # germination date, (year, month, day)
+            # Where the LAST ACKNOWLEDGED phase name is kept, so the OLED
+            # phase-change notice survives a reset: on boot the controller
+            # compares the phase it resolved against this file and re-raises the
+            # notice when they differ. Internal flash (same convention as
+            # Service_reminder.storage_path) — never the SD card, because the
+            # notice has to work with the card pulled.
+            "ack_storage_path": "/phase_ack.txt",
             "phases": [
                 {"name": "seedling", "profile": "cannabis_seedling", "weeks": 2},
                 {"name": "stretch", "profile": "cannabis_stretch", "weeks": 3},
@@ -1852,6 +1874,10 @@ def _validate_phase_schedule(sched, profiles, active_profile):
     max_day = _DAYS_IN_MONTH[month - 1] + (1 if leap else 0)
     if not (1 <= day <= max_day):
         raise ValueError("{}.start_date day must be 1-{} for month {}".format(ctx, max_day, month))
+
+    ack_path = sched.get("ack_storage_path")
+    if not isinstance(ack_path, str) or not ack_path.startswith("/"):
+        raise ValueError("{}.ack_storage_path must be an absolute path string".format(ctx))
 
     phases = sched.get("phases")
     if not isinstance(phases, list) or not phases:

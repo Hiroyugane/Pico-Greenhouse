@@ -131,6 +131,7 @@ except ImportError:  # frozen into the firmware as a top-level module
 
 _feed_boot_wdt()
 from lib.oled_display import OLEDDisplay
+from lib.phase_notice import PhaseNoticeStore
 
 _feed_boot_wdt()
 from lib.regulation_adapters import (
@@ -1082,6 +1083,36 @@ async def main():
         logger=logger,
     )
 
+    # Grow-phase acknowledgement store. The engine advances the phase by itself
+    # every few weeks, so the operator has to confirm the change AT THE CASE —
+    # and this file is what makes that confirmation outlive a reset.
+    sched_cfg = reg_cfg.get("phase_schedule") or {}
+    phase_notice = PhaseNoticeStore(
+        storage_path=sched_cfg.get("ack_storage_path", "/phase_ack.txt"),
+        logger=logger,
+    )
+
+    def _phase_notice_raised():
+        """Reach an operator who is not looking at the case: LED on, one melody."""
+        led_handler.set_on()
+        if buzzer is not None:
+            try:
+                asyncio.create_task(buzzer.play_named("phase_pattern"))
+            except Exception as exc:
+                logger.warning("MAIN", f"Phase-notice buzzer failed: {exc}")
+
+    def _phase_notice_acked(phase):
+        """Persist the acknowledgement, then release the LED if nothing else wants it."""
+        phase_notice.acknowledge(phase)
+        # GP8 is the service reminder's LED and its monitor loop drives it from
+        # its own state. Only switch it off when the reminder is not itself due,
+        # so acknowledging a phase change can never cancel a service signal.
+        try:
+            if not reminder.get_status().get("is_due", False):
+                led_handler.set_off()
+        except Exception as exc:
+            logger.warning("MAIN", f"Phase-notice LED release failed: {exc}")
+
     wdt.feed()  # Feed before OLED init (I2C scan + initial render can be slow)
 
     # Step 8b: Create OLED display controller
@@ -1164,6 +1195,8 @@ async def main():
                 ),
                 debug_test_growlight_dim_step_s=debug_cfg.get("test_growlight_dim_step_s", 1),
                 debug_test_relay_pulse_s=debug_cfg.get("test_relay_pulse_s", 1),
+                notice_raise_cb=_phase_notice_raised,
+                notice_ack_cb=_phase_notice_acked,
             )
             wdt.feed()  # Feed after OLED init
             logger.info("MAIN", f"OLED display initialized (on={oled.display_on})")
@@ -1188,6 +1221,32 @@ async def main():
         short_press=_on_short_press,
         long_press=_on_long_press,
     )
+
+    # Claim the engine's phase-change notice for the display, and re-raise one
+    # that a reset would otherwise have swallowed. Two cases collapse into the
+    # same comparison: the controller advanced and reset before anyone saw the
+    # notice, and the controller was switched off across a phase boundary
+    # entirely. A first boot seeds the store instead and stays silent.
+    if regulation_engine is not None and oled is not None:
+
+        def _on_phase_change(old, new, date_tuple, summary):
+            oled.show_phase_notice(old, new, date_tuple, summary)
+
+        regulation_engine.set_phase_change_callback(_on_phase_change)
+        boot_phase = regulation_engine.get_state()["phase"]
+        if phase_notice.needs_notice(boot_phase):
+            acknowledged = phase_notice.last_acknowledged()
+            logger.info("MAIN", f"Unacknowledged phase change: {acknowledged} -> {boot_phase}")
+            # No date: the change may have happened days ago, while the
+            # controller was off. Printing today would claim a start date that
+            # is simply wrong, so a boot-raised notice says "ab sofort" — the
+            # phase IS in effect now, which is the part we actually know.
+            oled.show_phase_notice(
+                acknowledged,
+                boot_phase,
+                None,
+                regulation_engine.phase_summary(),
+            )
 
     # Step 9: Spawn all async tasks.
     #

@@ -955,6 +955,69 @@ class TestPhaseSchedule:
         assert date == _date_at(14)
         assert summary["profile"] == "cannabis_stretch"
 
+    def test_summary_carries_what_the_operator_has_to_act_on(self):
+        """The notice prints the RH target, the light level and the humidifier."""
+        import config
+
+        seen = []
+        engine, adapters, names, clock = _sched_engine(offset_days=13)
+        engine.set_phase_change_callback(lambda old, new, date, summary: seen.append(summary))
+        engine.tick(now_s=0.0)
+        clock.date = _date_at(14)
+        engine.tick(now_s=1.0)
+
+        stretch = config.DEVICE_CONFIG["regulation"]["profiles"]["cannabis_stretch"]
+        base_light = config.DEVICE_CONFIG["regulation"]["regulators"]["growlight"]["light_level_day"]
+        summary = seen[0]
+        assert abs(summary["rh_ideal"] - stretch["day"]["humidity"]["at_50"]) < 1e-3
+        assert abs(summary["light_level_day"] - base_light) < 1e-3
+        assert summary["humidifier_silenced"] is False
+
+    def test_summary_reports_the_bloom_humidifier_as_silenced(self):
+        """Bloom pins the humidifier surface to zero — say so, do not just imply it."""
+        seen = []
+        engine, adapters, names, clock = _sched_engine(offset_days=34)
+        engine.set_phase_change_callback(lambda old, new, date, summary: seen.append(summary))
+        engine.tick(now_s=0.0)
+        clock.date = _date_at(35)
+        engine.tick(now_s=1.0)
+
+        assert seen[0]["profile"] == "cannabis_bloom"
+        assert seen[0]["humidifier_silenced"] is True
+
+    def test_rh_ideal_is_the_day_anchor_not_the_current_blend(self):
+        """The notice is about the phase, not about what time it happens to be."""
+        import config
+
+        seen = []
+        engine, adapters, names, clock = _sched_engine(offset_days=13, minutes=0)  # midnight
+        engine.set_phase_change_callback(lambda old, new, date, summary: seen.append(summary))
+        engine.tick(now_s=0.0)
+        clock.date = _date_at(14)
+        engine.tick(now_s=1.0)
+
+        stretch = config.DEVICE_CONFIG["regulation"]["profiles"]["cannabis_stretch"]
+        assert abs(seen[0]["rh_ideal"] - stretch["day"]["humidity"]["at_50"]) < 1e-3
+
+    def test_phase_summary_matches_the_change_payload(self):
+        """A boot-raised notice must read identically to a live one."""
+        seen = []
+        engine, adapters, names, clock = _sched_engine(offset_days=13)
+        engine.set_phase_change_callback(lambda old, new, date, summary: seen.append(summary))
+        engine.tick(now_s=0.0)
+        clock.date = _date_at(14)
+        engine.tick(now_s=1.0)
+
+        assert engine.phase_summary() == seen[0]
+
+    def test_phase_summary_is_available_without_any_transition(self):
+        """main.py asks a freshly booted engine, which has changed nothing yet."""
+        engine, adapters, names, clock = _sched_engine(offset_days=60)
+        summary = engine.phase_summary()
+        assert summary["profile"] == "cannabis_bloom"
+        assert summary["humidifier_silenced"] is True
+        assert summary["rh_ideal"] > 0.0
+
     def test_light_level_override_applied_then_dropped(self):
         """Seedlings run at 40 %; stretch has no override so the base 80 returns."""
         import config

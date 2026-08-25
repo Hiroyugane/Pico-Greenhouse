@@ -98,6 +98,21 @@ PAGE1 = [
                 ("Any press", "wakes display"),
             ],
         ),
+        ("gap", None),
+        ("head", "PHASENWECHSEL (grow phase)"),
+        (
+            "text",
+            "The grow phase advances on its own after so many weeks. The "
+            "screen then shows PHASENWECHSEL with the new humidity target, "
+            "the new light level, and whether the humidifier still runs.",
+        ),
+        (
+            "text",
+            "It stays up until you press the button - through sleep and "
+            "power cuts - and the Service LED stays on until you do. The "
+            "first press on a dark screen only wakes it; press again to "
+            "confirm.",
+        ),
     ],
     # ---- column 2 -------------------------------------------------------
     [
@@ -112,9 +127,9 @@ PAGE1 = [
                 ("ALERTS", "active ERR/WRN keys, or All OK"),
                 ("SYSTEM", "clock, firmware, uptime, RAM"),
                 ("RELAYS", "mains channels + PWM fan duty"),
-                ("REGULATION", "band, deviations, commands"),
+                ("REGULATION", "title = grow phase; band, commands"),
                 ("CO2", "ppm + vent override"),
-                ("SOIL", "moisture % (plant mode only)"),
+                ("SOIL", "moisture % + root temperature"),
                 ("DEBUG", "Hold = open test menu"),
             ],
         ),
@@ -122,6 +137,11 @@ PAGE1 = [
     # ---- column 3 -------------------------------------------------------
     [
         ("head", "REGULATION SCREEN"),
+        (
+            "text",
+            "Title  REG bloom  -  the grow phase now running (seedling / "
+            "stretch / bloom). Plain REGULATION means no phase plan.",
+        ),
         (
             "text",
             "Line 1  Band 2 ok  -  severity band, and mode: ok / EMERG "
@@ -203,7 +223,7 @@ PAGE2 = [
                 ("SHT31-D", "temperature + humidity, I2C"),
                 ("Senseair S8", "CO2 ppm, UART"),
                 ("DS3231", "real-time clock, I2C"),
-                ("Soil", "analog, plant mode only"),
+                ("Soil STEMMA", "moisture + root temp, I2C"),
             ],
         ),
     ],
@@ -225,6 +245,11 @@ PAGE2 = [
                 ("WRN co2_stale", "CO2 reading too old; timed venting"),
                 ("WRN co2_unreach", "CO2 sensor silent; check its plug"),
                 ("WRN sht31_unreach", "climate sensor silent; check its plug"),
+                ("WRN humidifier_in", "humidifier runs, air stays dry: refill it"),
+                ("WRN rh_target_unr", "room air too humid for the target"),
+                ("WRN soil_unreach", "soil probe silent; check its plug"),
+                ("WRN root_temp_low", "root zone under 20 C"),
+                ("WRN root_temp_hig", "root zone over 26 C"),
             ],
         ),
         ("gap", None),
@@ -232,6 +257,7 @@ PAGE2 = [
         (
             "kv",
             [
+                ("PHASENWECHSEL", "not a fault; press to confirm"),
                 ("SD LED on", "reseat the card, then SD screen, hold"),
                 ("LATCHED", "fix climate, then power cycle"),
                 ("Blank screen", "tap the button; it sleeps at 120 s"),

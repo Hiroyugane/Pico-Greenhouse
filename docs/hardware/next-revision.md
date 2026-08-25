@@ -19,7 +19,14 @@
 
 ## Schematic — nets, components, BOM
 
-### [ ] Fans are audibly loud at any speed — the PCA9685 cannot reach inaudible PWM
+### [~] Fans are audibly loud at any speed — ACCEPTED 2026-08-25, revisit at the next board
+
+> **Operator decision 2026-08-25:** the noise is accepted as PWM-inherent and
+> is **not** a precondition for anything. It stays filed because the next board
+> is the only place it can actually be fixed — the PCA9685 tops out at 1526 Hz
+> and inaudible fan PWM needs ≥ 20 kHz, so no firmware setting can reach it.
+> FAN.Q.1 is therefore no longer gating; if a board revision happens for other
+> reasons, pick from options A–D below while the schematic is open.
 
 **Filed:** 2026-07-28 ·
 chat-log entry ·
@@ -166,6 +173,17 @@ diodes (~1.6 V drop under load).
 >   a full day, not just a coil-pull-in spot check. Three unexplained
 >   multi-minute outages in seven days, with no watchdog explanation for any of
 >   them, is a supply problem hiding behind a healthy-looking firmware.
+> - **2026-08-25 — make the board measure its own rails.** The day-long trace
+>   above was scheduled as an external measurement campaign before the grow and
+>   has been **postponed into this revision instead**, on the grounds that a
+>   one-off bench trace is unlikely to catch an event that happens twice in
+>   seven days. Put the measurement **on the board**: a divider from each rail
+>   into a free ADC input (or a small I²C monitor), sampled by the existing
+>   metrics loop and written to the health CSV alongside `mem_used_pct`. Then a
+>   brownout is not something to be caught in the act — it is a column. Note
+>   GP28/ADC2 frees up when the soil probe moves to I²C
+>   (see the STEMMA entry in the PCB-layout section), which is exactly the input
+>   this needs.
 > - The tiered write path absorbed the SD event exactly as designed — 615
 >   fallback writes, nine migrations back to the card, **zero `write_failures`**
 >   and no data loss. That is not a reason to leave the supply alone.
@@ -738,6 +756,21 @@ memory: project-s8-uart-divider-revision
 > drove 3–4 log rotations per day. A sensor that has failed N times in a row
 > should warn once and then rate-limit.
 
+> **2026-08-25 — the sensor was not in the tent, and that is a placement
+> finding.** The S8 was removed from the chamber early in the run because it
+> does not tolerate the high humidity a fruiting chamber runs at, and it was
+> then air-dried for a long period. So the 12 848 failures were partly a
+> disconnected sensor, and the divider measurement below is still owed —
+> but a second requirement now sits alongside it: **the S8 needs a mounting
+> position that is not inside a 95 %RH chamber.** The obvious candidate is the
+> exhaust duct, where chamber air passes but does not dwell, or an enclosure
+> port with a hydrophobic membrane. Decide the position before wiring the next
+> harness; a sensor that has to be removed whenever humidity is high is not a
+> sensor the regulation engine can depend on. Plant mode runs at 43–68 %RH,
+> which is far easier on it than the mushroom profile was — but "easier" is not
+> the same as "specified", so check the S8's rated humidity range against the
+> intended position rather than assuming.
+
 - Senseair S8 UART TXD is **5 V TTL** referenced to V+. Pico GPIO
   abs-max is **3.3 V + 0.5 V = 3.8 V**. Current R11 = 100 Ω in series
   is signal damping, not voltage protection — Pico clamp diodes
@@ -1096,9 +1129,33 @@ chat-log entry
   tracked under "I²C address map on silkscreen" in the PCB layout
   section.
 
-### [~] Soil moisture sensor → Adafruit STEMMA #4026 (I²C, 0x36) — DEFERRED 2026-06-29
+### [ ] Soil moisture sensor → Adafruit STEMMA #4026 (I²C, 0x36) — RE-INSTATED 2026-08-25
 
-> **Reversed 2026-06-29:** the STEMMA I²C swap is deferred. The soil issue
+> **Re-instated 2026-08-25 — the TLC555 path did not deliver.** The analog
+> replacement below was chosen because it needed no firmware change; it never
+> worked reliably in the pot. The STEMMA sensor has been re-ordered (the first
+> order was never delivered, which is a large part of why the analog detour
+> happened at all), and the plan in this entry is live again.
+>
+> Two things changed since it was first written. First, this is **no longer a
+> next-rev-only item**: the sensor plugs into an existing I²C0 drop, so it can
+> go in before the new board. Second, the STEMMA also carries a **temperature
+> sensor**, which finally makes root-zone temperature measurable — the gap that
+> made the "root zone 20–24 °C" requirement unimplementable in the plant-mode
+> plan.
+>
+> **Decided for the firmware side (2026-08-25):** root-zone temperature is
+> **logged and alarmed only**, not regulated. `_NUM_DIMS` is hard-wired to 3 in
+> `lib/regulation_normalizer.py`, and a fourth dimension would drag the arbiter
+> cause mask, the validator, every profile and the golden vectors with it — for
+> an actuator the system does not have. A CSV column, a line on the soil page
+> and a warning outside 20–26 °C carry the whole value at a fraction of the
+> cost.
+>
+> GP28/ADC2 **is** freed by this change, contrary to the deferral note below.
+
+> **Reversed 2026-06-29 (superseded by the note above):** the STEMMA I²C swap
+> is deferred. The soil issue
 > is instead resolved by replacing the dead NE555 with a TLC555-class CMOS
 > sensor, keeping the **analog GP28/ADC2 path** — VCC → 3V3 (pin 36), AOUT
 > → GP28, **no divider** (reverts to the

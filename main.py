@@ -1306,12 +1306,32 @@ async def main():
     # same comparison: the controller advanced and reset before anyone saw the
     # notice, and the controller was switched off across a phase boundary
     # entirely. A first boot seeds the store instead and stays silent.
-    if regulation_engine is not None and oled is not None:
+    #
+    # Deliberately NOT gated on the OLED existing: display init is non-fatal by
+    # design, and a controller whose screen failed still advances its phases.
+    # Without a screen there is no acknowledge path, so the reminder LED simply
+    # stays on and the buzzer plays once — the correct degraded signal.
+    if regulation_engine is not None:
 
-        def _on_phase_change(old, new, date_tuple, summary):
-            oled.show_phase_notice(old, new, date_tuple, summary)
+        def _announce_phase(old, new, date_tuple, summary):
+            """Log, then show it on the OLED, or fall back to LED + buzzer alone."""
+            logger.warning(
+                "MAIN",
+                "Grow phase change needs acknowledgement: {} -> {} (profile {})".format(
+                    old, new, (summary or {}).get("profile")
+                ),
+            )
+            if oled is not None:
+                try:
+                    # show_phase_notice drives the LED and the buzzer itself
+                    # through notice_raise_cb, so do not raise them twice.
+                    oled.show_phase_notice(old, new, date_tuple, summary)
+                    return
+                except Exception as exc:
+                    logger.warning("MAIN", f"Phase notice display failed: {exc}")
+            _phase_notice_raised()
 
-        regulation_engine.set_phase_change_callback(_on_phase_change)
+        regulation_engine.set_phase_change_callback(_announce_phase)
         boot_phase = regulation_engine.get_state()["phase"]
         if phase_notice.needs_notice(boot_phase):
             acknowledged = phase_notice.last_acknowledged()
@@ -1320,12 +1340,7 @@ async def main():
             # controller was off. Printing today would claim a start date that
             # is simply wrong, so a boot-raised notice says "ab sofort" — the
             # phase IS in effect now, which is the part we actually know.
-            oled.show_phase_notice(
-                acknowledged,
-                boot_phase,
-                None,
-                regulation_engine.phase_summary(),
-            )
+            _announce_phase(acknowledged, boot_phase, None, regulation_engine.phase_summary())
 
     # Step 9: Spawn all async tasks.
     #

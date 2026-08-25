@@ -109,3 +109,24 @@ class TestPhaseNoticeBootDecision:
         """A schedule-less (mushroom) build has no phase to announce."""
         assert store.needs_notice(None) is False
         assert store.last_acknowledged() is None
+
+    def test_an_unwritable_store_raises_the_notice_instead_of_seeding(self, tmp_path):
+        """acknowledge() swallows write errors, so the seed has to be read back.
+
+        Without the read-back an unwritable store looked like a successful
+        first boot on EVERY boot, and the notice — the one thing that survives
+        a reset by design — was silently never raised again.
+        """
+        from lib.phase_notice import PhaseNoticeStore
+
+        logger = Mock()
+        store = PhaseNoticeStore(storage_path=str(tmp_path / "missing_dir" / "ack.txt"), logger=logger)
+        assert store.needs_notice("bloom") is True
+        assert logger.warning.call_count == 1
+        assert store.needs_notice("bloom") is True  # and again next boot
+
+    def test_a_store_with_no_path_at_all_raises_the_notice(self):
+        """"No persistence" is documented as "notice every boot" — hold to that."""
+        from lib.phase_notice import PhaseNoticeStore
+
+        assert PhaseNoticeStore(storage_path="").needs_notice("bloom") is True

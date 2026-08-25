@@ -91,12 +91,27 @@ class PhaseNoticeStore:
         one and answers False: the very first phase of a grow is the state the
         operator just configured by hand, and announcing it back to them would
         train them to dismiss the notice without reading it.
+
+        That shortcut only holds if the seed actually STUCK. acknowledge()
+        swallows its write errors by design, so an unwritable store looked
+        exactly like a successful first boot — every boot — and the notice was
+        never raised again for the rest of the grow. So the seed is read back,
+        and a store that cannot persist answers True instead: one redundant
+        notice per boot is the direction this is supposed to fail in.
         """
         if not active_phase:
             return False
         stored = self.last_acknowledged()
         if stored is None:
             self.acknowledge(active_phase)
+            if self.last_acknowledged() != active_phase:
+                if self._logger:
+                    self._logger.warning(
+                        "PhaseNotice",
+                        "acknowledgement store is not persisting ({}); "
+                        "raising the phase notice on every boot".format(self.storage_path),
+                    )
+                return True
             if self._logger:
                 self._logger.info("PhaseNotice", f"Seeded acknowledged phase: {active_phase}")
             return False

@@ -1881,3 +1881,59 @@ class TestIntakeSensorHealth:
         for _ in range(10):
             assert read() == (21.0, 55.0)
         assert state["reads"] == 10
+
+
+@pytest.mark.asyncio
+class TestPhaseNoticeWithoutADisplay:
+    """OLED init failure is non-fatal by design — the notice must survive it.
+
+    The whole chain (engine callback, buzzer, reminder LED, boot re-raise) used
+    to sit behind `oled is not None`, so a controller with a dead display
+    advanced its phases in complete silence.
+    """
+
+    @staticmethod
+    def _no_oled(monkeypatch):
+        def boom(*a, **kw):
+            raise OSError("no display on the bus")
+
+        return _standard_boot(monkeypatch, oled_factory=boom)
+
+    async def test_a_live_phase_change_still_rings_and_lights_up(self, monkeypatch):
+        rig = self._no_oled(monkeypatch)
+        kwargs = {}
+        real = rig["main"].RegulationEngine
+
+        def factory(*a, **kw):
+            engine = real(*a, **kw)
+            original = engine.set_phase_change_callback
+
+            def _set(cb):
+                kwargs["cb"] = cb
+                original(cb)
+
+            engine.set_phase_change_callback = _set
+            return engine
+
+        monkeypatch.setattr(rig["main"], "RegulationEngine", factory)
+
+        await _run_main(rig)
+
+        assert "cb" in kwargs, "the notice sink was never registered without a display"
+        kwargs["cb"]("stretch", "bloom", (2026, 10, 6), {"profile": "cannabis_bloom"})
+        rig["led"].set_on.assert_called_once()
+        rig["buzzer"].play_named.assert_called_once_with("phase_pattern")
+        warnings = [str(c) for c in rig["logger"].warning.call_args_list if "Grow phase change" in str(c)]
+        assert len(warnings) == 1
+
+    async def test_the_boot_re_raise_survives_a_missing_display(self, monkeypatch):
+        rig = _standard_boot(
+            monkeypatch,
+            oled_factory=lambda *a, **kw: (_ for _ in ()).throw(OSError("no display")),
+            needs_notice=True,
+        )
+
+        await _run_main(rig)
+
+        rig["led"].set_on.assert_called_once()
+        rig["buzzer"].play_named.assert_called_once_with("phase_pattern")

@@ -815,6 +815,9 @@ def _sched_engine(
     hum=60.0,
     external_read=None,
     status_manager=None,
+    fallback_phase=None,
+    date=None,
+    time_valid=None,
 ):
     """Engine with the cannabis phase schedule live, clocked `offset_days` in."""
     import config
@@ -830,7 +833,9 @@ def _sched_engine(
         mutate(reg)
     names = config._REG_NAMES
     adapters = [FakeAdapter(n) for n in names]
-    clock = FakeTime(minutes * 60, date=_date_at(offset_days))
+    clock = FakeTime(minutes * 60, date=date if date is not None else _date_at(offset_days))
+    if time_valid is not None:
+        clock.time_valid = time_valid
     engine = RegulationEngine(
         reg,
         names,
@@ -843,6 +848,7 @@ def _sched_engine(
         logger=logger,
         status_manager=status_manager,
         clock=lambda: 0.0,
+        fallback_phase=fallback_phase,
     )
     return engine, adapters, names, clock
 
@@ -1161,6 +1167,145 @@ class TestPhaseSchedule:
         assert state["phase"] == "seedling"
         assert state["profile"] == "cannabis_seedling"
         assert abs(_adapter(adapters, names, "growlight").value - 40.0) < 1e-3
+
+
+class TestImplausibleRtcDate:
+    """A wrong date is the failure mode that actually happens, not (0,0,0).
+
+    now_date_tuple() only answers (0,0,0) when time.localtime() itself raises,
+    which it does not on-device. A flat DS3231 coin cell powers the chip up at
+    2000-01-01 and an unreadable DS3231 leaves the RP2040 at 2021-01-01 —
+    both perfectly well-formed dates that resolve to week one. Walking a
+    flowering canopy back to the seedling profile un-silences the humidifier
+    and loosens the mould gate, so the schedule must refuse to move on a date
+    it cannot believe.
+    """
+
+    BAD_DATES = ((0, 0, 0), (2000, 1, 1), (2021, 1, 1))
+
+    def test_implausible_dates_hold_the_phase_and_warn(self):
+        for bad in self.BAD_DATES:
+            logger = pytest.importorskip("unittest.mock").Mock()
+            status = FakeStatus()
+            engine, adapters, names, clock = _sched_engine(
+                offset_days=35, logger=logger, status_manager=status
+            )
+            engine.tick(now_s=0.0)
+            assert engine.get_state()["phase"] == "bloom", bad
+            logger.reset_mock()
+
+            clock.date = bad
+            for i in range(5):
+                engine.tick(now_s=float(i))
+            assert engine.get_state()["phase"] == "bloom", bad
+            assert engine.get_state()["profile"] == "cannabis_bloom", bad
+            assert logger.warning.call_count == 1, bad
+            assert status.calls == [("rtc_phase_held", True)], bad
+
+    def test_a_provider_that_disowns_its_clock_holds_too(self):
+        """time_valid is the provider's own verdict; believe it over the digits."""
+        status = FakeStatus()
+        engine, adapters, names, clock = _sched_engine(offset_days=35, status_manager=status)
+        engine.tick(now_s=0.0)
+        assert engine.get_state()["phase"] == "bloom"
+
+        clock.time_valid = False
+        clock.date = _date_at(500)  # would be bloom anyway; the point is it never asks
+        engine.tick(now_s=1.0)
+        assert status.active == {"rtc_phase_held"}
+
+    def test_recovery_clears_the_key_and_re_arms_the_warning(self):
+        """A second clock failure must warn again, not be swallowed by a one-shot."""
+        logger = pytest.importorskip("unittest.mock").Mock()
+        status = FakeStatus()
+        engine, adapters, names, clock = _sched_engine(offset_days=13, logger=logger, status_manager=status)
+        engine.tick(now_s=0.0)
+
+        clock.date = (2000, 1, 1)
+        engine.tick(now_s=1.0)
+        assert status.active == {"rtc_phase_held"}
+        assert logger.warning.call_count == 1
+
+        clock.date = _date_at(14)  # clock back: hold released AND the phase advances
+        engine.tick(now_s=2.0)
+        assert status.active == set()
+        assert engine.get_state()["phase"] == "stretch"
+
+        clock.date = (2000, 1, 1)  # and a second failure is reported, not muted
+        engine.tick(now_s=3.0)
+        assert status.active == {"rtc_phase_held"}
+        assert logger.warning.call_count == 2
+        assert status.calls == [
+            ("rtc_phase_held", True),
+            ("rtc_phase_held", False),
+            ("rtc_phase_held", True),
+        ]
+
+    def test_cold_boot_with_a_bad_clock_adopts_the_acknowledged_phase(self):
+        """The operator only ever acknowledges a phase the controller was in."""
+        status = FakeStatus()
+        engine, adapters, names, clock = _sched_engine(
+            date=(2000, 1, 1), fallback_phase="bloom", status_manager=status
+        )
+        state = engine.get_state()
+        assert state["phase"] == "bloom"
+        assert state["profile"] == "cannabis_bloom"
+        assert status.active == {"rtc_phase_held"}
+
+    def test_cold_boot_without_a_fallback_stays_at_phase_zero_and_warns(self):
+        """No stored phase: week one is all there is, but say so loudly."""
+        logger = pytest.importorskip("unittest.mock").Mock()
+        status = FakeStatus()
+        engine, adapters, names, clock = _sched_engine(date=(2021, 1, 1), logger=logger, status_manager=status)
+        assert engine.get_state()["phase"] is None  # never resolved
+        assert engine.get_state()["profile"] == "cannabis_seedling"  # the configured one
+        assert status.active == {"rtc_phase_held"}
+        assert logger.warning.call_count == 1
+
+    def test_an_unknown_fallback_phase_is_reported_not_guessed(self):
+        status = FakeStatus()
+        logger = pytest.importorskip("unittest.mock").Mock()
+        engine, adapters, names, clock = _sched_engine(
+            date=(2000, 1, 1), fallback_phase="harvest", logger=logger, status_manager=status
+        )
+        assert engine.get_state()["phase"] is None
+        assert logger.warning.call_count == 2  # the hold, and the unknown name
+
+    def test_the_clock_recovering_after_a_cold_boot_fallback_resolves_normally(self):
+        engine, adapters, names, clock = _sched_engine(date=(2000, 1, 1), fallback_phase="bloom")
+        assert engine.get_state()["phase"] == "bloom"
+
+        clock.date = _date_at(0)  # a real clock says day one after all
+        engine.tick(now_s=0.0)
+        assert engine.get_state()["phase"] == "seedling"
+
+    def test_a_failed_activation_leaves_the_old_phase_and_is_retried(self):
+        """_activate_profile allocates; a MemoryError must not half-commit."""
+        engine, adapters, names, clock = _sched_engine(offset_days=13)
+        engine.tick(now_s=0.0)
+        assert engine.get_state()["phase"] == "seedling"
+        norm = engine._norm
+
+        real = engine._activate_profile
+        calls = {"n": 0}
+
+        def flaky(name):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise MemoryError("no heap for a new normalizer")
+            return real(name)
+
+        engine._activate_profile = flaky
+        clock.date = _date_at(14)
+        with pytest.raises(MemoryError):
+            engine.tick(now_s=1.0)  # tick() does not catch; run() does
+        assert engine.get_state()["phase"] == "seedling"
+        assert engine.get_state()["profile"] == "cannabis_seedling"
+        assert engine._norm is norm  # nothing was swapped in
+
+        engine.tick(now_s=2.0)  # same date, but the cache was never committed
+        assert calls["n"] == 2
+        assert engine.get_state()["phase"] == "stretch"
 
 
 # --- RH-target reachability monitor --------------------------------------

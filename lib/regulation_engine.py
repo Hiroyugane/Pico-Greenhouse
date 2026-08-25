@@ -39,6 +39,14 @@ def _days_from_civil(year, month, day):
     return era * 146097 + doe - 719468
 
 
+# fixed: how far before its own start_date a resolved calendar date may fall
+# before the schedule refuses to believe it. Two years is generous enough for a
+# schedule configured well ahead of the grow, and short enough to reject the
+# RP2040's own 2021-01-01 power-on default, which an unreadable DS3231 leaves
+# in place. Not operator-tunable — it is a sanity bound, not a setting.
+_MAX_PRE_START_DAYS = 730
+
+
 def _effect_factor(delta, full_delta, min_factor):
     """External-effectiveness factor: 1.0 when outside is better by >= full_delta,
     min_factor when outside is equal/worse, linear in between."""
@@ -66,6 +74,7 @@ class RegulationEngine:
         alarm_cb=None,
         status_manager=None,
         clock=None,
+        fallback_phase=None,
     ):
         """
         Args:
@@ -84,6 +93,12 @@ class RegulationEngine:
                 (monitor-only detectors; the engine never reads it back).
             clock: optional callable() -> monotonic seconds (adapter min-cycle);
                 defaults to time.time.
+            fallback_phase: optional phase NAME (a plain string, not a store)
+                to adopt when the very first schedule resolve is held because
+                the RTC date is implausible. main.py passes the last phase the
+                operator acknowledged, so a controller that boots with a dead
+                coin cell stays in the phase it was actually in instead of
+                dropping back to week one.
         """
         self._reg_names = reg_names
         self._dim_order = dim_order
@@ -221,6 +236,7 @@ class RegulationEngine:
         self._phase_name = None
         self._on_phase_change = None
         self._rtc_warned = False
+        self._fallback_phase = fallback_phase
         # Cached date, compared element-wise so the fast path allocates nothing
         # of its own. (0,0,0) can never match a real date, so the first tick
         # after boot always resolves.
@@ -304,36 +320,116 @@ class RegulationEngine:
         # Every phase bounded and all of them elapsed: hold the last one.
         return last
 
+    def _date_plausible(self, date):
+        """Can this date be believed enough to move a grow phase on it?
+
+        The sentinel test this replaced ((0,0,0)) caught the ONE failure mode
+        the time provider can no longer produce on-device: now_date_tuple()
+        only returns it when time.localtime() itself raises, which it does not
+        on MicroPython. The failures that actually happen return a date that is
+        merely WRONG — a DS3231 with a flat coin cell powers up at 2000-01-01,
+        and an unreadable DS3231 leaves the RP2040 at its own 2021-01-01
+        default. Either one resolves to "day one", which silently walks a
+        flowering canopy back to the seedling profile: light 40 %, RH ideal
+        68 %, humidifier un-silenced, mould gate loosened — i.e. botrytis
+        conditions, announced as one routine info line.
+
+        So the gate is plausibility, not a sentinel. Four clauses, each
+        catching something the others do not:
+
+        * a calendar-shaped year and a real month/day (kills (0,0,0) and the
+          2000-01-01 a flat coin cell produces);
+        * the provider's OWN verdict on its clock, when it exposes one — but
+          only when it exposes one, because a DS3231 that cannot be READ never
+          updates that flag and leaves it optimistically True;
+        * which is why the last clause exists: a date that predates the
+          schedule's own start_date by more than two years cannot be today,
+          whatever the year looks like. That is what catches the RP2040's
+          2021-01-01 power-on default surviving an unreadable RTC.
+        """
+        if not (2020 <= date[0] <= 2100):
+            return False
+        if not (1 <= date[1] <= 12) or not (1 <= date[2] <= 31):
+            return False
+        if not getattr(self._time, "time_valid", True):
+            return False
+        return _days_from_civil(date[0], date[1], date[2]) - self._phase_start_day >= -_MAX_PRE_START_DAYS
+
+    def _hold_phase(self):
+        """Keep the current phase and make the reason operator-visible.
+
+        The date cache is deliberately left stale, so every later tick retries
+        the resolve instead of the first bad date poisoning the schedule for
+        the rest of the run.
+        """
+        if not self._rtc_warned:
+            self._rtc_warned = True
+            self._event("warning", "regulation phase held: RTC date implausible")
+            self._set_warning("rtc_phase_held", True)
+        if self._phase_index < 0:
+            self._adopt_fallback_phase()
+
+    def _adopt_fallback_phase(self):
+        """Cold boot with an unusable clock: start from the acknowledged phase.
+
+        Without this the engine sits at phases[0] — week one — which is the
+        single worst guess available, because the operator only ever
+        acknowledges a phase the controller was really in.
+        """
+        name = self._fallback_phase
+        if not name:
+            return
+        for i, phase in enumerate(self._phases):
+            if phase["name"] != name:
+                continue
+            self._activate_profile(phase["profile"])
+            self._phase_index = i
+            self._phase_name = phase["name"]
+            self._event("warning", "regulation phase fell back to the acknowledged {}".format(name))
+            return
+        self._event("warning", "regulation fallback phase {} is not in the schedule".format(name))
+
     def _maybe_advance_phase(self, announce=True):
         """Re-resolve the active phase, but only when the calendar date changed.
 
-        Gated hard on the date so 2879 of 2880 daily ticks cost one date read
-        and three integer compares.
+        Gated hard on the date so 2879 of 2880 daily ticks cost one
+        now_date_tuple() — a localtime() call plus two small tuples — and three
+        integer compares. That is not free, but against a 30 s tick it is
+        noise, and the alternative (caching the date behind the provider)
+        would put the schedule one clock-correction behind the RTC.
         """
         date = self._time.now_date_tuple()
         if date[0] == self._date_y and date[1] == self._date_m and date[2] == self._date_d:
             return
-        if date[0] == 0 or date[1] == 0 or date[2] == 0:
-            # A dead RTC returns (0,0,0). Deriving a phase from that would jump
-            # the grow to week one (or past the end); hold the current phase and
-            # say so once. The cached date is deliberately NOT updated, so a
-            # recovered clock still resolves on its next tick.
-            if not self._rtc_warned:
-                self._rtc_warned = True
-                self._event("warning", "regulation phase held: RTC date unavailable")
+        if not self._date_plausible(date):
+            self._hold_phase()
             return
-        self._date_y = date[0]
-        self._date_m = date[1]
-        self._date_d = date[2]
+        if self._rtc_warned:
+            # First believable date after a hold. Re-arm the one-shot as well
+            # as clearing the key: a SECOND clock failure has to warn again.
+            self._rtc_warned = False
+            self._set_warning("rtc_phase_held", False)
+            self._event("info", "regulation phase hold released: RTC date plausible again")
         index = self._phase_for_day(_days_from_civil(date[0], date[1], date[2]) - self._phase_start_day)
         if index == self._phase_index:
+            self._date_y = date[0]
+            self._date_m = date[1]
+            self._date_d = date[2]
             return
 
         previous = self._phase_name
         phase = self._phases[index]
+        # Activate FIRST, commit the state afterwards. _activate_profile
+        # allocates a normalizer and re-freezes every surface, which can
+        # MemoryError on a tight heap; committing the phase name and the date
+        # cache before that would leave the engine reporting a phase it is not
+        # running and never retrying, because the cached date already matches.
+        self._activate_profile(phase["profile"])
         self._phase_index = index
         self._phase_name = phase["name"]
-        self._activate_profile(phase["profile"])
+        self._date_y = date[0]
+        self._date_m = date[1]
+        self._date_d = date[2]
         if not announce:
             return
         self._event(

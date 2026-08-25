@@ -864,6 +864,18 @@ async def main():
     reg_cfg = DEVICE_CONFIG["regulation"]
     regulation_engine = None
     reg_switches = {}  # raw on/off handles for the OLED debug actions
+
+    # Grow-phase acknowledgement store. The engine advances the phase by itself
+    # every few weeks, so the operator has to confirm the change AT THE CASE —
+    # and this file is what makes that confirmation outlive a reset. Built
+    # BEFORE the engine because the engine needs the acknowledged phase as its
+    # cold-boot fallback: with an implausible RTC date it cannot resolve the
+    # schedule, and the phase a human last confirmed beats week one.
+    sched_cfg = reg_cfg.get("phase_schedule") or {}
+    phase_notice = PhaseNoticeStore(
+        storage_path=sched_cfg.get("ack_storage_path", "/phase_ack.txt"),
+        logger=logger,
+    )
     if reg_cfg.get("enabled", False):
         regulators = reg_cfg["regulators"]
 
@@ -1022,6 +1034,7 @@ async def main():
             logger=logger,
             alarm_cb=_reg_alarm,
             status_manager=status_manager,
+            fallback_phase=phase_notice.last_acknowledged(),
         )
         # The engine resolves its phase from the RTC at construction, so read
         # the ACTIVE profile back out of it rather than echoing the configured
@@ -1080,15 +1093,6 @@ async def main():
         storage_path=Service_config.get("storage_path", "/service_reminder.txt"),
         monitor_interval_s=Service_config.get("monitor_interval_s", 3600),
         auto_register_button=False,
-        logger=logger,
-    )
-
-    # Grow-phase acknowledgement store. The engine advances the phase by itself
-    # every few weeks, so the operator has to confirm the change AT THE CASE —
-    # and this file is what makes that confirmation outlive a reset.
-    sched_cfg = reg_cfg.get("phase_schedule") or {}
-    phase_notice = PhaseNoticeStore(
-        storage_path=sched_cfg.get("ack_storage_path", "/phase_ack.txt"),
         logger=logger,
     )
 

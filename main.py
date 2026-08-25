@@ -970,7 +970,7 @@ async def main():
                 logger.warning("MAIN", f"External SHT31 init failed; exhaust gate constant: {e}")
 
         def _reg_alarm(kind):
-            """Buzzer side effects for emergency/latch transitions (rate-limited by the engine)."""
+            """Buzzer side effects for engine-raised alarms (rate-limited by the engine)."""
             if buzzer is None:
                 return
             try:
@@ -978,6 +978,10 @@ async def main():
                     asyncio.create_task(buzzer.error())
                 elif kind == "emergency":
                     asyncio.create_task(buzzer.alert())
+                elif kind == "supply":
+                    # Consumable/supply alarm — currently only the humidifier
+                    # effectiveness watchdog ("go refill the reservoir").
+                    asyncio.create_task(buzzer.play_named("supply_pattern"))
                 else:  # release
                     asyncio.create_task(buzzer.beep())
             except Exception as exc:
@@ -994,6 +998,7 @@ async def main():
             external_read=external_read,
             logger=logger,
             alarm_cb=_reg_alarm,
+            status_manager=status_manager,
         )
         # The engine resolves its phase from the RTC at construction, so read
         # the ACTIVE profile back out of it rather than echoing the configured

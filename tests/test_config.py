@@ -2953,3 +2953,140 @@ class TestSensorHealthConfig:
             assert config.validate_config() is True
         finally:
             cfg["unreachable_heartbeat_s"] = original
+
+
+class TestHumidifierWatchdogConfig:
+    """Effectiveness thresholds + the supply buzzer pattern they announce with."""
+
+    @staticmethod
+    def _swap(key, value):
+        import config
+
+        cfg = config.DEVICE_CONFIG["regulation"]["humidifier_watchdog"]
+        original = cfg[key]
+        cfg[key] = value
+        return cfg, original
+
+    def test_defaults_validate(self):
+        import config
+
+        assert config.validate_config() is True
+
+    def test_defaults_match_the_field_episodes(self):
+        """One hour / half a point — the gap between the working and empty runs.
+
+        Working humidifier episodes gained 1.1, 0.97 and 5.0 RH points per hour;
+        the empty-tank one lost 1.3. A 0.5-point threshold over an hour sits in
+        the gap with room on both sides.
+        """
+        from config import DEVICE_CONFIG
+
+        cfg = DEVICE_CONFIG["regulation"]["humidifier_watchdog"]
+        assert cfg["ineffective_window_s"] == 3600
+        assert cfg["ineffective_min_rise"] == 0.5
+
+    def test_zero_window_raises(self):
+        """A zero-length window would judge the humidifier on its first tick."""
+        import config
+
+        cfg, original = self._swap("ineffective_window_s", 0)
+        try:
+            with pytest.raises(ValueError, match="ineffective_window_s must be > 0"):
+                config.validate_config()
+        finally:
+            cfg["ineffective_window_s"] = original
+
+    def test_negative_min_rise_raises(self):
+        """A non-positive rise threshold can never be failed — it is not a test."""
+        import config
+
+        cfg, original = self._swap("ineffective_min_rise", -0.5)
+        try:
+            with pytest.raises(ValueError, match="ineffective_min_rise must be > 0"):
+                config.validate_config()
+        finally:
+            cfg["ineffective_min_rise"] = original
+
+    def test_non_numeric_threshold_raises(self):
+        import config
+
+        cfg, original = self._swap("ineffective_min_rise", "0.5")
+        try:
+            with pytest.raises(ValueError, match="ineffective_min_rise must be > 0"):
+                config.validate_config()
+        finally:
+            cfg["ineffective_min_rise"] = original
+
+    def test_missing_key_raises(self):
+        """A half-written block is worse than none — the engine would KeyError."""
+        import config
+
+        cfg = config.DEVICE_CONFIG["regulation"]["humidifier_watchdog"]
+        original = cfg.pop("ineffective_window_s")
+        try:
+            with pytest.raises(ValueError, match="Missing config key: regulation.humidifier_watchdog"):
+                config.validate_config()
+        finally:
+            cfg["ineffective_window_s"] = original
+
+    # -- the buzzer pattern the watchdog plays ----------------------------
+
+    def test_supply_pattern_present_and_distinct(self):
+        """A falling motif — every other pattern is a repeated single tone."""
+        from config import DEVICE_CONFIG
+
+        buzzer = DEVICE_CONFIG["buzzer"]
+        supply = buzzer["supply_pattern"]
+        freqs = [step[0] for step in supply]
+        assert freqs == sorted(freqs, reverse=True)
+        assert len(set(freqs)) == len(freqs)
+        for name in ("error_pattern", "alert_pattern", "reminder_pattern"):
+            assert buzzer[name] != supply, name
+            # The others are all monotone; this one must not be mistaken for them.
+            assert len(set(step[0] for step in buzzer[name])) == 1, name
+
+    def test_supply_pattern_is_picked_up_by_the_main_wiring(self):
+        """main.py hands the buzzer every *_melody / *_pattern list it finds."""
+        from config import DEVICE_CONFIG
+
+        selected = {
+            k for k, v in DEVICE_CONFIG["buzzer"].items() if isinstance(v, list) and k.endswith(("_melody", "_pattern"))
+        }
+        assert "supply_pattern" in selected
+
+    def test_missing_supply_pattern_raises(self):
+        """play_named() shrugs at an unknown name, so a silent alarm must not ship."""
+        import config
+
+        buzzer = config.DEVICE_CONFIG["buzzer"]
+        original = buzzer.pop("supply_pattern")
+        try:
+            with pytest.raises(ValueError, match="buzzer.supply_pattern must be a non-empty list"):
+                config.validate_config()
+        finally:
+            buzzer["supply_pattern"] = original
+
+    def test_malformed_pattern_step_raises(self):
+        """Steps are (freq_hz, duration_ms, pause_ms) triples, not pairs."""
+        import config
+
+        buzzer = config.DEVICE_CONFIG["buzzer"]
+        original = buzzer["supply_pattern"]
+        buzzer["supply_pattern"] = [(1319, 120)]
+        try:
+            with pytest.raises(ValueError, match="steps must be"):
+                config.validate_config()
+        finally:
+            buzzer["supply_pattern"] = original
+
+    def test_negative_pattern_value_raises(self):
+        import config
+
+        buzzer = config.DEVICE_CONFIG["buzzer"]
+        original = buzzer["error_pattern"]
+        buzzer["error_pattern"] = [(400, -200, 100)]
+        try:
+            with pytest.raises(ValueError, match="step values must be ints"):
+                config.validate_config()
+        finally:
+            buzzer["error_pattern"] = original

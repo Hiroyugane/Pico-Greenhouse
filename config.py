@@ -74,6 +74,16 @@ _SURFACE_PARAM_NAMES = tuple(p[0] for p in _SURFACE_PARAMS)
 _SURFACE_BOUNDS = {name: (lo, hi) for name, lo, hi, _default in _SURFACE_PARAMS}
 # Days per month, index 0 = January (February gets +1 in a leap year).
 _DAYS_IN_MONTH = (31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+# Buzzer patterns the firmware plays BY NAME. main.py hands the BuzzerController
+# every "*_melody"/"*_pattern" list it finds, and play_named() shrugs at a name
+# it does not know — so a missing entry here is an alarm that never sounds.
+_BUZZER_PATTERNS = (
+    "startup_melody",
+    "error_pattern",
+    "alert_pattern",
+    "reminder_pattern",
+    "supply_pattern",
+)
 
 # Deviation dimensions and the ordered regulator (command-vector) names. The
 # arbiter's target vector T[] is indexed by _REG_NAMES order — also load-bearing.
@@ -571,6 +581,16 @@ DEVICE_CONFIG = {
             (880, 100, 200),  # A5
             (880, 100, 0),
         ],
+        # Consumable/supply alarm — currently "the humidifier is commanded on
+        # and the air is not getting wetter", i.e. go refill the reservoir.
+        # Deliberately the only DESCENDING motif in the set: error, alert and
+        # reminder are all repeated single tones, so a falling three-note figure
+        # is distinguishable from the next room without counting beeps.
+        "supply_pattern": [
+            (1319, 120, 40),  # E6
+            (1047, 120, 40),  # C6
+            (784, 320, 0),  # G5 — the fall is the signature
+        ],
     },
     # OLED Display Configuration (SSD1306 on shared I2C1 bus)
     "display": {
@@ -805,6 +825,32 @@ DEVICE_CONFIG = {
             "interval_min": 30,  # start a window every N minutes
             "duration_min": 5,  # hold the floor for this long
             "command": 60.0,  # floor applied to the CO2-carrying regulators
+        },
+        # Humidifier effectiveness watchdog — MONITOR ONLY, never a control
+        # action. Nothing here can move an actuator; the whole block buys one
+        # warning key, one WARN line and one buzzer pattern.
+        #
+        # The GP19 relay switches the humidifier's 230 V supply, and the
+        # appliance reports nothing back: the Pico cannot read its tank level,
+        # its own humidistat, or whether it is misting at all. At the RH targets
+        # the seedling and stretch phases ask for, the reservoir empties faster
+        # than it gets refilled, so a dry tank is the NORMAL state rather than a
+        # fault — and the controller happily commands a dead appliance forever
+        # without noticing. The only evidence available is EFFECT: the contact
+        # is closed and the air is not getting wetter.
+        #
+        # Both numbers come from the field episodes rather than from theory.
+        # Working humidifier runs raised RH by 1.1, 0.97 and 5.0 points per
+        # hour; the run with an empty tank FELL 1.3 points per hour. A one-hour
+        # window with a half-point threshold separates those two populations
+        # with room on both sides, and an hour is also short enough that a
+        # refill still matters when the operator hears the beep.
+        #
+        # The detector may be aggressive on purpose: a false positive costs a
+        # beep and a warning LED, while a miss costs a phase spent dry.
+        "humidifier_watchdog": {
+            "ineffective_window_s": 3600,  # continuous on-time before judging
+            "ineffective_min_rise": 0.5,  # RH points that must be gained over it
         },
         # Escalation gating — which deviation DIRECTIONS may escalate to the
         # forced emergency / latch vectors.
@@ -1989,6 +2035,17 @@ def _validate_regulation(reg_cfg, pins_cfg, top_mode):
         if not isinstance(v, (int, float)) or isinstance(v, bool) or not (0 < v <= 100):
             raise ValueError("regulation.fresh_air_exchange.command must be 0-100 and > 0")
 
+    watchdog = reg_cfg.get("humidifier_watchdog")
+    if watchdog is not None:
+        if not isinstance(watchdog, dict):
+            raise ValueError("regulation.humidifier_watchdog must be a dict")
+        for key in ("ineffective_window_s", "ineffective_min_rise"):
+            if key not in watchdog:
+                raise ValueError("Missing config key: regulation.humidifier_watchdog.{}".format(key))
+            v = watchdog[key]
+            if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
+                raise ValueError("regulation.humidifier_watchdog.{} must be > 0".format(key))
+
     regulators = reg_cfg.get("regulators")
     if not isinstance(regulators, dict):
         raise ValueError("regulation.regulators must be a dict")
@@ -2344,6 +2401,20 @@ def validate_config():
 
     if not (0 < DEVICE_CONFIG["buzzer"]["default_duty_pct"] <= 100):
         raise ValueError("buzzer.default_duty_pct must be 1–100")
+
+    # Named patterns are looked up by name at runtime and play_named() answers a
+    # missing one with a debug line, so an absent or malformed pattern is a
+    # silent alarm — exactly the failure an alarm must not have.
+    for name in _BUZZER_PATTERNS:
+        pattern = DEVICE_CONFIG["buzzer"].get(name)
+        if not isinstance(pattern, list) or not pattern:
+            raise ValueError("buzzer.{} must be a non-empty list of (freq, ms, pause) steps".format(name))
+        for step in pattern:
+            if not isinstance(step, (tuple, list)) or len(step) != 3:
+                raise ValueError("buzzer.{} steps must be (freq_hz, duration_ms, pause_ms)".format(name))
+            for value in step:
+                if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                    raise ValueError("buzzer.{} step values must be ints >= 0".format(name))
 
     if DEVICE_CONFIG["buffer_manager"]["max_buffer_entries"] <= 0:
         raise ValueError("buffer_manager.max_buffer_entries must be > 0")

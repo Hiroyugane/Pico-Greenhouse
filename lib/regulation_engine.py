@@ -9,6 +9,8 @@
 # change, and rebuilt through the single _activate_profile() path.
 # Emergency/latch transitions raise buzzer + event-log side effects through
 # injected callbacks so the engine stays hardware-decoupled and testable.
+# Also hosts the monitor-only humidifier effectiveness watchdog, which never
+# touches an actuator — it only raises an operator warning.
 
 import time
 from array import array
@@ -62,6 +64,7 @@ class RegulationEngine:
         external_read=None,
         logger=None,
         alarm_cb=None,
+        status_manager=None,
         clock=None,
     ):
         """
@@ -76,7 +79,9 @@ class RegulationEngine:
             external_read: optional callable() -> (t_out, h_out) or None.
             logger: optional EventLogger for band-transition events.
             alarm_cb: optional callable(kind) for buzzer alarms
-                (kind in {"emergency","latch","release"}).
+                (kind in {"emergency","latch","release","supply"}).
+            status_manager: optional StatusManager for named warning keys
+                (monitor-only detectors; the engine never reads it back).
             clock: optional callable() -> monotonic seconds (adapter min-cycle);
                 defaults to time.time.
         """
@@ -89,6 +94,7 @@ class RegulationEngine:
         self._external_read = external_read
         self._logger = logger
         self._alarm_cb = alarm_cb
+        self._status = status_manager
         self._clock = clock or time.time
         self._tick_s = float(reg_cfg["tick_s"])
 
@@ -130,7 +136,24 @@ class RegulationEngine:
         self._i_heater = reg_names.index("heater")
         self._i_follower = reg_names.index("heater_follower")
         self._i_growlight = reg_names.index("growlight")
+        self._i_humidifier = reg_names.index("humidifier")
         self._co2_idx = dim_order.index("co2")
+        self._hum_idx = dim_order.index("humidity")
+
+        # Humidifier effectiveness watchdog (monitor only — see _check_humidifier).
+        # Every field below is a scalar and the check runs branch-first, so the
+        # per-tick cost is one compare on the overwhelmingly common path.
+        watchdog = reg_cfg.get("humidifier_watchdog")
+        hum_adapter = regulators["humidifier"].get("adapter") or {}
+        on_above = hum_adapter.get("on_above")
+        self._hum_watch = watchdog is not None and on_above is not None
+        self._hum_on_above = float(on_above) if on_above is not None else 0.0
+        self._hum_window_s = float(watchdog["ineffective_window_s"]) if watchdog else 0.0
+        self._hum_min_rise = float(watchdog["ineffective_min_rise"]) if watchdog else 0.0
+        self._hum_on_since = None  # monotonic start of the current on-window
+        self._hum_win_rh = 0.0  # RH when that window opened
+        self._hum_warned = False  # warning currently raised (edge guard)
+        self._hum_warn_rh = 0.0  # RH when it was raised (the recovery baseline)
 
         follower = regulators["heater_follower"]
         self._follower_gain = float(follower["follower_gain"])
@@ -351,6 +374,71 @@ class RegulationEngine:
             return self._fae_command
         return 0.0
 
+    # -- humidifier effectiveness watchdog (monitor only) ------------------
+
+    def _check_humidifier(self, command, hum, now_s):
+        """Warn when the humidifier is energised and the air is not getting wetter.
+
+        MONITOR ONLY. Nothing in here touches an actuator, a floor or the
+        arbiter — the entire output is a warning key, one WARN line and one
+        buzzer pattern. That is deliberate: the humidifier's tank runs dry as a
+        matter of routine at the RH the early phases ask for, and the correct
+        response is a human with a watering can, not a firmware override.
+
+        The rule is the only evidence the hardware offers. The GP19 relay
+        switches the appliance's mains supply and nothing comes back — no tank
+        level, no humidistat state, not even a current reading — so the sole
+        way to tell "misting" from "plugged in but empty" is the effect on RH.
+        Commanded on CONTINUOUSLY for ineffective_window_s while RH gained less
+        than ineffective_min_rise over that window = it is not working. Any
+        interruption of the on-state restarts the window, because a humidifier
+        that was off for part of it was never given the chance.
+
+        Clearing is one rule, not two: the warning drops as soon as RH climbs
+        ineffective_min_rise above where it stood when the warning fired. That
+        covers both recoveries — a refilled tank under an unchanged command, and
+        a command that dropped away while the room came back on its own.
+
+        Allocation-free: four scalars and an early return.
+        """
+        if hum is None:
+            # A blind sensor cannot testify either way. Disarm rather than
+            # accumulate a window against readings that are not there.
+            self._hum_on_since = None
+            return
+
+        if self._hum_warned and hum - self._hum_warn_rh >= self._hum_min_rise:
+            self._hum_warned = False
+            self._hum_on_since = None
+            self._set_warning("humidifier_ineffective", False)
+
+        if command <= self._hum_on_above:
+            self._hum_on_since = None
+            return
+
+        if self._hum_on_since is None:
+            self._hum_on_since = now_s
+            self._hum_win_rh = hum
+            return
+        if now_s - self._hum_on_since < self._hum_window_s:
+            return
+
+        # A full window of uninterrupted demand has elapsed — judge it, then
+        # re-open a fresh window from here either way, so a persistent fault is
+        # measured continuously without ever re-firing the alarm.
+        if hum - self._hum_win_rh < self._hum_min_rise:
+            if not self._hum_warned:
+                self._hum_warned = True
+                self._hum_warn_rh = hum
+                self._set_warning("humidifier_ineffective", True)
+                self._event("warning", "humidifier commanded on with no RH response")
+                self._alarm("supply")
+        elif self._hum_warned:
+            self._hum_warned = False
+            self._set_warning("humidifier_ineffective", False)
+        self._hum_on_since = now_s
+        self._hum_win_rh = hum
+
     # -- target vector build ----------------------------------------------
 
     def _compute_targets(self, ext_mult, fae_floor=0.0):
@@ -426,6 +514,9 @@ class RegulationEngine:
         for i, adapter in enumerate(self._adapters):
             adapter.apply(out[i], now_s)
 
+        if self._hum_watch:
+            self._check_humidifier(out[self._i_humidifier], hum, now_s)
+
         self._handle_signals()
 
     def _handle_signals(self):
@@ -450,6 +541,11 @@ class RegulationEngine:
     def _alarm(self, kind):
         if self._alarm_cb:
             self._alarm_cb(kind)
+
+    def _set_warning(self, key, active):
+        """Raise/clear a named operator warning; a missing sink is a no-op."""
+        if self._status:
+            self._status.set_warning(key, active)
 
     # -- async task --------------------------------------------------------
 

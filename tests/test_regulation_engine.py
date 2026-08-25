@@ -546,6 +546,212 @@ class TestRunLoop:
         assert counter["n"] >= 2
 
 
+# --- humidifier effectiveness watchdog ------------------------------------
+
+
+class FakeStatus:
+    def __init__(self):
+        self.calls = []
+        self.active = set()
+
+    def set_warning(self, key, active):
+        self.calls.append((key, active))
+        if active:
+            self.active.add(key)
+        else:
+            self.active.discard(key)
+
+
+class _HumidifierRig:
+    """Engine plus the handles an effectiveness test needs, on a fake clock.
+
+    Held at cubensis day anchors with the tent dry (RH 60 against a 75 % at_0),
+    which parks the humidifier surface at command 100 — far above the adapter's
+    on_above of 18 — so the command is "on" until a test raises RH enough to
+    push it back down.
+    """
+
+    KEY = "humidifier_ineffective"
+
+    def __init__(self, hum=60.0, temp=21.0, window_s=100.0, min_rise=0.5, dt=30.0):
+        import config
+        from lib.regulation_engine import RegulationEngine
+
+        reg = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        reg["humidifier_watchdog"]["ineffective_window_s"] = window_s
+        reg["humidifier_watchdog"]["ineffective_min_rise"] = min_rise
+        self.names = config._REG_NAMES
+        self.adapters = [FakeAdapter(n) for n in self.names]
+        self.th = FakeTh(temp, hum)
+        self.status = FakeStatus()
+        self.alarms = []
+        self.logger = pytest.importorskip("unittest.mock").Mock()
+        self.engine = RegulationEngine(
+            reg,
+            self.names,
+            config._REG_DIMENSIONS,
+            self.adapters,
+            self.th,
+            FakeCo2(600.0),
+            FakeTime(720 * 60),
+            logger=self.logger,
+            alarm_cb=self.alarms.append,
+            status_manager=self.status,
+            clock=lambda: 0.0,
+        )
+        self._t = 0.0
+        self._dt = dt
+
+    _KEEP = object()  # "leave the reading alone" — None means a dead sensor
+
+    def tick(self, rh=_KEEP):
+        if rh is not self._KEEP:
+            self.th.last_humidity = rh
+        self.engine.tick(now_s=self._t)
+        self._t += self._dt
+
+    def run(self, seconds, rh=_KEEP):
+        """Tick for at least `seconds` of fake time."""
+        end = self._t + seconds
+        while self._t <= end:
+            self.tick(rh)
+
+    @property
+    def command(self):
+        return _adapter(self.adapters, self.names, "humidifier").value
+
+    @property
+    def warned(self):
+        return self.KEY in self.status.active
+
+    @property
+    def warn_lines(self):
+        return [c for c in self.logger.warning.call_args_list if "humidifier" in str(c)]
+
+
+class TestHumidifierEffectiveness:
+    """The relay switches mains power to a device that reports nothing back.
+
+    At the RH the seedling and stretch phases ask for, the reservoir empties
+    faster than it is refilled, so "commanded on but dead" is the routine state
+    and the controller cannot see it. The only evidence is effect: field
+    episodes with a working humidifier gained 1.1 / 0.97 / 5.0 RH points per
+    hour, the one with an empty tank LOST 1.3 — a half point per hour separates
+    them cleanly. Monitor only: every assertion below is about a warning, never
+    about an actuator.
+    """
+
+    def test_flat_humidity_under_continuous_demand_warns_exactly_once(self):
+        rig = _HumidifierRig()
+        rig.tick()
+        assert rig.command > 18.0  # the relay really is being asked to run
+        rig.run(150.0)  # one full 100 s window of unanswered demand
+        assert rig.warned is True
+        assert rig.status.calls == [(rig.KEY, True)]
+        assert len(rig.warn_lines) == 1
+        assert rig.alarms == ["supply"]
+
+        rig.run(400.0)  # four more windows of the same fault
+        assert rig.status.calls == [(rig.KEY, True)]
+        assert len(rig.warn_lines) == 1
+        assert rig.alarms == ["supply"]
+
+    def test_falling_humidity_under_demand_warns(self):
+        """The empty-tank field episode: commanded on and RH going backwards."""
+        rig = _HumidifierRig()
+        rh = 60.0
+        for _ in range(6):
+            rig.tick(rh)
+            rh -= 0.2
+        assert rig.warned is True
+        assert rig.alarms == ["supply"]
+
+    def test_rising_humidity_never_warns(self):
+        """A working humidifier gains more than the threshold per window."""
+        rig = _HumidifierRig()
+        rh = 60.0
+        for _ in range(40):  # 1200 s = twelve windows
+            rig.tick(rh)
+            rh += 0.3  # 0.9 points per 100 s window, comfortably over 0.5
+        assert rig.warned is False
+        assert rig.status.calls == []
+        assert rig.alarms == []
+
+    def test_interrupted_demand_restarts_the_window(self):
+        """A humidifier that was off for part of the window was never tested."""
+        rig = _HumidifierRig()
+        rig.run(60.0)  # 60 s of the 100 s window accumulated at RH 60
+        # One tick wet enough to push the command under on_above (surface cuts
+        # back hard above dev 55), then straight back to bone dry.
+        rig.tick(97.0)
+        assert rig.command <= 18.0
+        rig.tick(60.0)
+        # 60 s more: past the original window's deadline, but only 60 s into the
+        # restarted one.
+        rig.run(60.0)
+        assert rig.warned is False
+        assert rig.alarms == []
+        # Give the restarted window its full length and it fires normally.
+        rig.run(100.0)
+        assert rig.warned is True
+
+    def test_recovery_clears_the_warning_and_re_arms(self):
+        """A refilled tank clears it, and a second outage can warn again."""
+        rig = _HumidifierRig()
+        rig.run(150.0)
+        assert rig.warned is True
+
+        rig.tick(61.0)  # +1.0 over the RH the warning fired at
+        assert rig.warned is False
+        assert rig.status.calls == [(rig.KEY, True), (rig.KEY, False)]
+
+        rig.run(150.0, rh=61.0)  # flat again for a full window
+        assert rig.warned is True
+        assert rig.status.calls == [(rig.KEY, True), (rig.KEY, False), (rig.KEY, True)]
+        assert rig.alarms == ["supply", "supply"]
+
+    def test_a_missing_reading_disarms_instead_of_accumulating(self):
+        """A blind sensor cannot testify that the humidifier is failing."""
+        rig = _HumidifierRig()
+        rig.run(60.0)
+        rig.tick(None)  # sensor gone: humidity deviation neutralised
+        rig.run(60.0, rh=60.0)
+        assert rig.warned is False
+
+    def test_absent_config_block_makes_the_watchdog_inert(self):
+        """An older config without the block must behave exactly as before."""
+        import config
+        from lib.regulation_engine import RegulationEngine
+
+        reg = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        del reg["humidifier_watchdog"]
+        names = config._REG_NAMES
+        adapters = [FakeAdapter(n) for n in names]
+        status = FakeStatus()
+        engine = RegulationEngine(
+            reg,
+            names,
+            config._REG_DIMENSIONS,
+            adapters,
+            FakeTh(21.0, 60.0),
+            FakeCo2(600.0),
+            FakeTime(720 * 60),
+            status_manager=status,
+            clock=lambda: 0.0,
+        )
+        assert engine._hum_watch is False
+        for i in range(200):
+            engine.tick(now_s=float(i * 30))
+        assert status.calls == []
+
+    def test_no_status_manager_is_a_no_op_not_a_crash(self):
+        """Headless builds pass no sink; the detector must still not blow up."""
+        rig = _HumidifierRig()
+        rig.engine._status = None
+        rig.run(150.0)
+        assert rig.alarms == ["supply"]  # the rest of the side effects still fire
+
+
 # --- week-based phase schedule ------------------------------------------
 
 

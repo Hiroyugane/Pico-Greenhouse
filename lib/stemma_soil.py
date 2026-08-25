@@ -58,7 +58,18 @@ class StemmaSoil:
         address: 7-bit I2C address (0x36 default)
     """
 
-    def __init__(self, i2c, address: int = 0x36, retries: int = 3, conversion_delay_ms: int = 5):
+    def __init__(
+        self,
+        i2c,
+        address: int = 0x36,
+        # fixed: seesaw protocol timing from Adafruit's reference driver, not
+        # an operator knob — the ATSAMD10 NACKs a read while it is still
+        # converting, and the reference driver's answer is a couple of retries.
+        retries: int = 3,
+        # fixed: seesaw protocol timing from Adafruit's reference driver — the
+        # conversion wait the ATSAMD10 needs before it will answer at all.
+        conversion_delay_ms: int = 5,
+    ):
         self.i2c = i2c
         self.address = address
         self.retries = retries if retries >= 1 else 1

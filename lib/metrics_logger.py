@@ -51,6 +51,11 @@ class MetricsLogger:
         "cmd_exhaust",
         "cmd_circulation",
         "cmd_growlight",
+        # Appended, never inserted: the header is only written for a NEW file,
+        # so a day's file that already exists keeps the old column set and new
+        # rows must stay aligned with it. A trailing extra field is the one
+        # shape a reader can cope with.
+        "phase",
     )
 
     def __init__(

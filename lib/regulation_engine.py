@@ -236,6 +236,10 @@ class RegulationEngine:
         # Latest state (for OLED/debug; not built per tick).
         self._b = 0.0
         self._gmax = 0.0
+        # Last CO2 reading the pipeline actually consumed. None means the
+        # dimension was neutralised, which the metrics CSV has to be able to
+        # tell apart from "sitting exactly on the ideal" — both read dev 50.
+        self._co2_in = None
 
         # Week-based phase schedule (plant grows). Disabled = every field below
         # is inert and tick() never asks the clock for a date.
@@ -768,6 +772,7 @@ class RegulationEngine:
         temp = self._th.last_temperature
         hum = self._th.last_humidity
         co2 = self._co2.last_ppm if self._co2 is not None else None
+        self._co2_in = co2
 
         minutes = self._time.get_seconds_since_midnight() // 60
         self._b = self._norm.update((temp, hum, co2), minutes, self._dev)
@@ -853,6 +858,10 @@ class RegulationEngine:
             "band": self._arb.band_index(self._gmax),
             "latched": self._arb.latched,
             "emergency": self._arb.emergency_active,
+            # The CO2 reading the last tick consumed (None = blind channel).
+            # dev[co2] is 50 either way, so this is the only way a reader can
+            # tell "on target" from "no sensor".
+            "co2": self._co2_in,
             "deviations": list(self._dev),
             "severities": list(self._sev),
             "commanded": {name: self._out[i] for i, name in enumerate(self._reg_names)},

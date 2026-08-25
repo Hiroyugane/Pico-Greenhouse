@@ -1407,6 +1407,18 @@ async def main():
     # so a healthy run reports 0 forever and any drift is visible immediately.
     _task_baseline = _live_task_count()
     logger.info("MAIN", f"All tasks spawned. System running. ({_task_baseline} tasks)")
+    # Say once whether the leak column can actually detect anything. On a
+    # MicroPython build without Task.done() every handle counts as live, so the
+    # delta pins at 0 forever — indistinguishable from a healthy run unless the
+    # log says so here.
+    if any(getattr(task, "done", None) is not None for task in _spawned_tasks):
+        logger.info("MAIN", "task-leak metric live (Task.done() available on this build)")
+    else:
+        logger.info(
+            "MAIN",
+            "task-leak metric DEGRADED: this build has no Task.done(), "
+            "so the tasks column can only ever read 0",
+        )
 
     # Main event loop with adaptive health-check interval:
     # - Normal: 60 s (configurable via system.health_check_interval_s)
@@ -1493,7 +1505,13 @@ async def main():
         # CSV cell for the same missing value was left empty, so a reader could
         # not tell whether the two disagreed or simply spelled "unknown" two
         # different ways.
-        task_count = load_snapshot.get("task_count", -1)
+        task_leak = load_snapshot.get("task_count")
+        task_count = task_leak if task_leak is not None else -1
+        # Act on the number instead of only recording it: a task that died or
+        # multiplied is a fault the operator can see on the ALERTS screen and
+        # the warning LED, not a column somebody might read months later.
+        # set_warning is idempotent — repeats neither re-log nor re-buzz.
+        status_manager.set_warning("task_leak", task_leak is not None and task_leak != 0)
 
         # Persistent heap-trend sample (INFO, greppable) when enabled. Unlike
         # the debug "runtime load" line above, this reaches system.log without
@@ -1539,7 +1557,14 @@ async def main():
                     row["emergency"] = st["emergency"]
                     row["dev_t"] = dev[0]
                     row["dev_h"] = dev[1]
-                    row["dev_c"] = dev[2]
+                    # Blank, not 50.0, when the CO2 channel is blind. The
+                    # normalizer neutralises a missing reading to dead-centre,
+                    # so a written 50 is indistinguishable from "exactly on
+                    # target" — and with the S8 demounted that was every row.
+                    row["dev_c"] = dev[2] if st.get("co2") is not None else None
+                    # Which phase governed this row. The profile now changes by
+                    # itself, so a CSV read weeks later is unreadable without it.
+                    row["phase"] = st["phase"]
                     row["cmd_heater"] = cmd.get("heater")
                     row["cmd_follower"] = cmd.get("heater_follower")
                     row["cmd_cooler"] = cmd.get("cooler")

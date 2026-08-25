@@ -33,6 +33,7 @@ _FULL_ROW = {
     "cmd_exhaust": 33.3,
     "cmd_circulation": 20.0,
     "cmd_growlight": 0.0,
+    "phase": "bloom",
 }
 
 
@@ -86,6 +87,27 @@ class TestRowFormat:
         assert by_col["emergency"] == "1"  # bool True -> 1
         assert by_col["band"] == "2"
         assert by_col["cmd_cooler"] == "100.00"
+        assert by_col["phase"] == "bloom"
+
+    def test_the_phase_column_is_last(self):
+        """It was appended, not inserted: files opened before it keep aligning."""
+        from lib.metrics_logger import MetricsLogger
+
+        assert MetricsLogger.COLUMNS[-1] == "phase"
+
+    def test_a_blind_co2_channel_writes_an_empty_cell(self, time_provider, buffer_manager, mock_event_logger, tmp_path):
+        """dev_c 50.0 means "on target"; a missing sensor must not claim that."""
+        logger = _make_logger(time_provider, buffer_manager, mock_event_logger)
+        row_fields = dict(_FULL_ROW)
+        row_fields["dev_c"] = None
+        row_fields["phase"] = None
+        logger.write_row(row_fields)
+
+        row = (tmp_path / "sd" / _RELPATH).read_text().strip("\n").split("\n")[1]
+        by_col = dict(zip(logger.COLUMNS, row.split(",")))
+        assert by_col["dev_c"] == ""
+        assert by_col["dev_h"] == "40.00"  # the other dimensions still land
+        assert by_col["phase"] == ""
 
     def test_missing_regulation_cells_blank(self, time_provider, buffer_manager, mock_event_logger, tmp_path):
         logger = _make_logger(time_provider, buffer_manager, mock_event_logger)
@@ -104,7 +126,7 @@ class TestRowFormat:
         )
         row = (tmp_path / "sd" / _RELPATH).read_text().strip("\n").split("\n")[1]
         by_col = dict(zip(logger.COLUMNS, row.split(",")))
-        for col in ("tick_us", "global_severity", "cmd_heater", "cmd_growlight", "latched"):
+        for col in ("tick_us", "global_severity", "cmd_heater", "cmd_growlight", "latched", "phase"):
             assert by_col[col] == ""
 
 

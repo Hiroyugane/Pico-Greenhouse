@@ -1937,3 +1937,36 @@ class TestPhaseNoticeWithoutADisplay:
 
         rig["led"].set_on.assert_called_once()
         rig["buzzer"].play_named.assert_called_once_with("phase_pattern")
+
+
+@pytest.mark.asyncio
+class TestTaskLeakWarning:
+    """A nonzero delta is a fault to surface, not a column to file away."""
+
+    async def test_a_changed_task_set_raises_the_warning(self, monkeypatch):
+        rig = _standard_boot(monkeypatch, sleeps=2)
+        counts = iter([5, 4, 4, 4, 4, 4])
+        monkeypatch.setattr(rig["main"], "_live_task_count", lambda: next(counts))
+
+        await _run_main(rig)
+
+        calls = [c.args for c in rig["status"].set_warning.call_args_list if c.args[0] == "task_leak"]
+        assert calls == [("task_leak", True)]
+
+    async def test_a_healthy_run_leaves_it_clear(self, monkeypatch):
+        rig = _standard_boot(monkeypatch, sleeps=2)
+        monkeypatch.setattr(rig["main"], "_live_task_count", lambda: 7)
+
+        await _run_main(rig)
+
+        calls = [c.args for c in rig["status"].set_warning.call_args_list if c.args[0] == "task_leak"]
+        assert calls == [("task_leak", False)]
+
+    async def test_the_column_says_whether_it_can_detect_anything(self, monkeypatch):
+        """Without Task.done() the delta pins at 0 — indistinguishable from healthy."""
+        rig = _standard_boot(monkeypatch)
+
+        await _run_main(rig)
+
+        infos = [str(c) for c in rig["logger"].info.call_args_list if "task-leak metric" in str(c)]
+        assert len(infos) == 1

@@ -245,13 +245,19 @@ class TestLogLoop:
         assert mock_event_logger.warning.call_count == 0
         assert mock_event_logger.error.call_count == 0
 
-    def test_after_warmup_failure_logs_warning(self, co2_logger, mock_event_logger):
-        """Past the warmup window, a missed read escalates to warning."""
+    def test_after_warmup_failure_escalates_once_on_the_outage_edge(self, co2_logger, mock_event_logger):
+        """Past the warmup window, a persistent miss escalates — but only once.
+
+        This used to warn on EVERY missed read, which is how one dead sensor
+        wrote 20 533 warning lines in a 7.2-day run.
+        """
         # Force out-of-warmup by backdating _started_ms
         co2_logger._started_ms -= (co2_logger.warmup_s + 1) * 1000
         with patch("time.localtime", return_value=FAKE_LOCALTIME):
-            asyncio.run(co2_logger._poll_once())
-        assert mock_event_logger.warning.call_count >= 1
+            for _ in range(10):
+                asyncio.run(co2_logger._poll_once())
+        assert mock_event_logger.warning.call_count == 1
+        assert co2_logger.health.is_unreachable() is True
 
 
 class TestFilenameRollover:
@@ -498,6 +504,115 @@ class TestStaleReading:
             status.set_warning.assert_called_with("co2_stale", False)
         finally:
             mod._ticks_ms = original
+
+
+class TestUnreachableReporting:
+    """One dead sensor must cost one WARN line, not one per poll.
+
+    The 2026-07-31..08-07 field run logged 20 533 CO2 warnings — 100 % of every
+    warning the system emitted — from this single code path.
+    """
+
+    @staticmethod
+    def _logger(time_provider, buffer_manager, mock_event_logger, fake_uart, **kw):
+        from lib.co2_logger import CO2Logger
+
+        params = {
+            "warmup_s": 0,  # warm-up misses are deliberately exempt
+            "interval_s": 30,
+            "warn_after_failures": 3,
+            "backoff_start_s": 60,
+            "backoff_max_s": 300,
+        }
+        params.update(kw)
+        return CO2Logger(
+            uart=fake_uart,
+            time_provider=time_provider,
+            buffer_manager=buffer_manager,
+            logger=mock_event_logger,
+            sensor_root="/sd/sensors",
+            sensor_type="co2",
+            **params,
+        )
+
+    @staticmethod
+    def _run(coro):
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            return asyncio.run(coro)
+
+    def test_repeated_failures_warn_once(self, time_provider, buffer_manager, mock_event_logger, fake_uart):
+        log = self._logger(time_provider, buffer_manager, mock_event_logger, fake_uart)
+        for _ in range(50):
+            self._run(log._poll_once())
+
+        warn_texts = [c.args[1] for c in mock_event_logger.warning.call_args_list]
+        unreachable = [t for t in warn_texts if "unreachable" in t]
+        assert len(unreachable) == 1
+        assert "3 failed reads" in unreachable[0]
+        assert "60s" in unreachable[0]
+        assert log.read_failures == 50  # the existing counter still counts them all
+
+    def test_early_failures_stay_at_debug(self, time_provider, buffer_manager, mock_event_logger, fake_uart):
+        """Two missed reads are a blip, not an outage."""
+        log = self._logger(time_provider, buffer_manager, mock_event_logger, fake_uart)
+        self._run(log._poll_once())
+        self._run(log._poll_once())
+        assert mock_event_logger.warning.call_count == 0
+        assert log.health.is_unreachable() is False
+
+    def test_warmup_failures_do_not_start_an_outage(self, time_provider, buffer_manager, mock_event_logger, fake_uart):
+        log = self._logger(time_provider, buffer_manager, mock_event_logger, fake_uart, warmup_s=300)
+        for _ in range(10):
+            self._run(log._poll_once())
+        assert mock_event_logger.warning.call_count == 0
+        assert log.health.consecutive_failures == 0
+
+    def test_unreachable_raises_one_status_warning(self, time_provider, buffer_manager, mock_event_logger, fake_uart):
+        status = MagicMock()
+        log = self._logger(time_provider, buffer_manager, mock_event_logger, fake_uart, status_manager=status)
+        for _ in range(20):
+            self._run(log._poll_once())
+
+        calls = [c.args for c in status.set_warning.call_args_list if c.args[0] == "co2_unreachable"]
+        assert calls == [("co2_unreachable", True)]
+
+    def test_recovery_logs_one_info_and_clears_the_warning(
+        self, time_provider, buffer_manager, mock_event_logger, fake_uart
+    ):
+        status = MagicMock()
+        log = self._logger(time_provider, buffer_manager, mock_event_logger, fake_uart, status_manager=status)
+        for _ in range(5):
+            self._run(log._poll_once())
+        fake_uart.inject(_frame(640))
+        self._run(log._poll_once())
+
+        info_texts = [c.args[1] for c in mock_event_logger.info.call_args_list]
+        recovered = [t for t in info_texts if "recovered" in t]
+        assert len(recovered) == 1
+        assert "5 failed reads total" in recovered[0]
+        assert [c.args for c in status.set_warning.call_args_list if c.args[0] == "co2_unreachable"] == [
+            ("co2_unreachable", True),
+            ("co2_unreachable", False),
+        ]
+        assert log.last_ppm == 640
+
+    def test_polling_backs_off_while_unreachable(self, time_provider, buffer_manager, mock_event_logger, fake_uart):
+        log = self._logger(time_provider, buffer_manager, mock_event_logger, fake_uart)
+        assert log.health.interval_s() == 30
+        for _ in range(3):
+            self._run(log._poll_once())
+        assert log.health.interval_s() == 60
+        self._run(log._poll_once())
+        assert log.health.interval_s() == 120
+
+    def test_success_snaps_the_interval_back(self, time_provider, buffer_manager, mock_event_logger, fake_uart):
+        log = self._logger(time_provider, buffer_manager, mock_event_logger, fake_uart)
+        for _ in range(6):
+            self._run(log._poll_once())
+        assert log.health.interval_s() > 30
+        fake_uart.inject(_frame(700))
+        self._run(log._poll_once())
+        assert log.health.interval_s() == 30
 
 
 class TestRxDrain:

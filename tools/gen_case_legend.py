@@ -32,7 +32,7 @@ from reportlab.pdfgen import canvas
 # ---------------------------------------------------------------------------
 # Bump this date whenever CONTENT changes, so a legend glued to the case can
 # be compared against the repo without diffing the PDF.
-LEGEND_REV = "2026-07-31"
+LEGEND_REV = "2026-08-25"
 
 DEFAULT_OUTPUT = Path("docs/hardware/case-legend.pdf")
 
@@ -223,6 +223,8 @@ PAGE2 = [
                 ("WRN mem_warn", "RAM above warn level"),
                 ("WRN rtc_invalid", "clock time implausible"),
                 ("WRN co2_stale", "CO2 reading too old; timed venting"),
+                ("WRN co2_unreach", "CO2 sensor silent; check its plug"),
+                ("WRN sht31_unreach", "climate sensor silent; check its plug"),
             ],
         ),
         ("gap", None),

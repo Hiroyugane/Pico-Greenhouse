@@ -550,6 +550,15 @@ async def main():
     # Step 6: Create SHT31 sensor and TempHumidityLogger
     th_config = DEVICE_CONFIG.get("temp_humidity_logger", {})
     sht31_config = DEVICE_CONFIG.get("sht31", {})
+    # Shared edge-triggered sensor-reporting policy (one WARN per outage, one
+    # INFO on recovery, backed-off polling in between). See config.sensor_health.
+    health_config = DEVICE_CONFIG.get("sensor_health", {})
+    health_kwargs = {
+        "warn_after_failures": health_config.get("warn_after_failures", 3),
+        "backoff_start_s": health_config.get("backoff_start_s", 60),
+        "backoff_max_s": health_config.get("backoff_max_s", 300),
+        "unreachable_heartbeat_s": health_config.get("unreachable_heartbeat_s", 0),
+    }
     sht31 = SHT31(
         i2c=hardware.get_i2c(),
         address=sht31_config.get("i2c_address", 0x44),
@@ -570,6 +579,7 @@ async def main():
             retry_delay_s=th_config.get("retry_delay_s", 0.5),
             max_history=DEVICE_CONFIG.get("display", {}).get("max_history", 120),
             write_queue=write_queue,
+            **health_kwargs,
         )
     except Exception as e:
         logger.error("MAIN", f"TempHumidityLogger init failed: {e}")
@@ -586,6 +596,7 @@ async def main():
             retry_delay_s=th_config.get("retry_delay_s", 0.5),
             max_history=DEVICE_CONFIG.get("display", {}).get("max_history", 120),
             write_queue=write_queue,
+            **health_kwargs,
         )
 
     wdt.feed()  # Feed after TempHumidityLogger init
@@ -684,6 +695,7 @@ async def main():
             plausible_min_ppm=co2_config.get("plausible_min_ppm", 300),
             plausible_max_ppm=co2_config.get("plausible_max_ppm", 5000),
             stale_after_s=co2_config.get("stale_after_s", 300),
+            **health_kwargs,
         )
     except Exception as e:
         logger.warning("MAIN", f"CO2Logger init failed (non-critical): {e}")

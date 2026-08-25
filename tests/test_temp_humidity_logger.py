@@ -686,3 +686,171 @@ class TestTHReadSensorBoundaries:
         temp, hum = th.read_sensor()
         assert temp is None
         assert hum is None
+
+
+class TestTHUnreachableReporting:
+    """The identical unconditional-warn bug the CO2 channel had, on the SHT31.
+
+    log_loop used to emit `Sensor read failed (total: N)` at WARN level once
+    per failed read — a dead sensor writes a warning line every interval,
+    forever. Reporting is now edge-triggered; the durable channel is the
+    StatusManager warning.
+    """
+
+    @staticmethod
+    def _logger(time_provider, buffer_manager, mock_event_logger, **kw):
+        from lib.temp_humidity_logger import TempHumidityLogger
+
+        params = {
+            "interval": 30,
+            "max_retries": 1,
+            "warn_after_failures": 3,
+            "backoff_start_s": 60,
+            "backoff_max_s": 300,
+        }
+        params.update(kw)
+        sensor = params.pop("sensor", None) or _make_sensor(measure_side_effect=OSError("bus wedged"))
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            return TempHumidityLogger(sensor, time_provider, buffer_manager, mock_event_logger, **params)
+
+    def test_repeated_failures_warn_once(self, time_provider, buffer_manager, mock_event_logger):
+        th = self._logger(time_provider, buffer_manager, mock_event_logger)
+        with patch("time.sleep"):
+            for _ in range(50):
+                th.read_sensor()
+
+        warn_texts = [c.args[1] for c in mock_event_logger.warning.call_args_list]
+        unreachable = [t for t in warn_texts if "unreachable" in t]
+        assert len(unreachable) == 1
+        assert "3 failed reads" in unreachable[0]
+        assert "60s" in unreachable[0]
+        assert th.read_failures == 50  # the existing counter is untouched
+
+    def test_early_failures_stay_at_debug(self, time_provider, buffer_manager, mock_event_logger):
+        th = self._logger(time_provider, buffer_manager, mock_event_logger)
+        with patch("time.sleep"):
+            th.read_sensor()
+            th.read_sensor()
+        assert mock_event_logger.warning.call_count == 0
+        assert th.health.is_unreachable() is False
+
+    def test_unreachable_raises_one_status_warning(
+        self, time_provider, buffer_manager, mock_event_logger, mock_status_manager
+    ):
+        th = self._logger(time_provider, buffer_manager, mock_event_logger, status_manager=mock_status_manager)
+        with patch("time.sleep"):
+            for _ in range(20):
+                th.read_sensor()
+
+        calls = [c.args for c in mock_status_manager.set_warning.call_args_list if c.args[0] == "sht31_unreachable"]
+        assert calls == [("sht31_unreachable", True)]
+
+    def test_existing_th_alerts_still_fire(self, time_provider, buffer_manager, mock_event_logger, mock_status_manager):
+        """The new key is additive — th_intermittent / th_dead must keep working."""
+        th = self._logger(
+            time_provider,
+            buffer_manager,
+            mock_event_logger,
+            status_manager=mock_status_manager,
+            th_warn_threshold=3,
+            th_error_threshold=10,
+        )
+        with patch("time.sleep"):
+            for _ in range(10):
+                th.read_sensor()
+
+        keys = [c.args for c in mock_status_manager.set_warning.call_args_list]
+        assert ("th_intermittent", True) in keys
+        assert ("th_dead", True) in [c.args for c in mock_status_manager.set_error.call_args_list]
+
+    def test_recovery_logs_one_info_and_clears_the_warning(
+        self, time_provider, buffer_manager, mock_event_logger, mock_status_manager
+    ):
+        sensor = _make_sensor(measure_side_effect=OSError("bus wedged"))
+        th = self._logger(
+            time_provider,
+            buffer_manager,
+            mock_event_logger,
+            sensor=sensor,
+            status_manager=mock_status_manager,
+        )
+        with patch("time.sleep"):
+            for _ in range(5):
+                th.read_sensor()
+            sensor.measure = Mock()  # sensor comes back
+            temp, hum = th.read_sensor()
+
+        assert (temp, hum) == (22.5, 65.0)
+        info_texts = [c.args[1] for c in mock_event_logger.info.call_args_list]
+        recovered = [t for t in info_texts if "recovered" in t]
+        assert len(recovered) == 1
+        assert "5 failed reads total" in recovered[0]
+        assert [c.args for c in mock_status_manager.set_warning.call_args_list if c.args[0] == "sht31_unreachable"] == [
+            ("sht31_unreachable", True),
+            ("sht31_unreachable", False),
+        ]
+
+    def test_polling_backs_off_and_snaps_back(self, time_provider, buffer_manager, mock_event_logger):
+        sensor = _make_sensor(measure_side_effect=OSError("bus wedged"))
+        th = self._logger(time_provider, buffer_manager, mock_event_logger, sensor=sensor)
+        assert th.health.interval_s() == 30
+        with patch("time.sleep"):
+            for _ in range(3):
+                th.read_sensor()
+            assert th.health.interval_s() == 60
+            th.read_sensor()
+            assert th.health.interval_s() == 120
+            sensor.measure = Mock()
+            th.read_sensor()
+        assert th.health.interval_s() == 30
+
+    @staticmethod
+    def _run_loop(th, monkeypatch, iterations):
+        """Drive log_loop for N iterations with a virtual clock.
+
+        asyncio.sleep is stubbed out, so the health machine's monotonic source
+        has to be advanced by hand or poll_due() would suppress every read
+        after the first.
+        """
+        import lib.sensor_health as sh
+
+        now_ms = [0]
+        monkeypatch.setattr(sh, "_ticks_ms", lambda: now_ms[0])
+        sleeps = []
+
+        async def limited_sleep(duration):
+            sleeps.append(duration)
+            now_ms[0] += int(duration * 1000)
+            if len(sleeps) >= iterations:
+                raise asyncio.CancelledError()
+
+        async def _drive():
+            with patch("time.localtime", return_value=FAKE_LOCALTIME):
+                with patch("time.sleep"):
+                    with patch("asyncio.sleep", side_effect=limited_sleep):
+                        with pytest.raises(asyncio.CancelledError):
+                            await th.log_loop()
+
+        return sleeps, _drive()
+
+    async def test_log_loop_sleeps_the_backed_off_interval(
+        self, time_provider, buffer_manager, mock_event_logger, monkeypatch
+    ):
+        """A dead sensor must not be re-read every interval_s."""
+        th = self._logger(time_provider, buffer_manager, mock_event_logger, interval=1)
+        sleeps, driver = self._run_loop(th, monkeypatch, 5)
+        await driver
+
+        # Two blips at the healthy cadence, then the doubling ladder.
+        assert sleeps == [1, 1, 60, 120, 240]
+
+    async def test_log_loop_no_longer_warns_per_failed_read(
+        self, time_provider, buffer_manager, mock_event_logger, monkeypatch
+    ):
+        th = self._logger(time_provider, buffer_manager, mock_event_logger, interval=1)
+        _sleeps, driver = self._run_loop(th, monkeypatch, 6)
+        await driver
+
+        warn_texts = [c.args[1] for c in mock_event_logger.warning.call_args_list]
+        assert not any("Sensor read failed" in t for t in warn_texts)
+        assert len([t for t in warn_texts if "unreachable" in t]) == 1

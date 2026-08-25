@@ -37,7 +37,7 @@ if sys.implementation.name != "micropython":  # type: ignore[union-attr]
 
 import machine
 import uasyncio as asyncio
-from machine import ADC, UART, WDT, Pin
+from machine import UART, WDT, Pin
 
 from config import _REG_DIMENSIONS, _REG_NAMES, DEVICE_CONFIG, validate_config
 from lib import version  # mutable: ships in the OTA payload, stays on the filesystem
@@ -740,43 +740,59 @@ async def main():
         logger.warning("MAIN", f"CO2Logger init failed (non-critical): {e}")
         co2_logger_obj = None
 
-    # Step 7b4: Create SoilLogger (GP28 ADC2 single-probe).
+    # Step 7b4: Create SoilLogger (Adafruit STEMMA #4026 on the shared I2C0).
     # Plant mode only — mushroom mode skips construction entirely.
-    # Calibration constants live in config; use prototypes via the
-    # `print_raw()` REPL helper in lib/soil_logger.py to retune them
-    # per sensor + soil pot. Warning LED flips when % < warn_pct_below.
+    # Calibration constants live in config; use the `print_raw()` REPL helper
+    # in lib/soil_logger.py to retune them per probe + substrate. Warning LED
+    # flips when % < warn_pct_below, and root-zone temperature outside
+    # root_temp_min_c..max_c raises root_temp_low / root_temp_high.
+    #
+    # The driver performs no I/O at construction, so a probe that is absent or
+    # unplugged does not stop the boot: the logger is built, its reads miss,
+    # and the shared health machine reports soil_unreachable once and backs
+    # the polling off — the same degraded path every other sensor takes.
     soil_config = DEVICE_CONFIG.get("soil_logger", {})
     soil_logger_obj = None
     if is_plant_mode:
-        # Plant-mode-only import: keeps the SoilLogger bytecode off the heap
-        # in mushroom mode, where no soil probe is constructed.
+        # Plant-mode-only imports: keeps the SoilLogger + driver bytecode off
+        # the heap in mushroom mode, where no soil probe is constructed.
         try:
             from lib.soil_logger import SoilLogger
         except ImportError:  # frozen into the firmware as a top-level module
             from soil_logger import SoilLogger
+        try:
+            from lib.stemma_soil import StemmaSoil
+        except ImportError:  # frozen into the firmware as a top-level module
+            from stemma_soil import StemmaSoil
 
         try:
-            soil_adc = ADC(Pin(DEVICE_CONFIG["pins"]["adc_input"]))
+            soil_address = soil_config.get("i2c_address", 0x36)
+            soil_sensor = StemmaSoil(i2c=hardware.get_i2c(), address=soil_address)
             soil_logger_obj = SoilLogger(
-                adc=soil_adc,
+                sensor=soil_sensor,
                 time_provider=time_provider,
                 buffer_manager=buffer_manager,
                 logger=logger,
                 interval_s=soil_config.get("interval_s", 60),
-                adc_dry_raw=soil_config.get("adc_dry_raw", 850),
-                adc_wet_raw=soil_config.get("adc_wet_raw", 350),
+                raw_dry=soil_config.get("raw_dry", 200),
+                raw_wet=soil_config.get("raw_wet", 2000),
                 warn_pct_below=soil_config.get("warn_pct_below", 20),
+                root_temp_min_c=soil_config.get("root_temp_min_c", 20.0),
+                root_temp_max_c=soil_config.get("root_temp_max_c", 26.0),
                 sensor_root=DEVICE_CONFIG["paths"]["sensor_root"],
                 sensor_type=soil_config.get("sensor_type", "soil"),
                 write_queue=write_queue,
                 status_manager=status_manager,
+                **health_kwargs,
             )
             logger.info(
                 "MAIN",
-                f"SoilLogger on GP{DEVICE_CONFIG['pins']['adc_input']} "
-                f"(dry={soil_config.get('adc_dry_raw', 850)}, "
-                f"wet={soil_config.get('adc_wet_raw', 350)}, "
-                f"warn<{soil_config.get('warn_pct_below', 20)}%)",
+                f"SoilLogger on I2C0 0x{soil_address:02X} "
+                f"(dry={soil_config.get('raw_dry', 200)}, "
+                f"wet={soil_config.get('raw_wet', 2000)}, "
+                f"warn<{soil_config.get('warn_pct_below', 20)}%, "
+                f"root {soil_config.get('root_temp_min_c', 20.0)}-"
+                f"{soil_config.get('root_temp_max_c', 26.0)}C)",
             )
         except Exception as e:
             logger.warning("MAIN", f"SoilLogger init failed (non-critical): {e}")

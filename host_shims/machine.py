@@ -362,12 +362,28 @@ class SPI:
 
 _DS3231_ADDR = 0x68
 
+# Adafruit STEMMA #4026 soil probe (seesaw). Simulated at the BUS level rather
+# than by shimming lib/stemma_soil.py, because that module is imported
+# lib-first (`from lib.stemma_soil import ...`) and a shim module of the same
+# name would never be reached on the host. Answering the two seesaw registers
+# here exercises the real driver instead of bypassing it.
+_STEMMA_ADDR = 0x36
+_SEESAW_STATUS_BASE = 0x00
+_SEESAW_STATUS_TEMP = 0x04
+_SEESAW_TOUCH_BASE = 0x0F
+_SEESAW_TOUCH_CH0 = 0x10
+# Mid-range count: raw_dry 200 / raw_wet 2000 puts this near 50 % moisture.
+_STEMMA_MOISTURE_MEAN = 1100
+_STEMMA_MOISTURE_STDDEV = 25
+
 
 class I2C:
-    # Host I2C shim with DS3231-aware register model.
+    # Host I2C shim with DS3231- and seesaw-aware register models.
     # - readfrom_mem(0x68, 0x00, 7) returns BCD-encoded system time ±drift.
     # - readfrom_mem(0x68, 0x11, 2) returns a simulated temperature register.
     # - writeto_mem(0x68, 0x00, data) stores BCD time (making SetTime work).
+    # - writeto(0x36, [base, func]) + readfrom(0x36, n) answers the STEMMA
+    #   soil probe's moisture / temperature registers.
     # - scan() returns probe-calibrated addresses.
 
     def __init__(self, port: int, *, sda: Optional[Pin] = None, scl: Optional[Pin] = None, freq: int = 100_000):
@@ -378,21 +394,47 @@ class I2C:
         self._time_offset = datetime.timedelta(0)  # Adjustable via writeto_mem
         self._custom_time: Optional[bytes] = None   # Set via SetTime
         self._error_mode = False  # If True, all ops raise OSError
+        self._seesaw_pending: Optional[tuple] = None  # (base, function) of the last 0x36 write
         _print(f"[HOST I2C] I2C{self.port} init freq={self.freq}")
 
     def scan(self) -> list[int]:
-        # Return I2C addresses from probe data.
-        _print(f"[HOST I2C] scan -> {[hex(a) for a in PROBE.i2c.addresses]}")
-        return list(PROBE.i2c.addresses)
+        # Return I2C addresses from probe data. The STEMMA soil probe joined
+        # the bus after the probe dump was taken, so it is appended here.
+        addresses = list(PROBE.i2c.addresses)
+        if _STEMMA_ADDR not in addresses:
+            addresses.append(_STEMMA_ADDR)
+        _print(f"[HOST I2C] scan -> {[hex(a) for a in addresses]}")
+        return addresses
 
     def readfrom(self, addr: int, nbytes: int) -> bytes:
         if self._error_mode:
             raise OSError("I2C read error")
+        if addr == _STEMMA_ADDR:
+            return self._seesaw_reply(nbytes)
         return bytes([0] * nbytes)
 
     def writeto(self, addr: int, buf: bytes) -> None:
         if self._error_mode:
             raise OSError("I2C write error")
+        if addr == _STEMMA_ADDR and len(buf) >= 2:
+            self._seesaw_pending = (buf[0], buf[1])
+
+    def _seesaw_reply(self, nbytes: int) -> bytes:
+        # Answer the register selected by the preceding write.
+        pending = self._seesaw_pending
+        self._seesaw_pending = None
+        if pending == (_SEESAW_TOUCH_BASE, _SEESAW_TOUCH_CH0) and nbytes >= 2:
+            raw = int(_STEMMA_MOISTURE_MEAN + _normalvariate(0, _STEMMA_MOISTURE_STDDEV))
+            raw = max(0, min(4095, raw))
+            return bytes([(raw >> 8) & 0xFF, raw & 0xFF]) + bytes(nbytes - 2)
+        if pending == (_SEESAW_STATUS_BASE, _SEESAW_STATUS_TEMP) and nbytes >= 4:
+            # Root zone tracks tent air on the simulator; 16.16 fixed point.
+            temp = PROBE.sht31.temp_mean + _normalvariate(0, 0.2)
+            fixed = int(temp * 65536) & 0xFFFFFFFF
+            return bytes(
+                [(fixed >> 24) & 0xFF, (fixed >> 16) & 0xFF, (fixed >> 8) & 0xFF, fixed & 0xFF]
+            ) + bytes(nbytes - 4)
+        return bytes([0] * nbytes)
 
     def readfrom_mem(self, addr: int, reg: int, length: int) -> bytes:
         if self._error_mode:

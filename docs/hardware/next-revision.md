@@ -1192,44 +1192,46 @@ earlier 10 kΩ + 15 kΩ ADC divider entirely.
   cable side decided at harness build.
 - **GP28 / ADC2 freed.** No analog soil probe means no divider, no
   ADC_VREF gotcha, no 5 V → 3.3 V step-down problem. `adc_input: 28`
-  and the `adc_dry_raw` / `adc_wet_raw` keys are queued for removal
-  in the firmware-side rewrite (below). The pin becomes available
-  for any future analog peripheral.
-- **Firmware change queued (separate commit, lands with the new
-  PCB):** [lib/soil_logger.py](../../lib/soil_logger.py) rewritten
-  to read the Seesaw `touch_read` (channel 0) and the on-chip
-  temperature register over I²C instead of polling an ADC.
-  Calibration semantics **invert** versus the resistive-probe model:
-  with the capacitive Seesaw, **higher raw = wetter** (typical air
-  ≈ 200–400, fully saturated soil ≈ 1000–1500). Header becomes
-  `Timestamp,SeesawRaw,Percent,ProbeTempC` so the new probe
-  temperature joins the CSV row.
-- **Driver source:** port the constants from
+  and the `adc_dry_raw` / `adc_wet_raw` keys are **deleted** as of the
+  2026-08-25 firmware change below. The pin is available for the
+  rail-voltage measurement queued under the power-input entry.
+- **Firmware change SHIPPED 2026-08-25** (ahead of the new PCB, since
+  the probe plugs into an existing I²C drop):
+  [lib/soil_logger.py](../../lib/soil_logger.py) now takes an injected
+  driver and reads the seesaw touch channel plus the on-chip
+  temperature register instead of polling an ADC. Calibration semantics
+  **invert** versus the resistive-probe model: with the capacitive
+  seesaw, **higher raw = wetter** (air ≈ 200, saturated ≈ 2000), and the
+  validator enforces `raw_wet > raw_dry`. The CSV header is
+  `Timestamp,Raw,Percent,RootTempC` — the probe temperature joins the
+  row as an additive column.
+- **Driver:** [lib/stemma_soil.py](../../lib/stemma_soil.py) — the two
+  seesaw registers this board actually uses (`TOUCH_BASE` 0x0F +
+  channel offset 0x10, `STATUS_BASE` 0x00 + `TEMP` 0x04), ported from
   [Adafruit_CircuitPython_seesaw](https://github.com/adafruit/Adafruit_CircuitPython_seesaw)
-  (`MOISTURE_BASE`, `TOUCH_CHANNEL_OFFSET`, 16-bit big-endian read
-  sequence) into a small `lib/seesaw_soil.py`. No runtime dependency
-  on the Adafruit library — Pi Greenhouse is MicroPython, not
-  CircuitPython.
+  constants. No runtime dependency on the Adafruit library — Pi
+  Greenhouse is MicroPython, not CircuitPython.
 - **Verification:** post-fab eyes-on checklist in
   hw-test-log "Adafruit STEMMA #4026 soil sensor bring-up".
   Address on bus, dry/wet sweep, probe temperature within 5 °C of
   SHT31 at room temp.
 
-**Configuration impact (queued, not shipped this turn):**
+**Configuration impact (shipped 2026-08-25):**
 
-- `DEVICE_CONFIG["pins"]["adc_input"]` → **delete**.
+- `DEVICE_CONFIG["pins"]["adc_input"]` → **deleted**.
 - `DEVICE_CONFIG["soil_logger"]`:
-  - `adc_dry_raw` → rename `seesaw_dry_raw`, default ~300 (air).
-  - `adc_wet_raw` → rename `seesaw_wet_raw`, default ~1400 (saturated).
-    Validator inverts: wet must now be **>** dry.
+  - `adc_dry_raw` → `raw_dry`, placeholder 200 (air).
+  - `adc_wet_raw` → `raw_wet`, placeholder 2000 (saturated).
+    Validator inverted: wet must now be **>** dry.
   - new `i2c_address: 0x36`.
-  - new `i2c_bus: 0`.
-- `validate_config()` and
-  [tests/test_config.py](../../tests/test_config.py) rows move in
-  lockstep per
-  configurability.md.
-- `main.py` drops the ADC construction and passes the existing
-  `i2c0` instance to `SoilLogger`.
+  - new `root_temp_min_c: 20.0` / `root_temp_max_c: 26.0` (warning
+    thresholds only — root temperature has no actuator).
+  - no `i2c_bus` key: the probe shares the one I²C0 instance
+    `HardwareFactory` already owns.
+- `main.py` drops the ADC construction and passes that instance to
+  `StemmaSoil`, which is injected into `SoilLogger`.
+- Both placeholders still need a bench calibration (air / saturated)
+  before the probe is potted.
 
 ### [x] Case fan voltage selector + ambient fan Pico control
 

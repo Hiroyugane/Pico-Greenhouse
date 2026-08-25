@@ -574,6 +574,7 @@ class TestOLEDDisplayAdditionalCoverage:
         sl = Mock()
         sl.last_percent = None
         sl.last_raw = None
+        sl.last_root_temp_c = None
         sl.warn_pct_below = 20
         oled_display._soil_logger = sl
         oled_display._render_soil()
@@ -583,13 +584,28 @@ class TestOLEDDisplayAdditionalCoverage:
         oled_display._row = Mock()
         sl = Mock()
         sl.last_percent = 10
-        sl.last_raw = 800
+        sl.last_raw = 400
+        sl.last_root_temp_c = 21.4
         sl.warn_pct_below = 20
         oled_display._soil_logger = sl
         oled_display._render_soil()
         oled_display._row.assert_any_call("Moist: 10%", 0)
-        oled_display._row.assert_any_call("Raw:   800", 1)
-        oled_display._row.assert_any_call("LOW!", 3)
+        oled_display._row.assert_any_call("Raw:   400", 1)
+        oled_display._row.assert_any_call("Root:  21.4C", 2)
+        oled_display._row.assert_any_call("Warn<20%", 3)
+        oled_display._row.assert_any_call("LOW!", 4)
+
+    def test_render_soil_without_root_temperature(self, oled_display):
+        """A probe that has not answered yet shows the placeholder, not a crash."""
+        oled_display._row = Mock()
+        sl = Mock()
+        sl.last_percent = 55
+        sl.last_raw = 1200
+        sl.last_root_temp_c = None
+        sl.warn_pct_below = 20
+        oled_display._soil_logger = sl
+        oled_display._render_soil()
+        oled_display._row.assert_any_call("Root:  --C", 2)
 
     def test_render_co2_no_logger(self, oled_display):
         oled_display._row = Mock()

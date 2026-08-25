@@ -14,7 +14,7 @@ The **same source** runs in two places: on the Pico under MicroPython, and on Wi
 | | |
 | --- | --- |
 | **Target** | Raspberry Pi Pico (RP2040), custom MicroPython with frozen application modules |
-| **Sensing** | SHT31-D temp/humidity (I²C0), SenseAir S8-style CO₂ (UART0), analog soil probe (plant mode) |
+| **Sensing** | SHT31-D temp/humidity (I²C0), SenseAir S8-style CO₂ (UART0), STEMMA soil moisture + root temperature (I²C0, plant mode) |
 | **Actuation** | 3 mains relays, 1 heater MOSFET, 5 PWM fan channels (PCA9685), 0–10 V lamp dimmer (MCP4725) |
 | **Control** | one config-driven regulation engine, 30 s tick, allocation-free hot path |
 | **Storage** | SD card → `/local/fallback.csv` → in-memory ring buffer, with automatic migration back |
@@ -60,7 +60,7 @@ The top-level `mode` switch decides which optional components are constructed:
 | Mode | Soil logger | Regulation profiles allowed |
 | --- | --- | --- |
 | `"mushroom"` (default) | not constructed | `category: mushroom` |
-| `"plant"` | enabled (GP28 ADC) | `category: plant` |
+| `"plant"` | enabled (STEMMA probe on I²C0) | `category: plant` |
 
 Grow-light dimming is **not** tied to the mode — `regulation.regulators.growlight.dimmable` decides, because the MCP4725 is harmless when fitted and pointless for mushrooms either way. Disabled components are skipped entirely: no task, no I/O, no idle RAM.
 
@@ -108,7 +108,7 @@ Pin assignments mirror PCB schematic `SCH_Pico-Greenhouse-PCB_2026-05-14` and th
 | GP21 | Relay 4 — spare (wired, no controller) |
 | GP22 / GP26 / GP27 | Reserved relay lines (no net on the connector) |
 | GP25 | On-board LED — heartbeat |
-| GP28 | ADC2 — soil-moisture probe (plant mode) |
+| GP28 | ADC2 — free (the soil probe moved to I²C0) |
 
 Fans do not use GPIO: all five run from the PCA9685 on I²C0 — ch0 circulation centre, ch1 circulation walls, ch2 heater follower, ch3 case, ch4 exhaust. The channel map is bench-confirmed; do not renumber it without re-running the bring-up.
 
@@ -169,14 +169,14 @@ Coverage below 88 % fails. See [tests/README.md](tests/README.md) for the MicroP
 | Reminder | GP8 | Blinks when the service interval has elapsed (long-press GP9 to reset) |
 | Heartbeat | GP25 | Toggles each health-check tick — proves the loop is alive |
 
-**Alert keys** — the `alerts` page names the active condition. Errors: `sd_required`, `th_dead`, `mem_error`, `logged_error`. Warnings: `th_intermittent`, `fallback_active`, `buffer_backlog`, `mem_warn`, `rtc_invalid`, `co2_stale`, and `soil_low` in plant mode. The printed case legend lists these for someone standing at the tent with no terminal; it is regenerated from [tools/gen_case_legend.py](tools/gen_case_legend.py) whenever an operator-visible surface changes.
+**Alert keys** — the `alerts` page names the active condition. Errors: `sd_required`, `th_dead`, `mem_error`, `logged_error`. Warnings: `th_intermittent`, `fallback_active`, `buffer_backlog`, `mem_warn`, `rtc_invalid`, `co2_stale`, and `soil_low` / `soil_unreachable` / `root_temp_low` / `root_temp_high` in plant mode. The printed case legend lists these for someone standing at the tent with no terminal; it is regenerated from [tools/gen_case_legend.py](tools/gen_case_legend.py) whenever an operator-visible surface changes.
 
 ## Data on the SD card
 
 ```text
 /sd/sensors/th/YYYY/th_YYYY-MM-DD.csv           temperature + humidity
 /sd/sensors/co2/YYYY/co2_YYYY-MM-DD.csv         CO₂ ppm
-/sd/sensors/soil/YYYY/soil_YYYY-MM-DD.csv       soil moisture (plant mode)
+/sd/sensors/soil/YYYY/soil_YYYY-MM-DD.csv       soil moisture + root temp (plant mode)
 /sd/sensors/metrics/YYYY/metrics_YYYY-MM-DD.csv health + regulation metrics
 /sd/logs/system.log                             system event log
 /sd/logs/updates.log                            OTA history
@@ -249,7 +249,6 @@ docs/            configuration, conventions, hardware, task prompts
 ## Roadmap
 
 - **Adaptive tuning** — close the loop on the regulation surfaces themselves from logged outcomes, rather than hand-exporting them from the tuning explorer.
-- **Soil sensor swap** — replace the analog GP28 probe with the Adafruit STEMMA #4026 (I²C) on the next PCB.
 - **Hydroponics monitoring** — a second I²C bus for Atlas EZO pH/EC probes, monitor-only to start.
 - **More species profiles** — colonization-phase mushroom profiles (which legitimately run several thousand ppm CO₂) and vegetable presets.
 - **Enclosure** — a documented case with assembly instructions to go with the printed legend.

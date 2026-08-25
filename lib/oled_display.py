@@ -15,7 +15,7 @@
 #   6: relays    – fan and growlight relay states
 #   7: reg       – regulation engine band/latch, deviations, commanded vector
 #   8: co2       – CO2 ppm + override status
-#   9: soil      – soil moisture % + raw value
+#   9: soil      – soil moisture % + raw count + root-zone temperature
 #  10: debug     – debug-actions entry; long-press opens a sub-menu where
 #                  short-press cycles actions (wipe logs, cycle relays,
 #                  heater 5 s, growlight pulse, growlight dim sweep) and
@@ -909,13 +909,17 @@ class OLEDDisplay:
             return
         pct = getattr(self._soil_logger, "last_percent", None)
         raw = getattr(self._soil_logger, "last_raw", None)
+        root_c = getattr(self._soil_logger, "last_root_temp_c", None)
         warn_below = getattr(self._soil_logger, "warn_pct_below", None)
         if pct is None:
             self._row("Reading...", 0)
         else:
             self._row(f"Moist: {pct}%", 0)
             self._row(f"Raw:   {raw}", 1)
+            # Root-zone temperature from the same STEMMA probe. Monitor only —
+            # nothing regulates it, so the page is where the operator sees it.
+            self._row(f"Root:  {self._fmt_f(root_c)}C", 2)
             if warn_below is not None:
-                self._row(f"Warn<{warn_below}%", 2)
+                self._row(f"Warn<{warn_below}%", 3)
             if pct < (warn_below or 0):
-                self._row("LOW!", 3)
+                self._row("LOW!", 4)

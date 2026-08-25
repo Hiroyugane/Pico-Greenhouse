@@ -171,7 +171,7 @@ DEVICE_CONFIG = {
     #   GP21-GP22: Reserved relays (REL_CON pins 5-6, future use)
     #   GP25:      On-board LED (heartbeat)
     #   GP26-GP27: Reserved relays (REL_CON pins 7-8, future use)
-    #   GP28:      ADC input (ADC_CON pin 4; ADC_VREF on Pico pin 35)
+    #   GP28:      free (ex ADC_CON pin 4; the soil probe moved to I2C0)
     #
     # RES_BTN on the PCB is wired to the Pico's 3V3_EN line (hardware reset),
     # not a GPIO; "button_reserved" below points at the GP2 breakout for any
@@ -211,10 +211,10 @@ DEVICE_CONFIG = {
         "relay_reserved_2": 22,  # GP22 — Reserved relay (REL_CON pin 6)
         "relay_reserved_3": 26,  # GP26 — Reserved relay (REL_CON pin 7)
         "relay_reserved_4": 27,  # GP27 — Reserved relay (REL_CON pin 8)
-        # Analog input (ADC_CON pin 4; ADC_VREF on Pico pin 35)
-        # Queued for removal once the Adafruit STEMMA #4026 I²C soil
-        # sensor swap ships — see docs/hardware/next-revision.md.
-        "adc_input": 28,  # GP28 — ADC input (ADC_CON pin 4)
+        # GP28 / ADC2 is FREE. The analog soil probe that used to live on
+        # ADC_CON pin 4 is gone (Adafruit STEMMA #4026 on I²C0 replaced it),
+        # so `adc_input` was deleted rather than left pointing at nothing.
+        # The next board revision claims the pin for rail-voltage measurement.
         # On-board LED
         "onboard_led": 25,  # GP25 — Pico on-board LED (heartbeat)
     },
@@ -357,34 +357,38 @@ DEVICE_CONFIG = {
         "freq_hz": 60,
         "invert": False,
     },
-    # Soil Moisture Logger Configuration (GP28 / ADC2, single-probe)
+    # Soil Logger Configuration (Adafruit STEMMA #4026 on I²C0, address 0x36)
     #
-    # NOTE (2026-06-29): the dead NE555 capacitive probe is replaced by a
-    # TLC555-class CMOS sensor (TLC555 / 7555 / ICM7555 / LMC555) — a
-    # HARDWARE-ONLY swap. The earlier Adafruit STEMMA #4026 I²C plan is
-    # deferred (chat-log 2026-06-29); the analog ADC path stays. Firmware
-    # impact is ZERO code change: `adc_input: 28`, lib/soil_logger.py, and
-    # the `adc_dry_raw > adc_wet_raw` convention already match a capacitive
-    # sensor (dry = high AOUT = high raw). The only firmware action is a
-    # bench recalibration of adc_dry_raw / adc_wet_raw once the TLC555 unit
-    # is fitted — the 850/350 defaults below are NE555-era placeholders and
-    # the 3V3 TLC555 range will differ. Wiring: VCC → 3V3 (Pico pin 36, NOT
-    # 5 V and NOT ADC_VREF pin 35), AOUT → GP28, no divider. See
-    # docs/hardware/next-revision.md "Soil moisture sensor".
+    # The analog TLC555 path never worked reliably in the pot, so the probe is
+    # now the capacitive STEMMA sensor: it plugs into an existing I²C0 drop
+    # (SDA GP0 / SCL GP1, 3V3, GND) alongside the SHT31s, RTC, OLED, DAC and
+    # PWM driver, needs no divider and no ADC_VREF, and frees GP28/ADC2
+    # entirely. Driver: lib/stemma_soil.py (minimal seesaw), injected into
+    # SoilLogger by main.py. See docs/hardware/next-revision.md
+    # "Soil moisture sensor".
     #
-    # Raw ADC range on the RP2040 is 0-65535 (read_u16) but the plan
-    # speaks in the conventional 0-1023 10-bit space. SoilLogger scales
-    # the read_u16 result down internally; the calibration constants are
-    # specified in 0-1023 space because that's what the REPL helper
-    # (print_raw) prints. Calibrate against actual sensor + soil pot:
-    # adc_dry_raw = raw value with probe in air / bone-dry soil,
-    # adc_wet_raw = raw value with probe in saturated soil. Wet must be
-    # < dry (lower raw = more conductive = more water).
+    # CALIBRATION CONVENTION IS INVERTED versus the old resistive probe:
+    # with a capacitive sensor HIGHER RAW = WETTER, so raw_wet must be > raw_dry
+    # (the validator enforces that direction). The values below are
+    # PRE-CALIBRATION PLACEHOLDERS from the Adafruit datasheet range — the
+    # first bench job with the probe in hand is to run the print_raw() REPL
+    # helper in lib/soil_logger.py twice, once in air and once in saturated
+    # substrate, and paste the two counts in here BEFORE the probe is potted.
+    #
+    # The same probe reports root-zone temperature. It is LOGGED AND ALARMED
+    # ONLY, never regulated: nothing in the enclosure heats the pot, and a
+    # fourth regulation dimension would drag the arbiter, every profile and the
+    # golden vectors along for no actuator. root_temp_min_c/max_c bound the
+    # healthy window; outside it the operator gets root_temp_low /
+    # root_temp_high on the warning LED.
     "soil_logger": {
         "interval_s": 60,  # Log cadence (seconds) — soil moves slowly
-        "adc_dry_raw": 850,  # Raw 10-bit reading for 0% moisture (in-air)
-        "adc_wet_raw": 350,  # Raw 10-bit reading for 100% moisture (saturated)
+        "i2c_address": 0x36,  # STEMMA seesaw address (0x36-0x39 via AD0/AD1)
+        "raw_dry": 200,  # PLACEHOLDER raw count for 0% (probe in air)
+        "raw_wet": 2000,  # PLACEHOLDER raw count for 100% (saturated)
         "warn_pct_below": 20,  # Trigger warning LED when soil < this %
+        "root_temp_min_c": 20.0,  # Below this: root_temp_low warning
+        "root_temp_max_c": 26.0,  # Above this: root_temp_high warning
         "sensor_type": "soil",  # Folder + filename prefix under paths.sensor_root
     },
     # CO2 Sensor Logger Configuration (SenseAir S8 / equivalent on UART0)
@@ -2230,7 +2234,6 @@ def validate_config():
             "buzzer",
             "heater_mosfet",
             "gp2_breakout",
-            "adc_input",
             "sd_detect",
         ],
         "spi": ["id", "baudrate", "sck", "mosi", "miso", "cs", "mount_point"],
@@ -2265,9 +2268,12 @@ def validate_config():
         ],
         "soil_logger": [
             "interval_s",
-            "adc_dry_raw",
-            "adc_wet_raw",
+            "i2c_address",
+            "raw_dry",
+            "raw_wet",
             "warn_pct_below",
+            "root_temp_min_c",
+            "root_temp_max_c",
             "sensor_type",
         ],
         "sensor_health": [
@@ -2555,14 +2561,26 @@ def validate_config():
     soil_cfg = DEVICE_CONFIG["soil_logger"]
     if soil_cfg["interval_s"] <= 0:
         raise ValueError("soil_logger.interval_s must be > 0")
-    if not isinstance(soil_cfg["adc_dry_raw"], int) or not (0 <= soil_cfg["adc_dry_raw"] <= 1023):
-        raise ValueError("soil_logger.adc_dry_raw must be an int 0-1023")
-    if not isinstance(soil_cfg["adc_wet_raw"], int) or not (0 <= soil_cfg["adc_wet_raw"] <= 1023):
-        raise ValueError("soil_logger.adc_wet_raw must be an int 0-1023")
-    if soil_cfg["adc_dry_raw"] <= soil_cfg["adc_wet_raw"]:
-        raise ValueError("soil_logger.adc_dry_raw must be > adc_wet_raw")
+    if not isinstance(soil_cfg["i2c_address"], int) or not (0x08 <= soil_cfg["i2c_address"] <= 0x77):
+        raise ValueError("soil_logger.i2c_address must be a 7-bit I2C address (0x08-0x77)")
+    # Seesaw touch counts are 12-bit at most; see lib/stemma_soil.py.
+    for key in ("raw_dry", "raw_wet"):
+        value = soil_cfg[key]
+        if not isinstance(value, int) or isinstance(value, bool) or not (0 <= value <= 4095):
+            raise ValueError("soil_logger.{} must be an int 0-4095".format(key))
+    # INVERTED versus the old analog probe on purpose: the capacitive STEMMA
+    # reads HIGHER when wetter, so this direction is the calibration's sanity
+    # check — a swapped pair would report a soaked pot as bone dry.
+    if soil_cfg["raw_wet"] <= soil_cfg["raw_dry"]:
+        raise ValueError("soil_logger.raw_wet must be > raw_dry")
     if not (0 <= soil_cfg["warn_pct_below"] <= 100):
         raise ValueError("soil_logger.warn_pct_below must be 0-100")
+    for key in ("root_temp_min_c", "root_temp_max_c"):
+        value = soil_cfg[key]
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or not (0.0 <= value <= 50.0):
+            raise ValueError("soil_logger.{} must be a number 0-50".format(key))
+    if soil_cfg["root_temp_max_c"] <= soil_cfg["root_temp_min_c"]:
+        raise ValueError("soil_logger.root_temp_max_c must be > root_temp_min_c")
     if not isinstance(soil_cfg["sensor_type"], str) or not soil_cfg["sensor_type"]:
         raise ValueError("soil_logger.sensor_type must be a non-empty string")
 

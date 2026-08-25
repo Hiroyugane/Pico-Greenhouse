@@ -1065,32 +1065,93 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["soil_logger"]["interval_s"] = original
 
-    def test_soil_logger_dry_le_wet_raises(self):
-        """soil_logger.adc_dry_raw <= adc_wet_raw raises ValueError."""
+    def test_soil_logger_ships_the_inverted_capacitive_convention(self):
+        """The STEMMA probe reads HIGHER when wetter: raw_wet > raw_dry."""
+        from config import DEVICE_CONFIG
+
+        soil = DEVICE_CONFIG["soil_logger"]
+        assert soil["raw_wet"] > soil["raw_dry"]
+        assert soil["i2c_address"] == 0x36
+
+    def test_soil_logger_wet_le_dry_raises(self):
+        """soil_logger.raw_wet <= raw_dry raises ValueError (swapped calibration)."""
         import config
 
-        orig_dry = config.DEVICE_CONFIG["soil_logger"]["adc_dry_raw"]
-        orig_wet = config.DEVICE_CONFIG["soil_logger"]["adc_wet_raw"]
-        config.DEVICE_CONFIG["soil_logger"]["adc_dry_raw"] = 300
-        config.DEVICE_CONFIG["soil_logger"]["adc_wet_raw"] = 500
+        orig_dry = config.DEVICE_CONFIG["soil_logger"]["raw_dry"]
+        orig_wet = config.DEVICE_CONFIG["soil_logger"]["raw_wet"]
+        config.DEVICE_CONFIG["soil_logger"]["raw_dry"] = 1500
+        config.DEVICE_CONFIG["soil_logger"]["raw_wet"] = 500
         try:
-            with pytest.raises(ValueError, match="adc_dry_raw must be > adc_wet_raw"):
+            with pytest.raises(ValueError, match="raw_wet must be > raw_dry"):
                 config.validate_config()
         finally:
-            config.DEVICE_CONFIG["soil_logger"]["adc_dry_raw"] = orig_dry
-            config.DEVICE_CONFIG["soil_logger"]["adc_wet_raw"] = orig_wet
+            config.DEVICE_CONFIG["soil_logger"]["raw_dry"] = orig_dry
+            config.DEVICE_CONFIG["soil_logger"]["raw_wet"] = orig_wet
 
-    def test_soil_logger_dry_out_of_range_raises(self):
-        """soil_logger.adc_dry_raw outside 0-1023 raises ValueError."""
+    def test_soil_logger_raw_out_of_range_raises(self):
+        """soil_logger.raw_dry outside 0-4095 raises ValueError."""
         import config
 
-        original = config.DEVICE_CONFIG["soil_logger"]["adc_dry_raw"]
-        config.DEVICE_CONFIG["soil_logger"]["adc_dry_raw"] = 2000
+        original = config.DEVICE_CONFIG["soil_logger"]["raw_dry"]
+        config.DEVICE_CONFIG["soil_logger"]["raw_dry"] = 9000
         try:
-            with pytest.raises(ValueError, match="adc_dry_raw"):
+            with pytest.raises(ValueError, match="raw_dry must be an int 0-4095"):
                 config.validate_config()
         finally:
-            config.DEVICE_CONFIG["soil_logger"]["adc_dry_raw"] = original
+            config.DEVICE_CONFIG["soil_logger"]["raw_dry"] = original
+
+    def test_soil_logger_bad_i2c_address_raises(self):
+        """soil_logger.i2c_address outside the 7-bit range raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["soil_logger"]["i2c_address"]
+        config.DEVICE_CONFIG["soil_logger"]["i2c_address"] = 0x80
+        try:
+            with pytest.raises(ValueError, match="soil_logger.i2c_address"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["soil_logger"]["i2c_address"] = original
+
+    def test_soil_logger_root_temp_window_defaults(self):
+        """Root-zone alarm window ships at 20-26 C (monitor only, no actuator)."""
+        from config import DEVICE_CONFIG
+
+        soil = DEVICE_CONFIG["soil_logger"]
+        assert soil["root_temp_min_c"] == 20.0
+        assert soil["root_temp_max_c"] == 26.0
+
+    def test_soil_logger_root_temp_inverted_window_raises(self):
+        """root_temp_max_c must exceed root_temp_min_c."""
+        import config
+
+        orig_min = config.DEVICE_CONFIG["soil_logger"]["root_temp_min_c"]
+        orig_max = config.DEVICE_CONFIG["soil_logger"]["root_temp_max_c"]
+        config.DEVICE_CONFIG["soil_logger"]["root_temp_min_c"] = 26.0
+        config.DEVICE_CONFIG["soil_logger"]["root_temp_max_c"] = 20.0
+        try:
+            with pytest.raises(ValueError, match="root_temp_max_c must be > root_temp_min_c"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["soil_logger"]["root_temp_min_c"] = orig_min
+            config.DEVICE_CONFIG["soil_logger"]["root_temp_max_c"] = orig_max
+
+    def test_soil_logger_root_temp_out_of_range_raises(self):
+        """A root-zone limit outside 0-50 C is a typo, not a setting."""
+        import config
+
+        original = config.DEVICE_CONFIG["soil_logger"]["root_temp_max_c"]
+        config.DEVICE_CONFIG["soil_logger"]["root_temp_max_c"] = 260.0
+        try:
+            with pytest.raises(ValueError, match="root_temp_max_c must be a number 0-50"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["soil_logger"]["root_temp_max_c"] = original
+
+    def test_pins_has_no_adc_input(self):
+        """GP28/ADC2 was freed by the I2C soil probe — no key may point at it."""
+        from config import DEVICE_CONFIG
+
+        assert "adc_input" not in DEVICE_CONFIG["pins"]
 
     def test_soil_logger_warn_pct_out_of_range_raises(self):
         """soil_logger.warn_pct_below outside 0-100 raises ValueError."""

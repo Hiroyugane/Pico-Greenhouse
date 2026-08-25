@@ -9,8 +9,8 @@
 # change, and rebuilt through the single _activate_profile() path.
 # Emergency/latch transitions raise buzzer + event-log side effects through
 # injected callbacks so the engine stays hardware-decoupled and testable.
-# Also hosts the monitor-only humidifier effectiveness watchdog, which never
-# touches an actuator — it only raises an operator warning.
+# Also hosts two monitor-only detectors — humidifier effectiveness and RH-target
+# reachability — which never touch an actuator, only raise operator warnings.
 
 import time
 from array import array
@@ -190,6 +190,17 @@ class RegulationEngine:
         self._ext_min_c = float(ext["min_factor"])
         self._ext_full_rh = float(ext["full_delta_rh"])
         self._ext_min_rh = float(ext["min_factor_rh"])
+        # Latest external reading, cached into scalars once per tick so the
+        # exhaust multiplier and the RH-reachability monitor share one I2C read.
+        self._ext_t = None
+        self._ext_h = None
+
+        # RH-target reachability monitor (monitor only — see _check_rh_target).
+        self._rh_margin = float(ext.get("rh_unreachable_margin", 0.0))
+        self._rh_window_s = float(ext.get("rh_unreachable_window_s", 0.0))
+        self._rh_watch = self._rh_margin > 0.0 and self._rh_window_s > 0.0
+        self._rh_over_since = None  # monotonic start of the sustained excess
+        self._rh_warned = False  # warning currently raised (edge guard)
 
         # Preallocated per-tick buffers.
         self._dev = array("f", [50.0] * len(dim_order))
@@ -344,16 +355,74 @@ class RegulationEngine:
 
     # -- external-effectiveness multiplier (exhaust only) ------------------
 
-    def _external_mult(self, temp_in, hum_in):
-        if not (self._ext_enabled and self._any_external and self._external_read):
-            return 1.0
+    def _read_external(self):
+        """Sample the external (intake/room) sensor once per tick into scalars.
+
+        Two consumers now share the reading — the exhaust effectiveness
+        multiplier and the RH-reachability monitor — so it is read here rather
+        than inside _external_mult, which used to own it. Both stay silent while
+        the sensor is disabled or answering None.
+        """
+        self._ext_t = None
+        self._ext_h = None
+        if not (self._ext_enabled and self._external_read):
+            return
         ext = self._external_read()
-        if not ext:
+        if ext:
+            self._ext_t = ext[0]
+            self._ext_h = ext[1]
+
+    def _external_mult(self, temp_in, hum_in):
+        if not (self._any_external and self._ext_t is not None):
             return 1.0
-        t_out, h_out = ext
-        ft = _effect_factor(temp_in - t_out, self._ext_full_c, self._ext_min_c)
-        fh = _effect_factor(hum_in - h_out, self._ext_full_rh, self._ext_min_rh)
+        ft = _effect_factor(temp_in - self._ext_t, self._ext_full_c, self._ext_min_c)
+        fh = _effect_factor(hum_in - self._ext_h, self._ext_full_rh, self._ext_min_rh)
         return ft * fh
+
+    # -- RH-target reachability monitor (monitor only) ---------------------
+
+    def _check_rh_target(self, now_s):
+        """Warn when the room's own humidity puts the RH setpoint out of reach.
+
+        MONITOR ONLY — no actuator, no buzzer, one warning key.
+
+        The tent has no dehumidifier. Its only humidity-lowering path is the
+        exhaust, which dilutes toward room air, so the floor it can reach is the
+        room it stands in. Against the assumed 35-70 %RH room, the bloom ideal
+        of 43 %RH is periodically not achievable by any command the engine can
+        issue, and the actuators will simply run flat out failing.
+
+        The operator decision is to keep the setpoint FIXED and say so, rather
+        than sliding the target to whatever is achievable today: a target that
+        chases the room is no longer a target. So this raises
+        rh_target_unreachable and leaves the regulation untouched.
+
+        The ideal comes from the live normalizer (rebuilt by _activate_profile
+        on every phase change) and the current day/night blend, never from a
+        config constant — bloom's 43 and seedling's 68 have opposite verdicts
+        against the same room.
+
+        Allocation-free: one subtraction, one timestamp, one flag.
+        """
+        room = self._ext_h
+        if room is None:
+            return  # sensor disabled or not answering: no opinion either way
+        ideal = self._norm.ideal(self._hum_idx, self._b)
+        if room - ideal <= self._rh_margin:
+            self._rh_over_since = None
+            if self._rh_warned:
+                self._rh_warned = False
+                self._set_warning("rh_target_unreachable", False)
+            return
+        if self._rh_warned:
+            return
+        if self._rh_over_since is None:
+            self._rh_over_since = now_s
+            return
+        if now_s - self._rh_over_since >= self._rh_window_s:
+            self._rh_warned = True
+            self._set_warning("rh_target_unreachable", True)
+            self._event("warning", "room humidity above the RH target: setpoint unreachable")
 
     # -- fresh-air exchange fallback ---------------------------------------
 
@@ -505,6 +574,7 @@ class RegulationEngine:
         for i in range(len(self._sev)):
             self._sev[i] = severity(self._dev[i])
 
+        self._read_external()
         ext_mult = self._external_mult(temp if temp is not None else 0.0, hum if hum is not None else 0.0)
         self._compute_targets(ext_mult, self._fae_floor(co2, minutes))
 
@@ -516,6 +586,8 @@ class RegulationEngine:
 
         if self._hum_watch:
             self._check_humidifier(out[self._i_humidifier], hum, now_s)
+        if self._rh_watch:
+            self._check_rh_target(now_s)
 
         self._handle_signals()
 

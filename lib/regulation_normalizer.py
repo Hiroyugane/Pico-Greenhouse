@@ -100,6 +100,18 @@ class RegulationNormalizer:
         self._day = day
         self._night = night
 
+    def ideal(self, dim_index, b):
+        """The blended at_50 anchor (the ideal, in physical units) for one dim.
+
+        Same night + b*(day - night) blend update() applies, exposed on its own
+        so a monitor can compare a physical reading against the ACTIVE profile's
+        setpoint without re-deriving it from config — the engine swaps this
+        object out on every phase change. Allocation-free.
+        """
+        base = dim_index * 3 + 1
+        night = self._night[base]
+        return night + b * (self._day[base] - night)
+
     def update(self, readings, minutes, out_dev):
         """Fill ``out_dev`` (len 3) with deviations; return the blend factor b.
 

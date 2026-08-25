@@ -3090,3 +3090,93 @@ class TestHumidifierWatchdogConfig:
                 config.validate_config()
         finally:
             buzzer["error_pattern"] = original
+
+
+class TestRhUnreachableConfig:
+    """Thresholds for the RH-target reachability warning (external sensor)."""
+
+    @staticmethod
+    def _swap(key, value):
+        import config
+
+        cfg = config.DEVICE_CONFIG["regulation"]["external_sensor"]
+        original = cfg[key]
+        cfg[key] = value
+        return cfg, original
+
+    def test_defaults_validate(self):
+        import config
+
+        assert config.validate_config() is True
+
+    def test_defaults_are_present_and_provisional(self):
+        """Shipped starting guesses, not field-derived numbers — retune expected."""
+        from config import DEVICE_CONFIG
+
+        cfg = DEVICE_CONFIG["regulation"]["external_sensor"]
+        assert cfg["rh_unreachable_margin"] == 5.0
+        assert cfg["rh_unreachable_window_s"] == 1800
+
+    def test_they_live_with_the_sensor_that_feeds_them(self):
+        """The detector no-ops while the sensor is off, so keep them together."""
+        from config import DEVICE_CONFIG
+
+        cfg = DEVICE_CONFIG["regulation"]["external_sensor"]
+        assert cfg["enabled"] is False  # flipped on by the mode-switch stage
+        assert {"rh_unreachable_margin", "rh_unreachable_window_s"} <= set(cfg)
+
+    def test_zero_margin_raises(self):
+        """A zero margin warns the instant the room is one point over ideal."""
+        import config
+
+        cfg, original = self._swap("rh_unreachable_margin", 0)
+        try:
+            with pytest.raises(ValueError, match="rh_unreachable_margin must be > 0"):
+                config.validate_config()
+        finally:
+            cfg["rh_unreachable_margin"] = original
+
+    def test_negative_window_raises(self):
+        import config
+
+        cfg, original = self._swap("rh_unreachable_window_s", -60)
+        try:
+            with pytest.raises(ValueError, match="rh_unreachable_window_s must be > 0"):
+                config.validate_config()
+        finally:
+            cfg["rh_unreachable_window_s"] = original
+
+    def test_non_numeric_margin_raises(self):
+        import config
+
+        cfg, original = self._swap("rh_unreachable_margin", "5")
+        try:
+            with pytest.raises(ValueError, match="rh_unreachable_margin must be > 0"):
+                config.validate_config()
+        finally:
+            cfg["rh_unreachable_margin"] = original
+
+    def test_missing_key_raises(self):
+        import config
+
+        cfg = config.DEVICE_CONFIG["regulation"]["external_sensor"]
+        original = cfg.pop("rh_unreachable_window_s")
+        try:
+            with pytest.raises(ValueError, match="Missing config key: regulation.external_sensor"):
+                config.validate_config()
+        finally:
+            cfg["rh_unreachable_window_s"] = original
+
+    def test_bloom_target_sits_under_the_assumed_room(self):
+        """This is why the warning exists: 43 %RH is below a 35-70 %RH room's top.
+
+        The tent's only humidity-lowering path is dilution toward room air, so a
+        room above the ideal plus the margin makes the bloom setpoint physically
+        unreachable — hence a warning rather than a moved target.
+        """
+        from config import DEVICE_CONFIG
+
+        reg = DEVICE_CONFIG["regulation"]
+        ideal = reg["profiles"]["cannabis_bloom"]["day"]["humidity"]["at_50"]
+        margin = reg["external_sensor"]["rh_unreachable_margin"]
+        assert ideal + margin < 70.0  # the top of the assumed room range

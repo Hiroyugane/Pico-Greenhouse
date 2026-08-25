@@ -793,6 +793,21 @@ DEVICE_CONFIG = {
         # disabled the multiplier is a constant 1.0. full_delta = outside must
         # be cooler/drier by this much for full effect; min_factor = floor when
         # outside is as warm/humid or worse.
+        #
+        # The same sensor also backs the RH-target-reachability warning. The
+        # tent can only be driven toward room air — exhaust dilutes, and there
+        # is no dehumidifier — so it cannot hold an RH ideal that sits far below
+        # the room it stands in. The bloom target of 43 %RH is periodically
+        # unreachable against the assumed 35-70 %RH room, and the operator
+        # decision is to leave the setpoint alone and say so instead of moving
+        # the target to whatever happens to be achievable today. Monitor only:
+        # no actuator, no buzzer, one warning key.
+        #
+        # NOTE: unlike the humidifier watchdog's thresholds, the two
+        # rh_unreachable_* values below are NOT derived from field data — they
+        # are starting guesses and are expected to be retuned once a season of
+        # room-RH logs exists. Widen the margin if the warning nags; lengthen
+        # the window if it trips on cooking/showering transients.
         "external_sensor": {
             "enabled": False,
             "i2c_address": 0x45,
@@ -800,6 +815,8 @@ DEVICE_CONFIG = {
             "min_factor": 0.2,
             "full_delta_rh": 10.0,
             "min_factor_rh": 0.4,
+            "rh_unreachable_margin": 5.0,  # RH points room may exceed the ideal by
+            "rh_unreachable_window_s": 1800,  # sustained for this long before warning
         },
         # Fresh-air exchange fallback, for when the CO2 reading is unavailable.
         #
@@ -1953,6 +1970,12 @@ def _validate_regulation(reg_cfg, pins_cfg, top_mode):
         v = ext.get(key)
         if not isinstance(v, (int, float)) or isinstance(v, bool) or not (0 <= v <= 1):
             raise ValueError("regulation.external_sensor.{} must be 0-1".format(key))
+    for key in ("rh_unreachable_margin", "rh_unreachable_window_s"):
+        if key not in ext:
+            raise ValueError("Missing config key: regulation.external_sensor.{}".format(key))
+        v = ext[key]
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
+            raise ValueError("regulation.external_sensor.{} must be > 0".format(key))
 
     esc = reg_cfg.get("escalation")
     if not isinstance(esc, dict) or set(esc) != set(_REG_DIMENSIONS):

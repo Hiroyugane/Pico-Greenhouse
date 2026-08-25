@@ -766,7 +766,17 @@ def _date_at(offset_days, start=_START):
     return (d.year, d.month, d.day)
 
 
-def _sched_engine(offset_days=0, minutes=720, logger=None, mutate=None, enabled=True, temp=23.0, hum=60.0):
+def _sched_engine(
+    offset_days=0,
+    minutes=720,
+    logger=None,
+    mutate=None,
+    enabled=True,
+    temp=23.0,
+    hum=60.0,
+    external_read=None,
+    status_manager=None,
+):
     """Engine with the cannabis phase schedule live, clocked `offset_days` in."""
     import config
     from lib.regulation_engine import RegulationEngine
@@ -775,6 +785,8 @@ def _sched_engine(offset_days=0, minutes=720, logger=None, mutate=None, enabled=
     reg["phase_schedule"]["enabled"] = enabled
     reg["phase_schedule"]["start_date"] = _START
     reg["profile"] = reg["phase_schedule"]["phases"][0]["profile"]
+    if external_read is not None:
+        reg["external_sensor"]["enabled"] = True
     if mutate is not None:
         mutate(reg)
     names = config._REG_NAMES
@@ -788,7 +800,9 @@ def _sched_engine(offset_days=0, minutes=720, logger=None, mutate=None, enabled=
         FakeTh(temp, hum),
         FakeCo2(800.0),
         clock,
+        external_read=external_read,
         logger=logger,
+        status_manager=status_manager,
         clock=lambda: 0.0,
     )
     return engine, adapters, names, clock
@@ -1015,3 +1029,198 @@ class TestPhaseSchedule:
         assert engine.get_state()["phase"] is None
         assert engine.get_state()["profile"] == "cubensis"
         assert abs(_adapter(adapters, names, "growlight").value - 80.0) < 1e-3
+
+
+# --- RH-target reachability monitor --------------------------------------
+
+
+class _RoomRig:
+    """Schedule engine with a settable room (intake) sensor on a fake clock."""
+
+    KEY = "rh_target_unreachable"
+
+    def __init__(self, offset_days=35, room=(21.0, 55.0), window_s=100.0, margin=None, dt=30.0):
+        self.room = room
+        self.reads = 0
+
+        def external_read():
+            self.reads += 1
+            return self.room
+
+        def mutate(reg):
+            ext = reg["external_sensor"]
+            ext["rh_unreachable_window_s"] = window_s
+            if margin is not None:
+                ext["rh_unreachable_margin"] = margin
+
+        self.status = FakeStatus()
+        self.logger = pytest.importorskip("unittest.mock").Mock()
+        self.engine, self.adapters, self.names, self.clock = _sched_engine(
+            offset_days=offset_days,
+            temp=23.0,
+            hum=45.0,
+            mutate=mutate,
+            external_read=external_read,
+            status_manager=self.status,
+            logger=self.logger,
+        )
+        self._t = 0.0
+        self._dt = dt
+
+    def tick(self):
+        self.engine.tick(now_s=self._t)
+        self._t += self._dt
+
+    def run(self, seconds):
+        end = self._t + seconds
+        while self._t <= end:
+            self.tick()
+
+    @property
+    def warned(self):
+        return self.KEY in self.status.active
+
+    @property
+    def warn_lines(self):
+        return [c for c in self.logger.warning.call_args_list if "unreachable" in str(c)]
+
+
+class TestRhTargetUnreachable:
+    """The tent cannot get below the room it stands in.
+
+    Exhaust dilutes toward room air and there is no dehumidifier, so an RH ideal
+    well under the room's own humidity is not a setpoint the actuators can miss
+    — it is one they cannot reach. The operator decision is to hold the setpoint
+    and raise a warning rather than slide the target to whatever is achievable
+    today. Monitor only: no actuator, no buzzer.
+    """
+
+    def test_sustained_excess_warns_once(self):
+        # Bloom ideal 43 %RH against a 55 % room: 12 points over a 5-point margin.
+        rig = _RoomRig(offset_days=35, room=(21.0, 55.0))
+        assert rig.engine.get_state()["phase"] == "bloom"
+        rig.tick()
+        assert rig.warned is False  # the window has to be sustained
+        rig.run(150.0)
+        assert rig.warned is True
+        assert rig.status.calls == [(rig.KEY, True)]
+        assert len(rig.warn_lines) == 1
+
+        rig.run(400.0)  # still over, still one warning
+        assert rig.status.calls == [(rig.KEY, True)]
+        assert len(rig.warn_lines) == 1
+
+    def test_same_room_never_warns_for_seedling(self):
+        """The verdict follows the ACTIVE profile, not a config constant.
+
+        Seedling wants 68 %RH — a 55 % room is drier than the target, which is
+        the humidifier's problem and not this detector's.
+        """
+        rig = _RoomRig(offset_days=0, room=(21.0, 55.0))
+        assert rig.engine.get_state()["phase"] == "seedling"
+        rig.run(600.0)
+        assert rig.warned is False
+        assert rig.status.calls == []
+
+    def test_advancing_into_bloom_flips_the_verdict(self):
+        """One room, one sensor: only the phase change makes it unreachable."""
+        rig = _RoomRig(offset_days=34, room=(21.0, 55.0))
+        rig.run(600.0)
+        assert rig.warned is False  # stretch wants 50 %RH: 5 points, not over
+
+        rig.clock.date = _date_at(35)
+        rig.run(300.0)
+        assert rig.engine.get_state()["phase"] == "bloom"
+        assert rig.warned is True
+
+    def test_within_the_margin_never_warns(self):
+        """Exactly at the margin is reachable enough — the check is strict."""
+        rig = _RoomRig(offset_days=35, room=(21.0, 48.0))  # 43 + 5.0 exactly
+        rig.run(600.0)
+        assert rig.warned is False
+
+    def test_recovery_clears_the_warning(self):
+        rig = _RoomRig(offset_days=35, room=(21.0, 55.0))
+        rig.run(150.0)
+        assert rig.warned is True
+
+        rig.room = (21.0, 44.0)  # window opened, room dried out
+        rig.tick()
+        assert rig.warned is False
+        assert rig.status.calls == [(rig.KEY, True), (rig.KEY, False)]
+
+        rig.room = (21.0, 55.0)  # and it can arm again
+        rig.run(150.0)
+        assert rig.warned is True
+        assert rig.status.calls == [(rig.KEY, True), (rig.KEY, False), (rig.KEY, True)]
+
+    def test_transient_excess_does_not_warn(self):
+        """A shower next door is not an unreachable target."""
+        rig = _RoomRig(offset_days=35, room=(21.0, 55.0))
+        rig.run(60.0)  # 60 s of a 100 s window
+        rig.room = (21.0, 44.0)
+        rig.tick()  # back under: the window is discarded
+        rig.room = (21.0, 55.0)
+        rig.run(60.0)
+        assert rig.warned is False
+
+    def test_sensor_returning_nothing_is_silent(self):
+        """A failed read is not evidence; the detector must simply do nothing."""
+        rig = _RoomRig(offset_days=35, room=None)
+        rig.run(600.0)
+        assert rig.reads > 0
+        assert rig.warned is False
+        assert rig.status.calls == []
+
+    def test_disabled_sensor_is_never_even_read(self):
+        """enabled: False (the shipped default) → no I2C read, no verdict."""
+        status = FakeStatus()
+        reads = {"n": 0}
+
+        def external_read():
+            reads["n"] += 1
+            return (21.0, 55.0)
+
+        def mutate(reg):
+            reg["external_sensor"]["enabled"] = False
+            reg["external_sensor"]["rh_unreachable_window_s"] = 100.0
+
+        engine, adapters, names, clock = _sched_engine(
+            offset_days=35,
+            temp=23.0,
+            hum=45.0,
+            mutate=mutate,
+            external_read=external_read,
+            status_manager=status,
+        )
+        for i in range(40):
+            engine.tick(now_s=float(i * 30))
+        assert reads["n"] == 0
+        assert status.calls == []
+
+    def test_no_external_callable_is_inert(self):
+        """The sensor can be enabled in config and still fail to construct."""
+        status = FakeStatus()
+
+        def mutate(reg):
+            reg["external_sensor"]["enabled"] = True
+            reg["external_sensor"]["rh_unreachable_window_s"] = 100.0
+
+        engine, adapters, names, clock = _sched_engine(
+            offset_days=35, temp=23.0, hum=45.0, mutate=mutate, status_manager=status
+        )
+        for i in range(40):
+            engine.tick(now_s=float(i * 30))
+        assert status.calls == []
+
+    def test_one_read_serves_both_consumers(self):
+        """The exhaust multiplier and the monitor share a single I2C sample.
+
+        The sample moved out of _external_mult so both can see it; the exhaust
+        gate itself is still pinned by TestExternalGate.
+        """
+        rig = _RoomRig(offset_days=35, room=(35.0, 55.0))
+        for _ in range(5):
+            rig.tick()
+        assert rig.reads == 5
+        assert rig.engine._ext_h == 55.0

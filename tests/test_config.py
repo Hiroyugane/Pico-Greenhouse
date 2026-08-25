@@ -2487,6 +2487,91 @@ class TestPhaseScheduleConfig:
         finally:
             self._restore(snap)
 
+    def test_profile_surface_overrides_inverted_output_window_raises(self):
+        """An override may not collapse the rescale window evaluate() divides by.
+
+        The fragment's own bounds allow out_min = 100 and out_max = 0 — each is
+        individually inside [-1000, 1000]. Only the MERGED surface shows the
+        inversion, and the engine would otherwise carry it all the way to a
+        ZeroDivisionError on the device's first tick.
+        """
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["profiles"]["cannabis_bloom"]["surface_overrides"] = {
+            "humidifier": {"out_min": 100.0, "out_max": 0.0}
+        }
+        try:
+            with pytest.raises(ValueError, match="out_min must be < out_max"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_profile_surface_override_partial_out_min_is_merged_before_checking(self):
+        """Half an inversion is still an inversion: out_min alone must be caught."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        # The base humidifier surface has out_max = 100; out_min = 200 inverts it.
+        config.DEVICE_CONFIG["regulation"]["profiles"]["cannabis_bloom"]["surface_overrides"] = {
+            "humidifier": {"out_min": 200.0}
+        }
+        try:
+            with pytest.raises(ValueError, match="out_min must be < out_max"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    # -- bloom silences the humidifier ------------------------------------
+
+    def test_bloom_overrides_the_humidifier_surface(self):
+        """Bloom is the phase that carries the neutral humidifier override."""
+        from config import DEVICE_CONFIG
+
+        profiles = DEVICE_CONFIG["regulation"]["profiles"]
+        assert profiles["cannabis_bloom"]["surface_overrides"]["humidifier"] == {
+            "mult": 0.0,
+            "out_min": 0.0,
+            "out_max": 100.0,
+        }
+        # The two earlier phases must NOT carry it — they still humidify.
+        for name in ("cannabis_seedling", "cannabis_stretch"):
+            assert "humidifier" not in profiles[name].get("surface_overrides", {}), name
+
+    def test_bloom_humidifier_surface_is_exactly_zero_over_the_whole_grid(self):
+        """The merged bloom surface evaluates to EXACTLY 0.0 for every input pair.
+
+        Not "small" and not "usually zero": the relay decision downstream is a
+        threshold comparison, so anything that can round above off_below is a
+        contact that closes. Sweep both deviation axes at 0.5-point resolution
+        (plus the out-of-range values a clamped normalizer can never emit, as a
+        belt-and-braces check on the hinge terms) and require the exact float.
+        """
+        from config import DEVICE_CONFIG
+        from lib.regulation_surface import evaluate, freeze_surface
+
+        regulators = DEVICE_CONFIG["regulation"]["regulators"]
+        merged = dict(regulators["humidifier"]["surface"])
+        merged.update(DEVICE_CONFIG["regulation"]["profiles"]["cannabis_bloom"]["surface_overrides"]["humidifier"])
+        params = freeze_surface(merged)
+
+        axis = [i * 0.5 for i in range(0, 201)] + [-50.0, -1.0, 101.0, 150.0]
+        worst = 0.0
+        for dev_h in axis:  # x = RH deviation
+            for dev_t in axis:  # y = temp deviation
+                value = evaluate(params, dev_h, dev_t)
+                if value > worst:
+                    worst = value
+                assert value == 0.0, (dev_h, dev_t, value)
+        assert worst == 0.0
+
+    def test_bloom_humidifier_command_can_never_reach_the_relay(self):
+        """Zero sits under off_below, so the contact cannot even be held closed."""
+        from config import DEVICE_CONFIG
+
+        adapter = DEVICE_CONFIG["regulation"]["regulators"]["humidifier"]["adapter"]
+        assert 0.0 < adapter["off_below"] < adapter["on_above"]
+
     # -- phase_schedule ---------------------------------------------------
 
     def test_phase_schedule_default_valid(self):

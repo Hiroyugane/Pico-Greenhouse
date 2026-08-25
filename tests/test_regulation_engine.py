@@ -745,6 +745,52 @@ class TestPhaseSchedule:
         assert engine._surface_params[i_exhaust][P_OFFSET] == 0.0
         assert exhaust.value <= floor  # back off the ceiling the override held
 
+    def test_bloom_never_humidifies_however_dry_it_gets(self):
+        """Bloom's neutral surface override silences the humidifier for good.
+
+        The relay switches the appliance's 230 V supply, so "off" here means the
+        humidifier is unplugged for the whole phase — which is what bloom wants:
+        with no humidifier the tent settles at 45-49 %RH against a 43 % ideal,
+        and there is no dehumidifier to undo an over-correction. Feed it air far
+        drier than its own at_0 anchor (28 %RH) so the un-overridden surface
+        would be screaming for moisture, and assert nothing moves.
+        """
+        engine, adapters, names, clock = _sched_engine(offset_days=35, temp=23.0, hum=15.0)
+        humidifier = _adapter(adapters, names, "humidifier")
+        assert engine.get_state()["phase"] == "bloom"
+
+        for i in range(20):
+            engine.tick(now_s=float(i * 30))
+            assert humidifier.value == 0.0, i
+            assert humidifier.active is False, i
+        # Bone dry: the deviation confirms the surface was given every reason.
+        assert engine.get_state()["deviations"][1] == 0.0
+
+    def test_seedling_and_stretch_still_humidify(self):
+        """Control: the override is bloom's alone, not a global disable."""
+        for offset, phase in ((0, "seedling"), (14, "stretch")):
+            engine, adapters, names, clock = _sched_engine(offset_days=offset, temp=23.0, hum=15.0)
+            assert engine.get_state()["phase"] == phase
+            for i in range(10):
+                engine.tick(now_s=float(i * 30))
+            humidifier = _adapter(adapters, names, "humidifier")
+            assert humidifier.value > 0.0, phase
+            assert humidifier.active is True, phase
+
+    def test_advancing_into_bloom_drops_a_running_humidifier(self):
+        """The override lands on the phase change, not only on a cold boot."""
+        engine, adapters, names, clock = _sched_engine(offset_days=34, temp=23.0, hum=15.0)
+        humidifier = _adapter(adapters, names, "humidifier")
+        for i in range(5):
+            engine.tick(now_s=float(i * 30))
+        assert humidifier.value > 0.0  # stretch is still humidifying
+
+        clock.date = _date_at(35)
+        engine.tick(now_s=200.0)
+        assert engine.get_state()["phase"] == "bloom"
+        assert humidifier.value == 0.0
+        assert humidifier.active is False
+
     def test_disabled_schedule_is_inert(self):
         """enabled: False → the clock is never asked for a date and nothing moves."""
         engine, adapters, names, clock = _sched_engine(offset_days=60, enabled=False)

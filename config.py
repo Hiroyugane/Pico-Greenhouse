@@ -1051,6 +1051,35 @@ DEVICE_CONFIG = {
             },
             "cannabis_bloom": {
                 "category": "plant",
+                # THE HUMIDIFIER IS OFF FOR THE WHOLE OF BLOOM, and this is the
+                # mechanism that turns it off.
+                #
+                # The relay on GP19 switches the humidifier's 230 V SUPPLY, so an
+                # open contact is a dead appliance — there is no half measure and
+                # no feedback channel. Bloom does not want one: the 2026-08-07
+                # field run measured the tent settling at 45.3-48.7 %RH with no
+                # effective humidifier, which straddles this profile's 43 %
+                # ideal. Bloom's problem is drying the air, not wetting it, and
+                # the tent has no dehumidifier — so the correct bloom command is
+                # simply "never".
+                #
+                # It is done with a SURFACE override rather than an adapter
+                # threshold because that is where a setpoint decision belongs:
+                # the adapter owns relay quirks (hysteresis, min-cycle) and knows
+                # nothing about grow phases. mult = 0 collapses the whole hinge
+                # plane to raw = 0 for every (dev_h, dev_t) pair, and pinning
+                # out_min/out_max to 0/100 fixes the rescale window so the output
+                # is EXACTLY 0.0 rather than whatever the base surface's clamp
+                # range would rescale zero into. Command 0 sits permanently under
+                # the adapter's off_below (7.0), so the contact can never close.
+                #
+                # The regulator itself is still built, still arbitrated and still
+                # logged: the metrics CSV shows cmd_humidifier = 0 for every
+                # bloom row instead of a hole, which is what makes "off on
+                # purpose" distinguishable from "missing" months later.
+                "surface_overrides": {
+                    "humidifier": {"mult": 0.0, "out_min": 0.0, "out_max": 100.0},
+                },
                 "day": {
                     # at_100 = 28 (not 30) pulls the mold-risk gate down to
                     # 26.0 C — see the block comment above.
@@ -1667,7 +1696,7 @@ def _validate_anchor_set(anchors, ctx):
         raise ValueError("{} anchors must be strictly ascending (at_0 < at_50 < at_100)".format(ctx))
 
 
-def _validate_surface_overrides(overrides, ctx):
+def _validate_surface_overrides(overrides, regulators, ctx):
     """Validate a profile's partial per-regulator surface overrides.
 
     Unlike _validate_surface these are PARTIAL: only the params a phase wants
@@ -1675,6 +1704,12 @@ def _validate_surface_overrides(overrides, ctx):
     surface before freezing. Both key levels are checked here because a typo
     would otherwise be silently ignored (unknown regulator) or blow up at boot
     inside freeze_surface (unknown param).
+
+    The MERGED surface is validated too, not just the fragment. evaluate()
+    rescales its clamped output by (out_max - out_min), so an override that
+    touches either of those two params can produce a zero or negative window
+    that no bounds check on the fragment alone would catch — and it would only
+    surface as a ZeroDivisionError on the first tick, on the device.
     """
     if not isinstance(overrides, dict):
         raise ValueError("{} must be a dict".format(ctx))
@@ -1691,6 +1726,11 @@ def _validate_surface_overrides(overrides, ctx):
             lo, hi = bounds
             if not isinstance(value, (int, float)) or isinstance(value, bool) or not (lo <= value <= hi):
                 raise ValueError("{}.{} must be a number in [{}, {}]".format(rctx, pname, lo, hi))
+        base = regulators.get(reg_name) if isinstance(regulators, dict) else None
+        if isinstance(base, dict) and isinstance(base.get("surface"), dict):
+            merged = dict(base["surface"])
+            merged.update(params)
+            _validate_surface(merged, "{} merged over regulators.{}.surface".format(rctx, reg_name))
 
 
 def _validate_phase_schedule(sched, profiles, active_profile):
@@ -1916,7 +1956,11 @@ def _validate_regulation(reg_cfg, pins_cfg, top_mode):
             if not isinstance(v, (int, float)) or isinstance(v, bool) or not (0 <= v <= 100):
                 raise ValueError("{}.light_level_day must be 0-100".format(pctx))
         if "surface_overrides" in pcfg:
-            _validate_surface_overrides(pcfg["surface_overrides"], "{}.surface_overrides".format(pctx))
+            _validate_surface_overrides(
+                pcfg["surface_overrides"],
+                reg_cfg.get("regulators"),
+                "{}.surface_overrides".format(pctx),
+            )
 
     profile = reg_cfg["profile"]
     if profile not in profiles:

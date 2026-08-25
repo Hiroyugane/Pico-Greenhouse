@@ -418,6 +418,29 @@ DEVICE_CONFIG = {
         # disables the timeout.
         "stale_after_s": 300,
     },
+    # Sensor-health reporting policy (shared by every sensor logger).
+    #
+    # A dead sensor used to emit one WARN line per failed read forever: the
+    # 2026-07-31..08-07 field run logged 20 533 CO2 warnings — 100 % of every
+    # warning the system produced — which alone drove 3-4 log rotations a day
+    # and buried every other warning in the file. The failure was real; the
+    # per-read repetition carried no information after the first line.
+    #
+    # So reporting is EDGE-triggered, not level-triggered: short blips stay at
+    # DEBUG, the transition into "unreachable" emits exactly one WARN, the
+    # unreachable state itself is silent, and recovery emits exactly one INFO.
+    # The durable, operator-visible channel is the StatusManager warning
+    # (co2_unreachable / sht31_unreachable), not the log.
+    #
+    # Polling also backs off while unreachable — there is no point asking a
+    # dead sensor every 30 s — doubling backoff_start_s up to backoff_max_s.
+    # Any successful read snaps the interval straight back to normal.
+    "sensor_health": {
+        "warn_after_failures": 3,  # Consecutive failures before "unreachable"
+        "backoff_start_s": 60,  # First backed-off poll interval (seconds)
+        "backoff_max_s": 300,  # Ceiling for the doubling backoff (seconds)
+        "unreachable_heartbeat_s": 0,  # Reminder cadence while unreachable; 0 = silent
+    },
     # Grow light schedule + dimming live under regulation.regulators.growlight
     # (tod-driven, MCP4725 via adapter dac_i2c_address/dac_max_pct).
     # Service Reminder Configuration
@@ -1906,6 +1929,12 @@ def validate_config():
             "warn_pct_below",
             "sensor_type",
         ],
+        "sensor_health": [
+            "warn_after_failures",
+            "backoff_start_s",
+            "backoff_max_s",
+            "unreachable_heartbeat_s",
+        ],
         "Service_reminder": [
             "days_interval",
             "blink_pattern_ms",
@@ -2181,6 +2210,22 @@ def validate_config():
         raise ValueError("soil_logger.warn_pct_below must be 0-100")
     if not isinstance(soil_cfg["sensor_type"], str) or not soil_cfg["sensor_type"]:
         raise ValueError("soil_logger.sensor_type must be a non-empty string")
+
+    health_cfg = DEVICE_CONFIG["sensor_health"]
+    warn_after = health_cfg["warn_after_failures"]
+    if not isinstance(warn_after, int) or isinstance(warn_after, bool) or warn_after < 1:
+        raise ValueError("sensor_health.warn_after_failures must be an int >= 1")
+    backoff_start = health_cfg["backoff_start_s"]
+    if not isinstance(backoff_start, (int, float)) or isinstance(backoff_start, bool) or backoff_start <= 0:
+        raise ValueError("sensor_health.backoff_start_s must be a number > 0")
+    backoff_max = health_cfg["backoff_max_s"]
+    if not isinstance(backoff_max, (int, float)) or isinstance(backoff_max, bool):
+        raise ValueError("sensor_health.backoff_max_s must be a number")
+    if backoff_max < backoff_start:
+        raise ValueError("sensor_health.backoff_max_s must be >= backoff_start_s")
+    heartbeat = health_cfg["unreachable_heartbeat_s"]
+    if not isinstance(heartbeat, (int, float)) or isinstance(heartbeat, bool) or heartbeat < 0:
+        raise ValueError("sensor_health.unreachable_heartbeat_s must be a number >= 0 (0 = silent)")
 
     sd_detect_cfg = DEVICE_CONFIG["sd_detect"]
     if not isinstance(sd_detect_cfg["enabled"], bool):

@@ -26,6 +26,7 @@ class TestConfigStructure:
             "pca9685",
             "co2_logger",
             "soil_logger",
+            "sensor_health",
             "Service_reminder",
             "buffer_manager",
             "event_logger",
@@ -2432,3 +2433,116 @@ class TestCo2FilteringConfig:
                 config.validate_config()
         finally:
             fae["command"] = original
+
+
+class TestSensorHealthConfig:
+    """Edge-triggered sensor reporting policy + poll backoff ladder."""
+
+    @staticmethod
+    def _swap(key, value):
+        import config
+
+        cfg = config.DEVICE_CONFIG["sensor_health"]
+        original = cfg[key]
+        cfg[key] = value
+        return cfg, original
+
+    def test_defaults_validate(self):
+        """Shipped defaults are a valid policy."""
+        import config
+
+        assert config.validate_config() is True
+
+    def test_defaults_are_sane(self):
+        from config import DEVICE_CONFIG
+
+        cfg = DEVICE_CONFIG["sensor_health"]
+        assert cfg["warn_after_failures"] >= 1
+        assert cfg["backoff_start_s"] > 0
+        assert cfg["backoff_max_s"] >= cfg["backoff_start_s"]
+        assert cfg["unreachable_heartbeat_s"] >= 0
+
+    def test_missing_key_raises(self):
+        import config
+
+        cfg = config.DEVICE_CONFIG["sensor_health"]
+        original = cfg["backoff_start_s"]
+        del cfg["backoff_start_s"]
+        try:
+            with pytest.raises(ValueError, match="Missing config key"):
+                config.validate_config()
+        finally:
+            cfg["backoff_start_s"] = original
+
+    def test_warn_after_failures_below_one_raises(self):
+        """Zero would report "unreachable" before a single read had failed."""
+        import config
+
+        cfg, original = self._swap("warn_after_failures", 0)
+        try:
+            with pytest.raises(ValueError, match="warn_after_failures must be an int >= 1"):
+                config.validate_config()
+        finally:
+            cfg["warn_after_failures"] = original
+
+    def test_warn_after_failures_non_int_raises(self):
+        import config
+
+        cfg, original = self._swap("warn_after_failures", 3.5)
+        try:
+            with pytest.raises(ValueError, match="warn_after_failures must be an int"):
+                config.validate_config()
+        finally:
+            cfg["warn_after_failures"] = original
+
+    def test_backoff_start_zero_raises(self):
+        """A zero backoff would poll a dead sensor in a tight loop."""
+        import config
+
+        cfg, original = self._swap("backoff_start_s", 0)
+        try:
+            with pytest.raises(ValueError, match="backoff_start_s must be a number > 0"):
+                config.validate_config()
+        finally:
+            cfg["backoff_start_s"] = original
+
+    def test_backoff_max_below_start_raises(self):
+        """A ceiling under the first step would make the ladder run backwards."""
+        import config
+
+        cfg, original = self._swap("backoff_max_s", 30)
+        try:
+            with pytest.raises(ValueError, match="backoff_max_s must be >= backoff_start_s"):
+                config.validate_config()
+        finally:
+            cfg["backoff_max_s"] = original
+
+    def test_backoff_max_equal_to_start_is_allowed(self):
+        """Equal values mean "one backoff step, no doubling" — a valid policy."""
+        import config
+
+        start = config.DEVICE_CONFIG["sensor_health"]["backoff_start_s"]
+        cfg, original = self._swap("backoff_max_s", start)
+        try:
+            assert config.validate_config() is True
+        finally:
+            cfg["backoff_max_s"] = original
+
+    def test_negative_heartbeat_raises(self):
+        import config
+
+        cfg, original = self._swap("unreachable_heartbeat_s", -1)
+        try:
+            with pytest.raises(ValueError, match="unreachable_heartbeat_s must be a number >= 0"):
+                config.validate_config()
+        finally:
+            cfg["unreachable_heartbeat_s"] = original
+
+    def test_heartbeat_zero_is_silent_and_valid(self):
+        import config
+
+        cfg, original = self._swap("unreachable_heartbeat_s", 0)
+        try:
+            assert config.validate_config() is True
+        finally:
+            cfg["unreachable_heartbeat_s"] = original

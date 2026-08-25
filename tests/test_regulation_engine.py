@@ -149,9 +149,7 @@ class TestCalm:
 
     def test_growlight_dims_for_the_seedling_phase(self):
         """The shipped profile overrides the base level down to 40 % for weeks 1-2."""
-        engine, adapters, names = _engine(
-            temp=23.0, hum=68.0, co2=700.0, minutes=720, profile="cannabis_seedling"
-        )
+        engine, adapters, names = _engine(temp=23.0, hum=68.0, co2=700.0, minutes=720, profile="cannabis_seedling")
         engine.tick(now_s=0.0)
         assert abs(_adapter(adapters, names, "growlight").value - 40.0) < 1e-3
 
@@ -1187,9 +1185,7 @@ class TestImplausibleRtcDate:
         for bad in self.BAD_DATES:
             logger = pytest.importorskip("unittest.mock").Mock()
             status = FakeStatus()
-            engine, adapters, names, clock = _sched_engine(
-                offset_days=35, logger=logger, status_manager=status
-            )
+            engine, adapters, names, clock = _sched_engine(offset_days=35, logger=logger, status_manager=status)
             engine.tick(now_s=0.0)
             assert engine.get_state()["phase"] == "bloom", bad
             logger.reset_mock()
@@ -1244,9 +1240,7 @@ class TestImplausibleRtcDate:
     def test_cold_boot_with_a_bad_clock_adopts_the_acknowledged_phase(self):
         """The operator only ever acknowledges a phase the controller was in."""
         status = FakeStatus()
-        engine, adapters, names, clock = _sched_engine(
-            date=(2000, 1, 1), fallback_phase="bloom", status_manager=status
-        )
+        engine, adapters, names, clock = _sched_engine(date=(2000, 1, 1), fallback_phase="bloom", status_manager=status)
         state = engine.get_state()
         assert state["phase"] == "bloom"
         assert state["profile"] == "cannabis_bloom"

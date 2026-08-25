@@ -1056,8 +1056,7 @@ async def main():
                         if ext_health.record_failure():
                             logger.warning(
                                 "MAIN",
-                                "intake SHT31 unreachable after {} failed reads; "
-                                "polling backed off to {}s ({})".format(
+                                "intake SHT31 unreachable after {} failed reads; polling backed off to {}s ({})".format(
                                     ext_health.consecutive_failures,
                                     ext_health.interval_s(),
                                     ext_state["err"],
@@ -1416,8 +1415,7 @@ async def main():
     else:
         logger.info(
             "MAIN",
-            "task-leak metric DEGRADED: this build has no Task.done(), "
-            "so the tasks column can only ever read 0",
+            "task-leak metric DEGRADED: this build has no Task.done(), so the tasks column can only ever read 0",
         )
 
     # Main event loop with adaptive health-check interval:

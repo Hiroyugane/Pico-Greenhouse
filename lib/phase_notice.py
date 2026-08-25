@@ -108,8 +108,9 @@ class PhaseNoticeStore:
                 if self._logger:
                     self._logger.warning(
                         "PhaseNotice",
-                        "acknowledgement store is not persisting ({}); "
-                        "raising the phase notice on every boot".format(self.storage_path),
+                        "acknowledgement store is not persisting ({}); raising the phase notice on every boot".format(
+                            self.storage_path
+                        ),
                     )
                 return True
             if self._logger:

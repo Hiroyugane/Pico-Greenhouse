@@ -126,7 +126,7 @@ class TestPhaseNoticeBootDecision:
         assert store.needs_notice("bloom") is True  # and again next boot
 
     def test_a_store_with_no_path_at_all_raises_the_notice(self):
-        """"No persistence" is documented as "notice every boot" — hold to that."""
+        """ "No persistence" is documented as "notice every boot" — hold to that."""
         from lib.phase_notice import PhaseNoticeStore
 
         assert PhaseNoticeStore(storage_path="").needs_notice("bloom") is True

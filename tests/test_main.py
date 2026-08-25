@@ -1832,9 +1832,7 @@ class TestIntakeSensorHealth:
         warnings = [str(c) for c in rig["logger"].warning.call_args_list if "intake SHT31" in str(c)]
         assert len(warnings) == 1
         assert "intake bus wedged" in warnings[0]  # the cause, not just the count
-        assert [c.args for c in rig["status"].set_warning.call_args_list if c.args[0] == self.KEY] == [
-            (self.KEY, True)
-        ]
+        assert [c.args for c in rig["status"].set_warning.call_args_list if c.args[0] == self.KEY] == [(self.KEY, True)]
 
         clock["t"] = 400.0  # past the backoff
         state["fail"] = False

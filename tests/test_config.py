@@ -2341,6 +2341,328 @@ class TestRegulationConfig:
             self._restore(snap)
 
 
+class TestPhaseScheduleConfig:
+    """Tests for the cannabis phase profiles and regulation.phase_schedule."""
+
+    @staticmethod
+    def _restore(snapshot):
+        import config
+
+        config.DEVICE_CONFIG["regulation"] = snapshot
+
+    @staticmethod
+    def _sched():
+        import config
+
+        return config.DEVICE_CONFIG["regulation"]["phase_schedule"]
+
+    # -- profiles ---------------------------------------------------------
+
+    def test_cannabis_phase_profiles_present_and_plant(self):
+        """All three phase profiles exist and are plant-category."""
+        from config import DEVICE_CONFIG
+
+        profiles = DEVICE_CONFIG["regulation"]["profiles"]
+        for name in ("cannabis_seedling", "cannabis_stretch", "cannabis_bloom"):
+            assert name in profiles, name
+            assert profiles[name]["category"] == "plant", name
+            for phase in ("day", "night"):
+                for dim in ("temp", "humidity", "co2"):
+                    anchors = profiles[name][phase][dim]
+                    assert anchors["at_0"] < anchors["at_50"] < anchors["at_100"]
+
+    def test_cannabis_temp_ideals_match_the_field_run(self):
+        """Day 23 / night 21 in every phase — the tent has no day/night swing.
+
+        Field run 2026-07-31..08-07 (10 327 rows): day median 22.8 C, night
+        median 22.7 C. Scored on those rows, 23/21 sits within +-10 deviation
+        77.2 % of the time against 55.8 % for the textbook 24/20 pair.
+        """
+        from config import DEVICE_CONFIG
+
+        profiles = DEVICE_CONFIG["regulation"]["profiles"]
+        for name in ("cannabis_seedling", "cannabis_stretch", "cannabis_bloom"):
+            assert profiles[name]["day"]["temp"]["at_50"] == 23.0, name
+            assert profiles[name]["night"]["temp"]["at_50"] == 21.0, name
+
+    def test_bloom_narrows_the_mold_gate_to_botrytis_range(self):
+        """Bloom's tighter at_100 moves the mold-risk rule to 26.0 C.
+
+        The conflict rule is phrased in deviation (["temp", "above", 30] =
+        deviation 80), so its physical trip point follows the profile anchors.
+        Bloom buys a tighter gate with at_100 = 28 instead of a second rule.
+        """
+        from config import DEVICE_CONFIG
+        from lib.regulation_normalizer import deviation
+
+        reg = DEVICE_CONFIG["regulation"]
+        # The rule this test is pinned to must still be the deviation-phrased one.
+        assert ["temp", "above", 30] in [list(t) for t in reg["conflicts"][0]["when"]]
+
+        def gate_c(profile_name):
+            anchors = reg["profiles"][profile_name]["day"]["temp"]
+            lo, hi = anchors["at_50"], anchors["at_100"]
+            # Invert deviation(): dev 80 → at_50 + 0.6 * (at_100 - at_50).
+            value = lo + 0.6 * (hi - lo)
+            assert abs(deviation(value, **anchors) - 80.0) < 1e-6
+            return value
+
+        assert abs(gate_c("cannabis_bloom") - 26.0) < 1e-6
+        assert abs(gate_c("cannabis_seedling") - 27.2) < 1e-6
+        assert abs(gate_c("cannabis_stretch") - 27.2) < 1e-6
+
+    def test_seedling_dims_the_light(self):
+        """Weeks 1-2 run the panel at 40 %; no later phase carries the key."""
+        from config import DEVICE_CONFIG
+
+        profiles = DEVICE_CONFIG["regulation"]["profiles"]
+        assert profiles["cannabis_seedling"]["light_level_day"] == 40.0
+        assert "light_level_day" not in profiles["cannabis_stretch"]
+        assert "light_level_day" not in profiles["cannabis_bloom"]
+
+    def test_profile_light_level_out_of_range_raises(self):
+        """A profile light_level_day outside 0-100 raises ValueError."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["profiles"]["cannabis_seedling"]["light_level_day"] = 140.0
+        try:
+            with pytest.raises(ValueError, match="light_level_day must be 0-100"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_profile_surface_overrides_accepted(self):
+        """A partial surface override on a known regulator validates."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["profiles"]["cannabis_bloom"]["surface_overrides"] = {
+            "humidifier": {"bx_lo1": 55.0}
+        }
+        try:
+            assert config.validate_config() is True
+        finally:
+            self._restore(snap)
+
+    def test_profile_surface_overrides_unknown_regulator_raises(self):
+        """surface_overrides keys must be regulator names."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["profiles"]["cannabis_bloom"]["surface_overrides"] = {
+            "dehumidifier": {"gain": 1.0}
+        }
+        try:
+            with pytest.raises(ValueError, match="unknown regulator"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_profile_surface_overrides_unknown_param_raises(self):
+        """An override param that freeze_surface would not know raises early."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["profiles"]["cannabis_bloom"]["surface_overrides"] = {
+            "humidifier": {"bx_low1": 55.0}
+        }
+        try:
+            with pytest.raises(ValueError, match="is not a surface param"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_profile_surface_overrides_out_of_bounds_raises(self):
+        """Override values honour the same bounds as a full surface."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["profiles"]["cannabis_bloom"]["surface_overrides"] = {
+            "humidifier": {"gain": 5000.0}
+        }
+        try:
+            with pytest.raises(ValueError, match="must be a number in"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    # -- phase_schedule ---------------------------------------------------
+
+    def test_phase_schedule_default_valid(self):
+        """The shipped schedule validates and carries the expected phases."""
+        import config
+
+        assert config.validate_config() is True
+        sched = self._sched()
+        assert [p["name"] for p in sched["phases"]] == ["seedling", "stretch", "bloom"]
+        assert [p["weeks"] for p in sched["phases"]] == [2, 3, 0]
+        assert sched["start_date"] == (2026, 9, 1)
+
+    def test_phase_schedule_disabled_while_the_mushroom_profile_runs(self):
+        """Ships disabled: the profile flip to cannabis happens in one later commit."""
+        from config import DEVICE_CONFIG
+
+        assert DEVICE_CONFIG["regulation"]["phase_schedule"]["enabled"] is False
+        assert DEVICE_CONFIG["regulation"]["profile"] == "cubensis"
+
+    def test_phase_schedule_enabled_requires_the_first_phase_profile(self):
+        """Enabling the schedule while regulation.profile disagrees raises."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["phase_schedule"]["enabled"] = True
+        try:
+            with pytest.raises(ValueError, match="must equal the first phase's profile"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_phase_schedule_enabled_with_matching_profile_validates(self):
+        """Flipping mode + profile + enabled together is the legal combination."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        mode = config.DEVICE_CONFIG["mode"]
+        config.DEVICE_CONFIG["mode"] = "plant"
+        config.DEVICE_CONFIG["regulation"]["profile"] = "cannabis_seedling"
+        config.DEVICE_CONFIG["regulation"]["phase_schedule"]["enabled"] = True
+        try:
+            assert config.validate_config() is True
+        finally:
+            config.DEVICE_CONFIG["mode"] = mode
+            self._restore(snap)
+
+    def test_phase_schedule_bad_start_date_shape_raises(self):
+        """start_date must be a three-element tuple."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["phase_schedule"]["start_date"] = (2026, 9)
+        try:
+            with pytest.raises(ValueError, match="start_date must be a"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_phase_schedule_impossible_start_date_raises(self):
+        """A day that does not exist in that month raises (30 February)."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["phase_schedule"]["start_date"] = (2026, 2, 30)
+        try:
+            with pytest.raises(ValueError, match="start_date day must be"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_phase_schedule_leap_day_accepted(self):
+        """29 February is valid in a leap year and invalid in a common one."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        try:
+            config.DEVICE_CONFIG["regulation"]["phase_schedule"]["start_date"] = (2028, 2, 29)
+            assert config.validate_config() is True
+            config.DEVICE_CONFIG["regulation"]["phase_schedule"]["start_date"] = (2026, 2, 29)
+            with pytest.raises(ValueError, match="start_date day must be"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_phase_schedule_absurd_year_raises(self):
+        """A year outside 2020-2100 is an unset clock, not a grow."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["phase_schedule"]["start_date"] = (1970, 1, 1)
+        try:
+            with pytest.raises(ValueError, match="start_date year"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_phase_schedule_unknown_profile_raises(self):
+        """Every referenced profile must exist."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["phase_schedule"]["phases"][1]["profile"] = "triffid"
+        try:
+            with pytest.raises(ValueError, match="not in regulation.profiles"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_phase_schedule_mushroom_profile_raises(self):
+        """A phase schedule is a plant concept — mushroom profiles are rejected."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["phase_schedule"]["phases"][1]["profile"] = "cubensis"
+        try:
+            with pytest.raises(ValueError, match="must be a plant profile"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_phase_schedule_negative_weeks_raises(self):
+        """weeks must be an int >= 0."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["phase_schedule"]["phases"][0]["weeks"] = -1
+        try:
+            with pytest.raises(ValueError, match="weeks must be an int"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_phase_schedule_open_ended_middle_phase_raises(self):
+        """weeks == 0 anywhere but last would make every later phase dead."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["phase_schedule"]["phases"][0]["weeks"] = 0
+        try:
+            with pytest.raises(ValueError, match="may only be 0 on the last phase"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_phase_schedule_open_ended_last_phase_accepted(self):
+        """weeks == 0 on the last phase is the shipped 'until harvest' case."""
+        import config
+
+        assert config.DEVICE_CONFIG["regulation"]["phase_schedule"]["phases"][-1]["weeks"] == 0
+        assert config.validate_config() is True
+
+    def test_phase_schedule_empty_phases_raises(self):
+        """An empty phase list is not a schedule."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["phase_schedule"]["phases"] = []
+        try:
+            with pytest.raises(ValueError, match="phases must be a non-empty list"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_phase_schedule_enabled_must_be_bool(self):
+        """enabled is a bool, not a truthy string."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["phase_schedule"]["enabled"] = "yes"
+        try:
+            with pytest.raises(ValueError, match="enabled must be a bool"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+
 class TestCo2FilteringConfig:
     """Plausibility window, checksum flag, staleness timeout, and the FAE block."""
 

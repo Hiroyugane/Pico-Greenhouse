@@ -70,6 +70,10 @@ _SURFACE_PARAMS = (
     ("out_max", -1000.0, 1000.0, 100.0),  # clamp hi (also rescale ceil)
 )
 _SURFACE_PARAM_NAMES = tuple(p[0] for p in _SURFACE_PARAMS)
+# name → (lo, hi) for validating PARTIAL surface dicts (profile overrides).
+_SURFACE_BOUNDS = {name: (lo, hi) for name, lo, hi, _default in _SURFACE_PARAMS}
+# Days per month, index 0 = January (February gets +1 in a leap year).
+_DAYS_IN_MONTH = (31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
 
 # Deviation dimensions and the ordered regulator (command-vector) names. The
 # arbiter's target vector T[] is indexed by _REG_NAMES order — also load-bearing.
@@ -981,6 +985,122 @@ DEVICE_CONFIG = {
                     "co2": {"at_0": 400.0, "at_50": 800.0, "at_100": 1500.0},
                 },
             },
+            # --- Cannabis, one profile per growth phase (see phase_schedule) ---
+            #
+            # The three profiles below are driven by the week-based schedule
+            # rather than being selected by hand: seedling for the first two
+            # weeks, stretch for the following three, bloom until harvest.
+            #
+            # TEMPERATURE IS THE SAME IN ALL THREE — day 23 C, night 21 C — and
+            # that is a measurement, not laziness. The 2026-07-31..08-07 field
+            # run puts the tent's day median at 22.8 C and its night median at
+            # 22.7 C: this enclosure has no day/night swing to speak of, because
+            # nothing in it can actively cool. Scored against those 10 327 real
+            # rows, day 23 / night 21 lands within +-10 deviation 77.2 % of the
+            # time; the textbook day 24 / night 20 pair manages 55.8 %. Anchors
+            # that the room can actually sit inside are worth more than anchors
+            # copied from a grow guide written for a room with a chiller.
+            #
+            # Deviation-space consequence worth knowing before editing these:
+            # the mold-risk conflict rule (see conflicts, below) is phrased in
+            # DEVIATION ("temp above 30" = deviation 80), so its physical
+            # trip point is a function of each profile's temp anchors. With
+            # at_50 = 23 and at_100 = 30 it sits at 27.2 C; bloom deliberately
+            # narrows at_100 to 28 so the same rule arms at 26.0 C, inside the
+            # botrytis range that ruins a flowering canopy. Do not "fix" the
+            # bloom anchor to match the other two — the tighter gate IS the
+            # feature, and it is bought with an anchor change rather than a
+            # second conflict rule.
+            #
+            # Humidity walks down phase by phase (68 -> 50 -> 43 %RH ideal),
+            # which is the standard VPD progression. The 2026-08-07 evidence
+            # says the tent's natural RH without the humidifier is 45-50 %, so
+            # bloom's ideal is close to the room's resting state and seedling
+            # is the phase that leans on the humidifier hardest.
+            "cannabis_seedling": {
+                "category": "plant",
+                # Weeks 1-2: a seedling under full canopy light bleaches. 40 %
+                # is the operator's chosen level for the propagation phase; the
+                # schedule restores the growlight's configured level (80 %) when
+                # the stretch phase activates, because no later profile carries
+                # this key.
+                "light_level_day": 40.0,
+                "day": {
+                    "temp": {"at_0": 16.0, "at_50": 23.0, "at_100": 30.0},
+                    "humidity": {"at_0": 45.0, "at_50": 68.0, "at_100": 85.0},
+                    "co2": {"at_0": 350.0, "at_50": 800.0, "at_100": 1600.0},
+                },
+                "night": {
+                    "temp": {"at_0": 14.0, "at_50": 21.0, "at_100": 28.0},
+                    "humidity": {"at_0": 45.0, "at_50": 68.0, "at_100": 85.0},
+                    "co2": {"at_0": 350.0, "at_50": 800.0, "at_100": 1600.0},
+                },
+            },
+            "cannabis_stretch": {
+                "category": "plant",
+                "day": {
+                    "temp": {"at_0": 16.0, "at_50": 23.0, "at_100": 30.0},
+                    "humidity": {"at_0": 32.0, "at_50": 50.0, "at_100": 70.0},
+                    "co2": {"at_0": 400.0, "at_50": 1000.0, "at_100": 1600.0},
+                },
+                "night": {
+                    "temp": {"at_0": 14.0, "at_50": 21.0, "at_100": 28.0},
+                    "humidity": {"at_0": 32.0, "at_50": 50.0, "at_100": 70.0},
+                    "co2": {"at_0": 400.0, "at_50": 1000.0, "at_100": 1600.0},
+                },
+            },
+            "cannabis_bloom": {
+                "category": "plant",
+                "day": {
+                    # at_100 = 28 (not 30) pulls the mold-risk gate down to
+                    # 26.0 C — see the block comment above.
+                    "temp": {"at_0": 15.0, "at_50": 23.0, "at_100": 28.0},
+                    "humidity": {"at_0": 28.0, "at_50": 43.0, "at_100": 62.0},
+                    "co2": {"at_0": 400.0, "at_50": 900.0, "at_100": 1500.0},
+                },
+                "night": {
+                    "temp": {"at_0": 13.0, "at_50": 21.0, "at_100": 27.0},
+                    "humidity": {"at_0": 28.0, "at_50": 43.0, "at_100": 62.0},
+                    "co2": {"at_0": 400.0, "at_50": 900.0, "at_100": 1500.0},
+                },
+            },
+        },
+        # Week-based phase schedule (plant grows).
+        #
+        # A cannabis grow is not one setpoint set: a seedling wants warm, humid
+        # air and a quarter of the light a flowering plant does. Rather than
+        # asking the operator to edit `profile` on the right evening, the engine
+        # derives the active phase from the calendar: (today - start_date) in
+        # days, cut into 7-day blocks by the `weeks` field. Determination is
+        # ABSOLUTE, not incremental, so a controller that reboots mid-grow lands
+        # in the right phase on its first tick instead of restarting week one.
+        #
+        # `weeks: 0` means "until further notice" and is only legal on the last
+        # phase — bloom runs until the operator harvests and re-seeds the date.
+        #
+        # start_date is a (year, month, day) tuple in the same shape the time
+        # provider's now_date_tuple() returns, and it is the GERMINATION date.
+        #
+        # A profile named here may carry two optional override keys that are
+        # applied when its phase activates and dropped again when the next
+        # phase does not carry them:
+        #   light_level_day   — replaces regulators.growlight.light_level_day
+        #   surface_overrides — {regulator: {surface_param: value}}, merged over
+        #                       that regulator's base surface before it is
+        #                       frozen (no entries yet; bloom will use it).
+        #
+        # enabled is False while the controller still runs the mushroom profile:
+        # when it is True the validator requires regulation.profile to equal the
+        # first phase's profile, and those two flip together in one commit at
+        # the cannabis go-live (together with mode -> "plant").
+        "phase_schedule": {
+            "enabled": False,
+            "start_date": (2026, 9, 1),  # germination date, (year, month, day)
+            "phases": [
+                {"name": "seedling", "profile": "cannabis_seedling", "weeks": 2},
+                {"name": "stretch", "profile": "cannabis_stretch", "weeks": 3},
+                {"name": "bloom", "profile": "cannabis_bloom", "weeks": 0},  # 0 = until end
+            ],
         },
         # Regulators (command-vector slots). driven: "surface" evaluates the
         # 2D hinge surface over dims=[x,y]; "follower" derives from the heater
@@ -1547,6 +1667,91 @@ def _validate_anchor_set(anchors, ctx):
         raise ValueError("{} anchors must be strictly ascending (at_0 < at_50 < at_100)".format(ctx))
 
 
+def _validate_surface_overrides(overrides, ctx):
+    """Validate a profile's partial per-regulator surface overrides.
+
+    Unlike _validate_surface these are PARTIAL: only the params a phase wants
+    to move are listed, and the engine merges them over the regulator's base
+    surface before freezing. Both key levels are checked here because a typo
+    would otherwise be silently ignored (unknown regulator) or blow up at boot
+    inside freeze_surface (unknown param).
+    """
+    if not isinstance(overrides, dict):
+        raise ValueError("{} must be a dict".format(ctx))
+    for reg_name, params in overrides.items():
+        if reg_name not in _REG_NAMES:
+            raise ValueError("{} references unknown regulator {!r}".format(ctx, reg_name))
+        rctx = "{}.{}".format(ctx, reg_name)
+        if not isinstance(params, dict) or not params:
+            raise ValueError("{} must be a non-empty dict of surface params".format(rctx))
+        for pname, value in params.items():
+            bounds = _SURFACE_BOUNDS.get(pname)
+            if bounds is None:
+                raise ValueError("{}.{} is not a surface param".format(rctx, pname))
+            lo, hi = bounds
+            if not isinstance(value, (int, float)) or isinstance(value, bool) or not (lo <= value <= hi):
+                raise ValueError("{}.{} must be a number in [{}, {}]".format(rctx, pname, lo, hi))
+
+
+def _validate_phase_schedule(sched, profiles, active_profile):
+    """Validate regulation.phase_schedule (the week-based plant phase plan)."""
+    ctx = "regulation.phase_schedule"
+    if not isinstance(sched, dict):
+        raise ValueError("{} must be a dict".format(ctx))
+    if not isinstance(sched.get("enabled"), bool):
+        raise ValueError("{}.enabled must be a bool".format(ctx))
+
+    start = sched.get("start_date")
+    if not isinstance(start, (tuple, list)) or len(start) != 3:
+        raise ValueError("{}.start_date must be a (year, month, day) tuple".format(ctx))
+    year, month, day = start
+    for part in start:
+        if not isinstance(part, int) or isinstance(part, bool):
+            raise ValueError("{}.start_date entries must be ints".format(ctx))
+    if not (2020 <= year <= 2100):
+        raise ValueError("{}.start_date year must be 2020-2100".format(ctx))
+    if not (1 <= month <= 12):
+        raise ValueError("{}.start_date month must be 1-12".format(ctx))
+    leap = month == 2 and year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+    max_day = _DAYS_IN_MONTH[month - 1] + (1 if leap else 0)
+    if not (1 <= day <= max_day):
+        raise ValueError("{}.start_date day must be 1-{} for month {}".format(ctx, max_day, month))
+
+    phases = sched.get("phases")
+    if not isinstance(phases, list) or not phases:
+        raise ValueError("{}.phases must be a non-empty list".format(ctx))
+    last = len(phases) - 1
+    for i, phase in enumerate(phases):
+        pctx = "{}.phases[{}]".format(ctx, i)
+        if not isinstance(phase, dict):
+            raise ValueError("{} must be a dict".format(pctx))
+        name = phase.get("name")
+        if not isinstance(name, str) or not name:
+            raise ValueError("{}.name must be a non-empty string".format(pctx))
+        pname = phase.get("profile")
+        if pname not in profiles:
+            raise ValueError("{}.profile {!r} not in regulation.profiles".format(pctx, pname))
+        if profiles[pname].get("category") != "plant":
+            raise ValueError("{}.profile {!r} must be a plant profile".format(pctx, pname))
+        weeks = phase.get("weeks")
+        if not isinstance(weeks, int) or isinstance(weeks, bool) or weeks < 0:
+            raise ValueError("{}.weeks must be an int >= 0".format(pctx))
+        # weeks == 0 is the open-ended terminal phase ("until the operator
+        # harvests"). Anywhere but last it would make every later phase dead.
+        if weeks == 0 and i != last:
+            raise ValueError("{}.weeks may only be 0 on the last phase".format(pctx))
+
+    # Only enforced while the schedule is live: the engine activates the first
+    # phase on its first tick, so a mismatch here would mean the controller
+    # boots on one profile and silently swaps to another seconds later.
+    if sched["enabled"] and active_profile != phases[0]["profile"]:
+        raise ValueError(
+            "{}: regulation.profile must equal the first phase's profile {!r} while enabled".format(
+                ctx, phases[0]["profile"]
+            )
+        )
+
+
 def _validate_reg_adapter(adapter, reg_name, pins_cfg):
     """Validate a regulator's actuator-adapter block by type."""
     ctx = "regulation.regulators.{}.adapter".format(reg_name)
@@ -1704,12 +1909,24 @@ def _validate_regulation(reg_cfg, pins_cfg, top_mode):
                 if dim not in pcfg[phase]:
                     raise ValueError("Missing config key: {}.{}.{}".format(pctx, phase, dim))
                 _validate_anchor_set(pcfg[phase][dim], "{}.{}.{}".format(pctx, phase, dim))
+        # Optional per-profile overrides, applied by the engine when a phase
+        # schedule activates this profile (absent = the regulator defaults hold).
+        if "light_level_day" in pcfg:
+            v = pcfg["light_level_day"]
+            if not isinstance(v, (int, float)) or isinstance(v, bool) or not (0 <= v <= 100):
+                raise ValueError("{}.light_level_day must be 0-100".format(pctx))
+        if "surface_overrides" in pcfg:
+            _validate_surface_overrides(pcfg["surface_overrides"], "{}.surface_overrides".format(pctx))
 
     profile = reg_cfg["profile"]
     if profile not in profiles:
         raise ValueError("regulation.profile {!r} not in profiles".format(profile))
     if profiles[profile]["category"] != _REG_CATEGORY_MODE.get(top_mode):
         raise ValueError("regulation.profile category must match top-level mode {!r}".format(top_mode))
+
+    sched = reg_cfg.get("phase_schedule")
+    if sched is not None:
+        _validate_phase_schedule(sched, profiles, profile)
 
     fae = reg_cfg.get("fresh_air_exchange")
     if fae is not None:

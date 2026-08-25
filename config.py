@@ -135,7 +135,10 @@ DEVICE_CONFIG = {
     # so the only cost of being in the wrong mode is what's missing — not
     # idle objects holding RAM. The active regulation.profile's category
     # must match this mode (validated at boot).
-    "mode": "mushroom",
+    #
+    # "plant" since the 2026-08-25 cannabis go-live: the soil logger is armed
+    # and the plant OLED page is live.
+    "mode": "plant",
     # Hardware Pins
     #
     # Pico GPIO layout — matches PCB schematic SCH_Pico-Greenhouse-PCB_2026-05-14
@@ -407,6 +410,16 @@ DEVICE_CONFIG = {
     # term was active against 3.6 when it was not: the fan was mostly being
     # driven by UART framing errors. See the internal chat-log 2026-07-31.
     "co2_logger": {
+        # False since 2026-08-25: the SenseAir S8 is DEMOUNTED. It is specified
+        # 0-95 %RH non-condensing and the 2026-07-31..08-07 field run had it
+        # dead for the whole week — 20 533 warning lines, 100 % of every
+        # warning the system logged, from a sensor that could not survive the
+        # chamber. A deliberately removed sensor must not even be constructed:
+        # with this False main.py builds no UART and no logger, so there is no
+        # task, no I/O and no unreachable warning to explain. The regulation
+        # engine's CO2 dimension normalises to neutral without a reading, and
+        # regulation.fresh_air_exchange keeps the chamber breathing on a timer.
+        "enabled": False,
         "interval_s": 30,  # Poll cadence (seconds)
         "warmup_s": 30,  # Sensor warm-up window where read failures don't escalate
         "max_retries": 3,  # UART read retries per poll
@@ -784,14 +797,23 @@ DEVICE_CONFIG = {
         "tick_s": 30,  # Evaluation cadence (seconds)
         # Active species profile — must exist in profiles below AND its
         # category must match the top-level mode (mushroom↔mushroom, plant↔plant).
-        "profile": "cubensis",
+        # With phase_schedule.enabled this must be the FIRST phase's profile;
+        # the scheduler advances it from there as the weeks pass.
+        "profile": "cannabis_seedling",
         # Severity band edges (strictly ascending, last = 50):
         # perfect / ideal / organic / minor / major / emergency / shutdown.
         "band_edges": [5, 10, 20, 30, 40, 50],
         # Time-of-day blend (minutes since midnight). b=1 full day, b=0 full
         # night, linear ramp of width transition_min on each edge.
-        "day_start_min": 420,  # 07:00
-        "day_end_min": 1140,  # 19:00
+        #
+        # 02:00-22:00 is the cannabis 20/4 photoperiod (2026-08-25 go-live).
+        # The window deliberately ends at 22:00 rather than midnight: the dusk
+        # ramp lives INSIDE the window (blend_factor() only returns 0 at
+        # minutes >= day_end, and the clock never reaches 1440), so a window
+        # ending at 24:00 would clip the ramp instead of finishing it. With
+        # 120-1320 both 30-minute ramps fit.
+        "day_start_min": 120,  # 02:00
+        "day_end_min": 1320,  # 22:00
         "transition_min": 30,
         # Optional external SHT31 (gates exhaust effectiveness only). When
         # disabled the multiplier is a constant 1.0. full_delta = outside must
@@ -813,7 +835,10 @@ DEVICE_CONFIG = {
         # room-RH logs exists. Widen the margin if the warning nags; lengthen
         # the window if it trips on cooking/showering transients.
         "external_sensor": {
-            "enabled": False,
+            # Enabled 2026-08-25: the intake SHT31-D is fitted, strapped to
+            # 0x45 (ADR to VIN) so it does not collide with the chamber
+            # sensor at 0x44.
+            "enabled": True,
             "i2c_address": 0x45,
             "full_delta_c": 3.0,
             "min_factor": 0.2,
@@ -1185,12 +1210,11 @@ DEVICE_CONFIG = {
         #                       that regulator's base surface before it is
         #                       frozen (no entries yet; bloom will use it).
         #
-        # enabled is False while the controller still runs the mushroom profile:
-        # when it is True the validator requires regulation.profile to equal the
-        # first phase's profile, and those two flip together in one commit at
-        # the cannabis go-live (together with mode -> "plant").
+        # Enabled at the 2026-08-25 cannabis go-live, together with
+        # mode -> "plant" and profile -> the first phase's profile (the
+        # validator requires those two to agree while the schedule is live).
         "phase_schedule": {
-            "enabled": False,
+            "enabled": True,
             "start_date": (2026, 9, 1),  # germination date, (year, month, day)
             "phases": [
                 {"name": "seedling", "profile": "cannabis_seedling", "weeks": 2},
@@ -1595,7 +1619,12 @@ DEVICE_CONFIG = {
             },
             "growlight": {
                 "driven": "tod",
-                "light_level_day": 80.0,  # dimmable target at full day (b=1)
+                # Base level at full day (b=1). 100 % is the panel's own
+                # working level — dac_max_pct (91) is the hardware ceiling
+                # that caps it, not a dimmer setting. cannabis_seedling's
+                # profile override dims this to 40 % for weeks 1-2; the
+                # schedule restores this value when stretch activates.
+                "light_level_day": 100.0,
                 # The light is TWO actuators driven by one command: the mains
                 # relay and the 0-10V dimmer line. Left on because the dimmer
                 # does nothing for mushrooms but costs nothing when the MCP4725
@@ -2255,6 +2284,7 @@ def validate_config():
             "invert",
         ],
         "co2_logger": [
+            "enabled",
             "interval_s",
             "warmup_s",
             "max_retries",
@@ -2512,6 +2542,8 @@ def validate_config():
         raise ValueError("pca9685.invert must be a bool")
 
     co2_cfg = DEVICE_CONFIG["co2_logger"]
+    if not isinstance(co2_cfg["enabled"], bool):
+        raise ValueError("co2_logger.enabled must be a bool")
     if co2_cfg["interval_s"] <= 0:
         raise ValueError("co2_logger.interval_s must be > 0")
     if co2_cfg["warmup_s"] < 0:

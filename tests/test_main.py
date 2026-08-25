@@ -1254,9 +1254,12 @@ class TestMainInitFailures:
         mock_buzzer.startup = AsyncMock()
         monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
 
-        # Create a mock RTCTimeProvider with time_valid=False
+        # Create a mock RTCTimeProvider with time_valid=False. It still has to
+        # answer now_date_tuple with a real date: the live phase schedule asks
+        # the clock which grow week it is while the engine is being built.
         mock_tp = Mock()
         mock_tp.time_valid = False
+        mock_tp.now_date_tuple.return_value = (2026, 9, 1)
         monkeypatch.setattr(main_module, "RTCTimeProvider", lambda *a, **kw: mock_tp)
 
         mock_sm = Mock(run_post=AsyncMock(return_value=True))

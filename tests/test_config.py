@@ -1026,6 +1026,36 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["co2_logger"]["interval_s"] = original
 
+    def test_co2_logger_ships_disabled_after_the_s8_demount(self):
+        """The S8 does not survive chamber humidity; it is physically gone."""
+        from config import DEVICE_CONFIG
+
+        assert DEVICE_CONFIG["co2_logger"]["enabled"] is False
+
+    def test_co2_logger_enabled_must_be_a_bool(self):
+        """co2_logger.enabled = 'no' raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["co2_logger"]["enabled"]
+        config.DEVICE_CONFIG["co2_logger"]["enabled"] = "no"
+        try:
+            with pytest.raises(ValueError, match="co2_logger.enabled must be a bool"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["co2_logger"]["enabled"] = original
+
+    def test_co2_logger_missing_enabled_raises(self):
+        """Missing co2_logger.enabled raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["co2_logger"]["enabled"]
+        del config.DEVICE_CONFIG["co2_logger"]["enabled"]
+        try:
+            with pytest.raises(ValueError, match="Missing config key"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["co2_logger"]["enabled"] = original
+
     def test_co2_logger_hysteresis_inverted_raises(self):
         """co2_logger.override_ppm_on <= override_ppm_off raises ValueError."""
         import config
@@ -1280,16 +1310,18 @@ class TestValidateConfig:
         import config
 
         original = config.DEVICE_CONFIG["mode"]
-        orig_profile = config.DEVICE_CONFIG["regulation"]["profile"]
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
         config.DEVICE_CONFIG["mode"] = "plant"
         # The regulation profile category is tied to the top-level mode, so a
-        # plant mode needs a plant profile selected.
+        # plant mode needs a plant profile selected. The schedule is off here
+        # so this test stays about the mode/category pairing alone.
+        config.DEVICE_CONFIG["regulation"]["phase_schedule"]["enabled"] = False
         config.DEVICE_CONFIG["regulation"]["profile"] = "cannabis"
         try:
             assert config.validate_config() is True
         finally:
             config.DEVICE_CONFIG["mode"] = original
-            config.DEVICE_CONFIG["regulation"]["profile"] = orig_profile
+            config.DEVICE_CONFIG["regulation"] = snap
 
     def test_display_negative_startup_banner_raises(self):
         """display.startup_banner_s < 0 raises ValueError."""
@@ -1933,12 +1965,41 @@ class TestRegulationConfig:
         import config
 
         snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
-        config.DEVICE_CONFIG["regulation"]["day_start_min"] = 1200
+        config.DEVICE_CONFIG["regulation"]["day_start_min"] = 1380  # after day_end_min
         try:
             with pytest.raises(ValueError, match="day_start_min"):
                 config.validate_config()
         finally:
             self._restore(snap)
+
+    def test_photoperiod_is_the_cannabis_20_4_window(self):
+        """02:00-22:00 = 20/4, with both ramps finishing inside the window."""
+        from config import DEVICE_CONFIG
+        from lib.regulation_normalizer import blend_factor
+
+        reg = DEVICE_CONFIG["regulation"]
+        start, end, ramp = reg["day_start_min"], reg["day_end_min"], reg["transition_min"]
+        assert (start, end) == (120, 1320)
+        assert end - start == 20 * 60
+        # The dusk ramp sits INSIDE the window and only reaches b=0 at day_end,
+        # which the clock must actually be able to read — a window ending at
+        # 1440 would leave the ramp unfinished at 23:59.
+        assert end < 24 * 60
+        assert start + ramp <= end - ramp  # ramps do not overlap
+        assert blend_factor(start, start, end, ramp) == 0.0
+        assert blend_factor(start + ramp, start, end, ramp) == 1.0
+        assert blend_factor(end - ramp, start, end, ramp) == 1.0
+        assert blend_factor(end, start, end, ramp) == 0.0
+
+    def test_growlight_base_level_is_full_and_capped_by_the_panel(self):
+        """light_level_day is the base level; dac_max_pct is the hardware ceiling."""
+        from config import DEVICE_CONFIG
+
+        growlight = DEVICE_CONFIG["regulation"]["regulators"]["growlight"]
+        assert growlight["light_level_day"] == 100.0
+        assert growlight["adapter"]["dac_max_pct"] == 91
+        # Weeks 1-2 dim through the profile override, not through the base level.
+        assert DEVICE_CONFIG["regulation"]["profiles"]["cannabis_seedling"]["light_level_day"] == 40.0
 
     def test_regulation_profile_unknown_raises(self):
         """regulation.profile not in profiles raises ValueError."""
@@ -1957,8 +2018,11 @@ class TestRegulationConfig:
         import config
 
         snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
-        # Top-level mode is 'mushroom'; selecting a plant profile must fail.
-        config.DEVICE_CONFIG["regulation"]["profile"] = "cannabis"
+        # Top-level mode is 'plant'; selecting a mushroom profile must fail.
+        # The schedule is switched off first so the category rule is what
+        # reports, not the "profile must equal the first phase" rule.
+        config.DEVICE_CONFIG["regulation"]["phase_schedule"]["enabled"] = False
+        config.DEVICE_CONFIG["regulation"]["profile"] = "cubensis"
         try:
             with pytest.raises(ValueError, match="category must match"):
                 config.validate_config()
@@ -2645,19 +2709,20 @@ class TestPhaseScheduleConfig:
         assert [p["weeks"] for p in sched["phases"]] == [2, 3, 0]
         assert sched["start_date"] == (2026, 9, 1)
 
-    def test_phase_schedule_disabled_while_the_mushroom_profile_runs(self):
-        """Ships disabled: the profile flip to cannabis happens in one later commit."""
+    def test_the_shipped_config_is_the_cannabis_go_live_combination(self):
+        """mode, profile and schedule flipped together on 2026-08-25."""
         from config import DEVICE_CONFIG
 
-        assert DEVICE_CONFIG["regulation"]["phase_schedule"]["enabled"] is False
-        assert DEVICE_CONFIG["regulation"]["profile"] == "cubensis"
+        assert DEVICE_CONFIG["mode"] == "plant"
+        assert DEVICE_CONFIG["regulation"]["profile"] == "cannabis_seedling"
+        assert DEVICE_CONFIG["regulation"]["phase_schedule"]["enabled"] is True
 
     def test_phase_schedule_enabled_requires_the_first_phase_profile(self):
-        """Enabling the schedule while regulation.profile disagrees raises."""
+        """A live schedule whose regulation.profile disagrees raises."""
         import config
 
         snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
-        config.DEVICE_CONFIG["regulation"]["phase_schedule"]["enabled"] = True
+        config.DEVICE_CONFIG["regulation"]["profile"] = "cannabis_stretch"
         try:
             with pytest.raises(ValueError, match="must equal the first phase's profile"):
                 config.validate_config()
@@ -3179,11 +3244,11 @@ class TestRhUnreachableConfig:
         assert cfg["rh_unreachable_window_s"] == 1800
 
     def test_they_live_with_the_sensor_that_feeds_them(self):
-        """The detector no-ops while the sensor is off, so keep them together."""
+        """The detector no-ops without the sensor, so keep them together."""
         from config import DEVICE_CONFIG
 
         cfg = DEVICE_CONFIG["regulation"]["external_sensor"]
-        assert cfg["enabled"] is False  # flipped on by the mode-switch stage
+        assert cfg["enabled"] is True  # intake SHT31 fitted at 0x45 (go-live)
         assert {"rh_unreachable_margin", "rh_unreachable_window_s"} <= set(cfg)
 
     def test_zero_margin_raises(self):

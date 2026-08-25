@@ -707,38 +707,44 @@ async def main():
     # Step 7b3: Create CO2 logger (UART0 SenseAir-style sensor). Its cached
     # last_ppm feeds the regulation engine's CO2 dimension; venting is the
     # engine's job (exhaust surface + additive CO2 term), not an override.
+    # co2_logger.enabled=False means the sensor is physically gone (the S8 does
+    # not tolerate chamber humidity): build nothing at all rather than logging a
+    # dead sensor's failures.
     co2_config = DEVICE_CONFIG.get("co2_logger", {})
     co2_logger_obj = None
-    try:
-        co2_uart = UART(
-            DEVICE_CONFIG["pins"]["co2_uart_id"],
-            baudrate=DEVICE_CONFIG["pins"]["co2_baudrate"],
-            tx=Pin(DEVICE_CONFIG["pins"]["co2_uart_tx"]),
-            rx=Pin(DEVICE_CONFIG["pins"]["co2_uart_rx"]),
-        )
-        co2_logger_obj = CO2Logger(
-            uart=co2_uart,
-            time_provider=time_provider,
-            buffer_manager=buffer_manager,
-            logger=logger,
-            interval_s=co2_config.get("interval_s", 30),
-            warmup_s=co2_config.get("warmup_s", 30),
-            max_retries=co2_config.get("max_retries", 3),
-            override_ppm_on=co2_config.get("override_ppm_on", 1000),
-            override_ppm_off=co2_config.get("override_ppm_off", 800),
-            sensor_root=DEVICE_CONFIG["paths"]["sensor_root"],
-            sensor_type=co2_config.get("sensor_type", "co2"),
-            write_queue=write_queue,
-            status_manager=status_manager,
-            verify_checksum=co2_config.get("verify_checksum", True),
-            plausible_min_ppm=co2_config.get("plausible_min_ppm", 300),
-            plausible_max_ppm=co2_config.get("plausible_max_ppm", 5000),
-            stale_after_s=co2_config.get("stale_after_s", 300),
-            **health_kwargs,
-        )
-    except Exception as e:
-        logger.warning("MAIN", f"CO2Logger init failed (non-critical): {e}")
-        co2_logger_obj = None
+    if not co2_config.get("enabled", True):
+        logger.info("MAIN", "co2_logger disabled — sensor demounted, not constructed")
+    else:
+        try:
+            co2_uart = UART(
+                DEVICE_CONFIG["pins"]["co2_uart_id"],
+                baudrate=DEVICE_CONFIG["pins"]["co2_baudrate"],
+                tx=Pin(DEVICE_CONFIG["pins"]["co2_uart_tx"]),
+                rx=Pin(DEVICE_CONFIG["pins"]["co2_uart_rx"]),
+            )
+            co2_logger_obj = CO2Logger(
+                uart=co2_uart,
+                time_provider=time_provider,
+                buffer_manager=buffer_manager,
+                logger=logger,
+                interval_s=co2_config.get("interval_s", 30),
+                warmup_s=co2_config.get("warmup_s", 30),
+                max_retries=co2_config.get("max_retries", 3),
+                override_ppm_on=co2_config.get("override_ppm_on", 1000),
+                override_ppm_off=co2_config.get("override_ppm_off", 800),
+                sensor_root=DEVICE_CONFIG["paths"]["sensor_root"],
+                sensor_type=co2_config.get("sensor_type", "co2"),
+                write_queue=write_queue,
+                status_manager=status_manager,
+                verify_checksum=co2_config.get("verify_checksum", True),
+                plausible_min_ppm=co2_config.get("plausible_min_ppm", 300),
+                plausible_max_ppm=co2_config.get("plausible_max_ppm", 5000),
+                stale_after_s=co2_config.get("stale_after_s", 300),
+                **health_kwargs,
+            )
+        except Exception as e:
+            logger.warning("MAIN", f"CO2Logger init failed (non-critical): {e}")
+            co2_logger_obj = None
 
     # Step 7b4: Create SoilLogger (Adafruit STEMMA #4026 on the shared I2C0).
     # Plant mode only — mushroom mode skips construction entirely.

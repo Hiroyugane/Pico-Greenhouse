@@ -45,11 +45,33 @@ class FakeTime:
         return self.date
 
 
-def _engine(temp=23.0, hum=92.0, co2=800.0, minutes=0, tick_s=None, alarm=None, logger=None, external_read=None):
+def _engine(
+    temp=23.0,
+    hum=92.0,
+    co2=800.0,
+    minutes=0,
+    tick_s=None,
+    alarm=None,
+    logger=None,
+    external_read=None,
+    profile="cubensis",
+):
+    """Build an engine over the shipped config, pinned to one species profile.
+
+    Every scenario below states its inputs in PHYSICAL units (21 C, 95 %RH),
+    so it is only meaningful against the anchors it was authored for — the
+    cubensis ones. The shipped `regulation.profile` now moves with the grow
+    phase (seedling → stretch → bloom), so pinning it here keeps these tests
+    about the pipeline instead of about which week the calendar says it is.
+    The schedule is switched off for the same reason; TestPhaseSchedule
+    exercises it deliberately through `_sched_engine`.
+    """
     import config
     from lib.regulation_engine import RegulationEngine
 
     reg = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+    reg["profile"] = profile
+    reg["phase_schedule"] = dict(reg["phase_schedule"], enabled=False)
     if tick_s is not None:
         reg["tick_s"] = tick_s
     if external_read is not None:
@@ -115,10 +137,23 @@ class TestCalm:
             assert ad.value == 0.0
 
     def test_growlight_follows_daylight(self):
-        # Midday (b=1) → growlight target = 1.0 * light_level_day (80), slew 100.
+        # Midday (b=1) → growlight target = 1.0 * light_level_day, slew 100.
+        # cubensis carries no profile override, so the configured base level is
+        # what lands on the dimmer.
+        import config
+
+        base = config.DEVICE_CONFIG["regulation"]["regulators"]["growlight"]["light_level_day"]
         engine, adapters, names = _engine(temp=24.0, hum=92.0, co2=700.0, minutes=720)
         engine.tick(now_s=0.0)
-        assert abs(_adapter(adapters, names, "growlight").value - 80.0) < 1e-3
+        assert abs(_adapter(adapters, names, "growlight").value - base) < 1e-3
+
+    def test_growlight_dims_for_the_seedling_phase(self):
+        """The shipped profile overrides the base level down to 40 % for weeks 1-2."""
+        engine, adapters, names = _engine(
+            temp=23.0, hum=68.0, co2=700.0, minutes=720, profile="cannabis_seedling"
+        )
+        engine.tick(now_s=0.0)
+        assert abs(_adapter(adapters, names, "growlight").value - 40.0) < 1e-3
 
 
 class TestReactions:
@@ -578,6 +613,10 @@ class _HumidifierRig:
         from lib.regulation_engine import RegulationEngine
 
         reg = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        # Pinned to cubensis for the same reason _engine() is: the RH numbers
+        # below are physical and only mean "bone dry" against those anchors.
+        reg["profile"] = "cubensis"
+        reg["phase_schedule"] = dict(reg["phase_schedule"], enabled=False)
         reg["humidifier_watchdog"]["ineffective_window_s"] = window_s
         reg["humidifier_watchdog"]["ineffective_min_rise"] = min_rise
         self.names = config._REG_NAMES
@@ -1021,14 +1060,44 @@ class TestPhaseSchedule:
         # The configured profile stays active — no schedule override.
         assert engine.get_state()["profile"] == "cannabis_seedling"
 
-    def test_mushroom_config_is_byte_identical(self):
-        """The shipped (mushroom) config has no live schedule: same commands as before."""
+    def test_a_disabled_schedule_leaves_the_configured_profile_alone(self):
+        """Turning the schedule off is still a supported state (e.g. a mushroom run)."""
+        import config
+
+        base = config.DEVICE_CONFIG["regulation"]["regulators"]["growlight"]["light_level_day"]
         engine, adapters, names = _engine(temp=24.0, hum=95.0, co2=700.0, minutes=720)
         for i in range(5):
             engine.tick(now_s=float(i))
         assert engine.get_state()["phase"] is None
         assert engine.get_state()["profile"] == "cubensis"
-        assert abs(_adapter(adapters, names, "growlight").value - 80.0) < 1e-3
+        assert abs(_adapter(adapters, names, "growlight").value - base) < 1e-3
+
+    def test_the_shipped_config_boots_into_the_seedling_phase(self):
+        """Live config + the go-live date: the engine starts the grow in seedling."""
+        import copy as _copy
+
+        import config
+        from lib.regulation_engine import RegulationEngine
+
+        reg = _copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        names = config._REG_NAMES
+        adapters = [FakeAdapter(n) for n in names]
+        start = reg["phase_schedule"]["start_date"]
+        engine = RegulationEngine(
+            reg,
+            names,
+            config._REG_DIMENSIONS,
+            adapters,
+            FakeTh(23.0, 68.0),
+            FakeCo2(700.0),
+            FakeTime(720 * 60, date=start),
+            clock=lambda: 0.0,
+        )
+        engine.tick(now_s=0.0)
+        state = engine.get_state()
+        assert state["phase"] == "seedling"
+        assert state["profile"] == "cannabis_seedling"
+        assert abs(_adapter(adapters, names, "growlight").value - 40.0) < 1e-3
 
 
 # --- RH-target reachability monitor --------------------------------------

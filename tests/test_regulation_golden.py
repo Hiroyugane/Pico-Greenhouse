@@ -72,20 +72,33 @@ class _Co2:
 
 
 class _Time:
-    def __init__(self, minutes):
+    def __init__(self, minutes, date=(2026, 9, 1)):
         self._s = minutes * 60
+        self._date = date
 
     def get_seconds_since_midnight(self):
         return self._s
 
+    def now_date_tuple(self):
+        return self._date
 
-def _run_scenario(temp, hum, co2, minutes=720, external_read=None):
+
+def _run_scenario(temp, hum, co2, minutes=720, external_read=None, profile="cubensis"):
+    """Run one tick pair over the shipped config, pinned to one species profile.
+
+    The scenarios below are stated in physical units against the cubensis
+    anchors they were authored for. The shipped `regulation.profile` now walks
+    the cannabis phase schedule, so it is pinned here to keep these tests about
+    the pipeline's direction of response rather than about the calendar.
+    """
     import copy
 
     import config
     from lib.regulation_engine import RegulationEngine
 
     reg = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+    reg["profile"] = profile
+    reg["phase_schedule"] = dict(reg["phase_schedule"], enabled=False)
     if external_read is not None:
         reg["external_sensor"]["enabled"] = True
     names = config._REG_NAMES

@@ -995,9 +995,19 @@ async def main():
             logger=logger,
             alarm_cb=_reg_alarm,
         )
+        # The engine resolves its phase from the RTC at construction, so read
+        # the ACTIVE profile back out of it rather than echoing the configured
+        # one — after a reboot in week six those two differ, and the boot log is
+        # where an operator checks which phase the controller thinks it is in.
+        # (The phase-change notice callback is left unset here; the OLED
+        # acknowledge flow claims it in a later step.)
+        reg_state = regulation_engine.get_state()
+        phase = reg_state["phase"]
         logger.info(
             "MAIN",
-            f"Regulation engine ready (profile={reg_cfg['profile']}, tick={reg_cfg['tick_s']}s)",
+            "Regulation engine ready (profile={}, phase={}, tick={}s)".format(
+                reg_state["profile"], phase if phase else "none", reg_cfg["tick_s"]
+            ),
         )
     else:
         logger.warning("MAIN", "Regulation engine disabled in config — no actuator control active")

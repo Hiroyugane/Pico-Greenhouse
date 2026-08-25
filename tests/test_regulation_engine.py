@@ -32,11 +32,17 @@ class FakeCo2:
 
 
 class FakeTime:
-    def __init__(self, seconds=0):
+    def __init__(self, seconds=0, date=(2026, 9, 1)):
         self._seconds = seconds
+        self.date = date
+        self.date_calls = 0
 
     def get_seconds_since_midnight(self):
         return self._seconds
+
+    def now_date_tuple(self):
+        self.date_calls += 1
+        return self.date
 
 
 def _engine(temp=23.0, hum=92.0, co2=800.0, minutes=0, tick_s=None, alarm=None, logger=None, external_read=None):
@@ -538,3 +544,222 @@ class TestRunLoop:
         with pytest.raises(asyncio.CancelledError):
             await engine.run()
         assert counter["n"] >= 2
+
+
+# --- week-based phase schedule ------------------------------------------
+
+
+_START = (2026, 9, 1)
+
+
+def _date_at(offset_days, start=_START):
+    """Calendar date `offset_days` after the schedule start (host-only helper)."""
+    import datetime
+
+    d = datetime.date(*start) + datetime.timedelta(days=offset_days)
+    return (d.year, d.month, d.day)
+
+
+def _sched_engine(offset_days=0, minutes=720, logger=None, mutate=None, enabled=True, temp=23.0, hum=60.0):
+    """Engine with the cannabis phase schedule live, clocked `offset_days` in."""
+    import config
+    from lib.regulation_engine import RegulationEngine
+
+    reg = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+    reg["phase_schedule"]["enabled"] = enabled
+    reg["phase_schedule"]["start_date"] = _START
+    reg["profile"] = reg["phase_schedule"]["phases"][0]["profile"]
+    if mutate is not None:
+        mutate(reg)
+    names = config._REG_NAMES
+    adapters = [FakeAdapter(n) for n in names]
+    clock = FakeTime(minutes * 60, date=_date_at(offset_days))
+    engine = RegulationEngine(
+        reg,
+        names,
+        config._REG_DIMENSIONS,
+        adapters,
+        FakeTh(temp, hum),
+        FakeCo2(800.0),
+        clock,
+        logger=logger,
+        clock=lambda: 0.0,
+    )
+    return engine, adapters, names, clock
+
+
+class TestPhaseSchedule:
+    """Absolute, date-driven phase advance (2 weeks seedling, 3 stretch, bloom)."""
+
+    def test_phase_boundaries(self):
+        # The edges, not the middles: day 13 is the last seedling day, day 14
+        # the first stretch day, day 34 the last stretch day, day 35 bloom.
+        for offset, expected in ((0, "seedling"), (13, "seedling"), (14, "stretch"), (34, "stretch"), (35, "bloom")):
+            engine, adapters, names, clock = _sched_engine(offset_days=offset)
+            engine.tick(now_s=0.0)
+            assert engine.get_state()["phase"] == expected, offset
+
+    def test_date_before_start_holds_the_first_phase(self):
+        """A start_date in the future is not a crash and not phase -1."""
+        engine, adapters, names, clock = _sched_engine(offset_days=-40)
+        engine.tick(now_s=0.0)
+        assert engine.get_state()["phase"] == "seedling"
+
+    def test_rtc_failure_holds_the_phase_and_warns_once(self):
+        """(0,0,0) is a dead clock: never derive a phase from it."""
+        logger = pytest.importorskip("unittest.mock").Mock()
+        engine, adapters, names, clock = _sched_engine(offset_days=35, logger=logger)
+        engine.tick(now_s=0.0)
+        assert engine.get_state()["phase"] == "bloom"
+        logger.reset_mock()
+
+        clock.date = (0, 0, 0)
+        for i in range(5):
+            engine.tick(now_s=float(i))
+        assert engine.get_state()["phase"] == "bloom"
+        assert logger.warning.call_count == 1
+
+        # A recovered clock resumes normal advance (the failure did not poison
+        # the cached date).
+        clock.date = _date_at(35)
+        engine.tick(now_s=99.0)
+        assert engine.get_state()["phase"] == "bloom"
+
+    def test_same_day_ticks_do_not_re_derive(self):
+        """Only a date CHANGE does schedule math — 2879 of 2880 ticks are free."""
+        logger = pytest.importorskip("unittest.mock").Mock()
+        engine, adapters, names, clock = _sched_engine(offset_days=13, logger=logger)
+        engine.tick(now_s=0.0)
+        clock.date = _date_at(14)
+        engine.tick(now_s=1.0)
+        assert engine.get_state()["phase"] == "stretch"
+        changes = [c for c in logger.info.call_args_list if "phase" in str(c)]
+        assert len(changes) == 1
+        # Twenty more ticks on the same date must not log or activate again.
+        for i in range(20):
+            engine.tick(now_s=float(2 + i))
+        changes = [c for c in logger.info.call_args_list if "phase" in str(c)]
+        assert len(changes) == 1
+
+    def test_new_day_inside_a_phase_does_not_reactivate(self):
+        """A date change is the trigger, not the event: same phase = no-op."""
+        logger = pytest.importorskip("unittest.mock").Mock()
+        engine, adapters, names, clock = _sched_engine(offset_days=0, logger=logger)
+        engine.tick(now_s=0.0)
+        norm = engine._norm
+        for day in range(1, 13):  # still seedling every one of them
+            clock.date = _date_at(day)
+            engine.tick(now_s=float(day))
+        assert engine.get_state()["phase"] == "seedling"
+        assert engine._norm is norm  # profile state was never rebuilt
+        assert [c for c in logger.info.call_args_list if "phase" in str(c)] == []
+
+    def test_all_phases_elapsed_holds_the_last_one(self):
+        """A schedule with no open-ended phase still has to answer for day 500."""
+
+        def mutate(reg):
+            reg["phase_schedule"]["phases"][-1]["weeks"] = 1
+
+        engine, adapters, names, clock = _sched_engine(offset_days=500, mutate=mutate)
+        assert engine.get_state()["phase"] == "bloom"
+
+    def test_failing_notice_callback_does_not_stop_the_engine(self):
+        """The OLED sink is a notice, not a dependency."""
+        logger = pytest.importorskip("unittest.mock").Mock()
+        engine, adapters, names, clock = _sched_engine(offset_days=13, logger=logger)
+        engine.set_phase_change_callback(lambda *a: 1 / 0)
+        engine.tick(now_s=0.0)
+        clock.date = _date_at(14)
+        engine.tick(now_s=1.0)
+        assert engine.get_state()["phase"] == "stretch"
+        assert logger.warning.call_count == 1
+
+    def test_reboot_lands_in_the_right_phase_at_construction(self):
+        """A controller restarted deep in a grow must not replay week one."""
+        engine, adapters, names, clock = _sched_engine(offset_days=60)
+        assert engine.get_state()["phase"] == "bloom"
+        assert engine.get_state()["profile"] == "cannabis_bloom"
+
+    def test_phase_change_notifies_the_callback(self):
+        seen = []
+        engine, adapters, names, clock = _sched_engine(offset_days=13)
+        engine.set_phase_change_callback(lambda old, new, date, summary: seen.append((old, new, date, summary)))
+        engine.tick(now_s=0.0)
+        assert seen == []  # no change yet
+
+        clock.date = _date_at(14)
+        engine.tick(now_s=1.0)
+        assert len(seen) == 1
+        old, new, date, summary = seen[0]
+        assert old == "seedling"
+        assert new == "stretch"
+        assert date == _date_at(14)
+        assert summary["profile"] == "cannabis_stretch"
+
+    def test_light_level_override_applied_then_dropped(self):
+        """Seedlings run at 40 %; stretch has no override so the base 80 returns."""
+        import config
+
+        base = config.DEVICE_CONFIG["regulation"]["regulators"]["growlight"]["light_level_day"]
+        engine, adapters, names, clock = _sched_engine(offset_days=0, minutes=720)
+        engine.tick(now_s=0.0)
+        assert abs(_adapter(adapters, names, "growlight").value - 40.0) < 1e-3
+
+        clock.date = _date_at(14)
+        for i in range(5):  # slew-limited toward the new level
+            engine.tick(now_s=float(i))
+        assert abs(_adapter(adapters, names, "growlight").value - base) < 1e-3
+
+    def test_surface_override_applied_then_reverted(self):
+        """A phase's surface_overrides are merged on activation and dropped after.
+
+        Readings are held at 23 C / 43 %RH, which parks the exhaust surface at
+        its floor in the seedling and bloom phases, so the stretch phase's
+        override is the only thing that can move the fan. Bloom carries no
+        override, which proves the merge is re-done from the base surface each
+        time rather than accumulating.
+        """
+        from lib.regulation_surface import P_OFFSET
+
+        def mutate(reg):
+            reg["profiles"]["cannabis_stretch"]["surface_overrides"] = {"exhaust": {"offset": 500.0}}
+
+        engine, adapters, names, clock = _sched_engine(offset_days=0, mutate=mutate, temp=23.0, hum=43.0)
+        exhaust = _adapter(adapters, names, "exhaust")
+        floor = engine._regulators["exhaust"]["floor"]
+        i_exhaust = names.index("exhaust")
+
+        engine.tick(now_s=0.0)
+        assert engine._surface_params[i_exhaust][P_OFFSET] == 0.0
+        assert exhaust.value <= floor
+
+        clock.date = _date_at(14)
+        for i in range(10):  # slew-limited climb to the overridden ceiling
+            engine.tick(now_s=float(i))
+        assert engine._surface_params[i_exhaust][P_OFFSET] == 500.0
+        assert exhaust.value == 100.0
+
+        clock.date = _date_at(35)
+        for i in range(10, 40):
+            engine.tick(now_s=float(i))
+        assert engine._surface_params[i_exhaust][P_OFFSET] == 0.0
+        assert exhaust.value <= floor  # back off the ceiling the override held
+
+    def test_disabled_schedule_is_inert(self):
+        """enabled: False → the clock is never asked for a date and nothing moves."""
+        engine, adapters, names, clock = _sched_engine(offset_days=60, enabled=False)
+        for i in range(3):
+            engine.tick(now_s=float(i))
+        assert clock.date_calls == 0
+        assert engine.get_state()["phase"] is None
+        # The configured profile stays active — no schedule override.
+        assert engine.get_state()["profile"] == "cannabis_seedling"
+
+    def test_mushroom_config_is_byte_identical(self):
+        """The shipped (mushroom) config has no live schedule: same commands as before."""
+        engine, adapters, names = _engine(temp=24.0, hum=95.0, co2=700.0, minutes=720)
+        for i in range(5):
+            engine.tick(now_s=float(i))
+        assert engine.get_state()["phase"] is None
+        assert engine.get_state()["profile"] == "cubensis"
+        assert abs(_adapter(adapters, names, "growlight").value - 80.0) < 1e-3

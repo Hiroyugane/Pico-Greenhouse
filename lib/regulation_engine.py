@@ -4,6 +4,9 @@
 # Wires normalizer → surfaces → arbiter → adapters and runs them every tick_s.
 # Reads only cached sensor values (no new sensor reads); the per-tick path is
 # allocation-free (preallocated float buffers, no dict/list/f-string churn).
+# Optionally advances the active species profile on a week-based phase schedule
+# (regulation.phase_schedule) — resolved from the calendar, gated on a date
+# change, and rebuilt through the single _activate_profile() path.
 # Emergency/latch transitions raise buzzer + event-log side effects through
 # injected callbacks so the engine stays hardware-decoupled and testable.
 
@@ -15,6 +18,23 @@ import uasyncio as asyncio
 from lib.regulation_arbiter import RegulationArbiter
 from lib.regulation_normalizer import RegulationNormalizer, severity
 from lib.regulation_surface import evaluate, freeze_surface
+
+
+def _days_from_civil(year, month, day):
+    """Days since 1970-01-01 for a proleptic-Gregorian date (integer math only).
+
+    Howard Hinnant's civil-from-days inverse. Used to turn (today - start_date)
+    into a day count so the phase schedule is ABSOLUTE: a controller that
+    reboots mid-grow resolves the same phase the running one was in, instead of
+    replaying the schedule from week one.
+    """
+    y = year - (1 if month <= 2 else 0)
+    era = (y if y >= 0 else y - 399) // 400
+    yoe = y - era * 400
+    mp = month - 3 if month > 2 else month + 9
+    doy = (153 * mp + 2) // 5 + day - 1
+    doe = yoe * 365 + yoe // 4 - yoe // 100 + doy
+    return era * 146097 + doe - 719468
 
 
 def _effect_factor(delta, full_delta, min_factor):
@@ -87,28 +107,24 @@ class RegulationEngine:
 
         n = len(reg_names)
         regulators = reg_cfg["regulators"]
+        self._regulators = regulators
+        self._profiles = reg_cfg["profiles"]
+        self._day_start_min = reg_cfg["day_start_min"]
+        self._day_end_min = reg_cfg["day_end_min"]
+        self._transition_min = reg_cfg["transition_min"]
 
-        # Normalizer + arbiter built from the config (pure data).
-        profile = reg_cfg["profiles"][reg_cfg["profile"]]
-        self._norm = RegulationNormalizer(
-            profile,
-            reg_cfg["day_start_min"],
-            reg_cfg["day_end_min"],
-            reg_cfg["transition_min"],
-            dim_order,
-        )
         self._arb = RegulationArbiter.from_config(reg_cfg, reg_names, dim_order, self._tick_s)
 
-        # Frozen surface params + (x,y) dim indices per surface-driven regulator.
+        # Per-profile state (normalizer, frozen surfaces, light level) is built
+        # by _activate_profile — the single place it is ever created, so a phase
+        # change and a cold boot take the identical code path.
+        self._norm = None
         self._surface_params = [None] * n
         self._surface_dims = [None] * n
-        for i, name in enumerate(reg_names):
-            r = regulators[name]
-            if r["driven"] == "surface":
-                self._surface_params[i] = freeze_surface(r["surface"])
-                dx = dim_order.index(r["dims"][0])
-                dy = dim_order.index(r["dims"][1])
-                self._surface_dims[i] = (dx, dy)
+        self._base_light_day = float(regulators["growlight"]["light_level_day"])
+        self._light_level_day = self._base_light_day
+        self._profile_name = reg_cfg["profile"]
+        self._activate_profile(reg_cfg["profile"])
 
         # Regulator indices used by the derived/tod/exhaust paths.
         self._i_heater = reg_names.index("heater")
@@ -134,8 +150,6 @@ class RegulationEngine:
                 self._co2_gain[i] = float(regulators[name]["co2_gain"])
                 self._co2_break[i] = float(regulators[name]["co2_break"])
         self._any_external = any(self._ext_active)
-
-        self._light_level_day = float(regulators["growlight"]["light_level_day"])
 
         # Fresh-air exchange fallback for a blind CO2 channel. The window is
         # derived from wall-clock minutes rather than a tick counter so it is
@@ -163,6 +177,147 @@ class RegulationEngine:
         # Latest state (for OLED/debug; not built per tick).
         self._b = 0.0
         self._gmax = 0.0
+
+        # Week-based phase schedule (plant grows). Disabled = every field below
+        # is inert and tick() never asks the clock for a date.
+        sched = reg_cfg.get("phase_schedule")
+        self._phase_enabled = bool(sched["enabled"]) if sched else False
+        self._phases = sched["phases"] if self._phase_enabled else None
+        self._phase_index = -1
+        self._phase_name = None
+        self._on_phase_change = None
+        self._rtc_warned = False
+        # Cached date, compared element-wise so the fast path allocates nothing
+        # of its own. (0,0,0) can never match a real date, so the first tick
+        # after boot always resolves.
+        self._date_y = 0
+        self._date_m = 0
+        self._date_d = 0
+        if self._phase_enabled:
+            start = sched["start_date"]
+            self._phase_start_day = _days_from_civil(int(start[0]), int(start[1]), int(start[2]))
+            # Resolve at construction, not on the first tick: a controller that
+            # reboots in week six must be in the right phase before the first
+            # actuator command goes out, not one tick_s later.
+            self._maybe_advance_phase(announce=False)
+
+    # -- profile activation (phase schedule) -------------------------------
+
+    def _activate_profile(self, name):
+        """(Re)build every profile-derived object. Allocates — never call per tick.
+
+        This is the ONE place phase state is created: __init__ routes through it
+        for the configured profile and the schedule calls it again on each phase
+        change, so a boot deep in a grow is byte-identical to having advanced
+        into that phase.
+        """
+        profile = self._profiles[name]
+        self._norm = RegulationNormalizer(
+            profile,
+            self._day_start_min,
+            self._day_end_min,
+            self._transition_min,
+            self._dim_order,
+        )
+        # Surfaces are re-frozen from the BASE config every time, with this
+        # profile's overrides merged on top, so overrides never accumulate
+        # across phases — a phase without them gets the shipped surface back.
+        overrides = profile.get("surface_overrides")
+        for i, reg_name in enumerate(self._reg_names):
+            r = self._regulators[reg_name]
+            if r["driven"] != "surface":
+                continue
+            surface = r["surface"]
+            if overrides:
+                over = overrides.get(reg_name)
+                if over:
+                    surface = dict(surface)
+                    surface.update(over)
+            self._surface_params[i] = freeze_surface(surface)
+            self._surface_dims[i] = (
+                self._dim_order.index(r["dims"][0]),
+                self._dim_order.index(r["dims"][1]),
+            )
+        self._light_level_day = float(profile.get("light_level_day", self._base_light_day))
+        self._profile_name = name
+
+    def _phase_for_day(self, day_offset):
+        """Index of the phase covering ``day_offset`` days after start_date.
+
+        Absolute: derived from the offset alone, never from the previous phase.
+        A negative offset (start_date still in the future) resolves to the first
+        phase; ``weeks: 0`` marks the open-ended terminal phase.
+        """
+        if day_offset < 0:
+            return 0
+        last = len(self._phases) - 1
+        elapsed = 0
+        for i in range(last + 1):
+            weeks = self._phases[i]["weeks"]
+            if weeks <= 0:
+                return i
+            elapsed += weeks * 7
+            if day_offset < elapsed:
+                return i
+        # Every phase bounded and all of them elapsed: hold the last one.
+        return last
+
+    def _maybe_advance_phase(self, announce=True):
+        """Re-resolve the active phase, but only when the calendar date changed.
+
+        Gated hard on the date so 2879 of 2880 daily ticks cost one date read
+        and three integer compares.
+        """
+        date = self._time.now_date_tuple()
+        if date[0] == self._date_y and date[1] == self._date_m and date[2] == self._date_d:
+            return
+        if date[0] == 0 or date[1] == 0 or date[2] == 0:
+            # A dead RTC returns (0,0,0). Deriving a phase from that would jump
+            # the grow to week one (or past the end); hold the current phase and
+            # say so once. The cached date is deliberately NOT updated, so a
+            # recovered clock still resolves on its next tick.
+            if not self._rtc_warned:
+                self._rtc_warned = True
+                self._event("warning", "regulation phase held: RTC date unavailable")
+            return
+        self._date_y = date[0]
+        self._date_m = date[1]
+        self._date_d = date[2]
+        index = self._phase_for_day(_days_from_civil(date[0], date[1], date[2]) - self._phase_start_day)
+        if index == self._phase_index:
+            return
+
+        previous = self._phase_name
+        phase = self._phases[index]
+        self._phase_index = index
+        self._phase_name = phase["name"]
+        self._activate_profile(phase["profile"])
+        if not announce:
+            return
+        self._event(
+            "info",
+            "regulation phase {} -> {} (profile {}, {:04d}-{:02d}-{:02d})".format(
+                previous, self._phase_name, phase["profile"], date[0], date[1], date[2]
+            ),
+        )
+        if self._on_phase_change:
+            try:
+                self._on_phase_change(
+                    previous,
+                    self._phase_name,
+                    date,
+                    {"profile": phase["profile"], "light_level_day": self._light_level_day},
+                )
+            except Exception as exc:  # a notice sink must never stop the engine
+                self._event("warning", "phase-change notice failed: {}".format(exc))
+
+    def set_phase_change_callback(self, callback):
+        """Set the operator-notice sink: callback(old, new, date_tuple, summary).
+
+        Wired by main.py to the OLED acknowledge flow; None (the default) is a
+        no-op, which is what the tests and a headless build use.
+        """
+        self._on_phase_change = callback
 
     # -- external-effectiveness multiplier (exhaust only) ------------------
 
@@ -250,6 +405,9 @@ class RegulationEngine:
         if now_s is None:
             now_s = self._clock()
 
+        if self._phase_enabled:
+            self._maybe_advance_phase()
+
         temp = self._th.last_temperature
         hum = self._th.last_humidity
         co2 = self._co2.last_ppm if self._co2 is not None else None
@@ -316,6 +474,10 @@ class RegulationEngine:
         """Build a state snapshot (called by OLED/debug, not per tick)."""
         return {
             "blend": self._b,
+            # Active species profile, and the schedule phase that selected it
+            # (None when no phase schedule is running).
+            "profile": self._profile_name,
+            "phase": self._phase_name,
             "global_severity": self._gmax,
             # Severity restricted to the directions allowed to escalate — this,
             # not global_severity, is what fires emergency/latch.

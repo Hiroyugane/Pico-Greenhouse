@@ -66,6 +66,10 @@ class TempHumidityLogger:
         retry_delay_s: float = 0.5,
         max_history: int = 120,
         write_queue=None,
+        warn_after_failures=3,
+        backoff_start_s=60,
+        backoff_max_s=300,
+        unreachable_heartbeat_s=0,
     ):
         """
         Initialize TempHumidityLogger with dependency injection.
@@ -87,6 +91,12 @@ class TempHumidityLogger:
             retry_delay_s (float): Delay between sensor read retries in seconds (default: 0.5)
             max_history (int): Maximum readings to keep for stats (default: 120)
             write_queue: Optional WriteQueueManager for async write batching (default: None)
+            warn_after_failures (int): Consecutive misses before the sensor is
+                reported unreachable (default: 3)
+            backoff_start_s (int): First backed-off poll interval (default: 60)
+            backoff_max_s (int): Ceiling for the doubling backoff (default: 300)
+            unreachable_heartbeat_s (int): Reminder cadence while unreachable,
+                0 = silent (default: 0)
         """
         self.sensor = sensor
         self.interval = interval
@@ -103,12 +113,30 @@ class TempHumidityLogger:
         self.retry_delay_s = retry_delay_s
         self._max_history = max_history
 
+        try:
+            from lib.sensor_health import SensorHealth
+        except ImportError:  # frozen into the firmware as a top-level module
+            from sensor_health import SensorHealth
+
+        self.health = SensorHealth(
+            normal_interval_s=interval,
+            warn_after_failures=warn_after_failures,
+            backoff_start_s=backoff_start_s,
+            backoff_max_s=backoff_max_s,
+            unreachable_heartbeat_s=unreachable_heartbeat_s,
+        )
+
         # State
         self.last_temperature = None
         self.last_humidity = None
         self.read_failures = 0
         self.write_failures = 0
+        # Cause of the most recent failed read, so the single edge WARN can
+        # name it. Set only on the failure path; never cleared, because a
+        # recovery message has no use for it.
+        self._last_read_error = "unknown"
         self._consecutive_failures = 0
+        self._unreachable_flagged = False
         self.current_date = None
         self._created_files = set()  # relpaths confirmed created this session
         # Bounded history for stats: list of (ticks_ms, temp, hum)
@@ -217,6 +245,7 @@ class TempHumidityLogger:
                 if -40 <= temp <= 80 and 0 <= hum <= 100:
                     self._consecutive_failures = 0
                     self._update_th_status()
+                    self._note_read_success()
                     self.logger.debug(
                         "TempHumidityLogger",
                         "sensor read ok",
@@ -233,8 +262,12 @@ class TempHumidityLogger:
                         hum=hum,
                         attempt=attempt + 1,
                     )
+                    self._last_read_error = "out of range: {}C {}%".format(temp, hum)
                     self.logger.warning("TempHumidityLogger", f"Reading out of range: {temp}degC, {hum}%")
             except Exception as e:
+                # Allocates only on the failure path; truncated so a driver
+                # that stringifies a frame cannot blow the log line up.
+                self._last_read_error = str(e)[:80]
                 self.logger.debug(
                     "TempHumidityLogger",
                     f"Read attempt {attempt + 1}/{self.max_retries} failed: {e}",
@@ -252,6 +285,7 @@ class TempHumidityLogger:
             consecutive=self._consecutive_failures,
             max_retries=self.max_retries,
         )
+        self._note_read_failure()
         return None, None
 
     def prime(self) -> None:
@@ -295,6 +329,68 @@ class TempHumidityLogger:
         else:
             self.status_manager.clear_warning("th_intermittent")
             self.status_manager.clear_error("th_dead")
+
+    def _update_unreachable_alert(self, active) -> None:
+        """Raise/clear the operator-visible sht31_unreachable warning on edges only.
+
+        The StatusManager is the DURABLE channel for "this sensor is dead",
+        which is why the log only has to say it once.
+        """
+        if self.status_manager is None:
+            return
+        if active == self._unreachable_flagged:
+            return
+        self._unreachable_flagged = active
+        try:
+            self.status_manager.set_warning("sht31_unreachable", active)
+        except Exception as exc:
+            self.logger.debug("TempHumidityLogger", f"unreachable alert failed: {exc}")
+
+    def _note_read_failure(self) -> None:
+        """Report a missed reading per the edge-triggered policy.
+
+        This path used to emit one WARN per failed read from the log loop. A
+        single dead sensor then writes a warning line every interval forever,
+        which is exactly how the CO2 channel produced 20 533 of them in one
+        7.2-day field run and rotated the log 3-4 times a day.
+        """
+        if self.health.record_failure():
+            self.logger.warning(
+                "TempHumidityLogger",
+                # The per-attempt detail is DEBUG by design, so this one line
+                # has to carry the cause or nobody ever sees it.
+                "sensor unreachable after {} failed reads; polling backed off to {}s ({})".format(
+                    self.health.consecutive_failures, self.health.interval_s(), self._last_read_error
+                ),
+            )
+            self._update_unreachable_alert(True)
+            return
+        if self.health.is_unreachable():
+            if self.health.heartbeat_due():
+                self.logger.warning(
+                    "TempHumidityLogger",
+                    "sensor still unreachable ({} failed reads)".format(self.health.consecutive_failures),
+                )
+            else:
+                self.logger.debug("TempHumidityLogger", "sensor read failed (unreachable)")
+            return
+        self.logger.debug(
+            "TempHumidityLogger",
+            "sensor read failed",
+            consecutive=self.health.consecutive_failures,
+            read_failures=self.read_failures,
+        )
+
+    def _note_read_success(self) -> None:
+        """Report the end of an outage exactly once."""
+        if self.health.record_success():
+            self.logger.info(
+                "TempHumidityLogger",
+                "sensor recovered after {}s unreachable ({} failed reads total)".format(
+                    self.health.last_outage_s, self.health.total_failures
+                ),
+            )
+        self._update_unreachable_alert(False)
 
     def _check_date_changed(self) -> bool:
         """
@@ -344,8 +440,14 @@ class TempHumidityLogger:
                 # Check for date rollover
                 self._check_date_changed()
 
-                # Read sensor
-                temp, hum = self.read_sensor()
+                # Read sensor. poll_due() honours the backed-off interval, so
+                # a sensor that has gone unreachable is retried on the ladder
+                # (60/120/240/300 s) instead of every interval, and the error
+                # path's 1 s retry sleep below cannot hammer it either.
+                temp, hum = (None, None)
+                polled = self.health.poll_due()
+                if polled:
+                    temp, hum = self.read_sensor()
 
                 if temp is not None and hum is not None:
                     # Activity blink on successful read
@@ -403,11 +505,18 @@ class TempHumidityLogger:
                     except Exception as e:
                         self.logger.error("TempHumidityLogger", f"Failed to write: {e}")
                         self.write_failures += 1
-                else:
-                    self.logger.warning("TempHumidityLogger", f"Sensor read failed (total: {self.read_failures})")
+                elif polled:
+                    # read_sensor() already applied the edge-triggered
+                    # reporting policy; nothing level-triggered belongs here.
+                    self.logger.debug(
+                        "TempHumidityLogger",
+                        "log iteration produced no reading",
+                        read_failures=self.read_failures,
+                        state=self.health.state,
+                    )
 
                 self.logger.check_size()
-                await asyncio.sleep(self.interval)
+                await asyncio.sleep(self.health.interval_s())
 
             except asyncio.CancelledError:
                 self.logger.debug("TempHumidityLogger", "log loop cancelled")

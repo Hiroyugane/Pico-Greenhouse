@@ -455,6 +455,77 @@ class TestDescribeResetCause:
         assert main_module._describe_reset_cause() == "unknown"
 
 
+class _FakeTask:
+    """Minimal task handle stand-in with a settable done() result."""
+
+    def __init__(self, finished=False):
+        self._finished = finished
+
+    def done(self):
+        return self._finished
+
+
+class _OpaqueTask:
+    """A handle with no done() — some MicroPython builds hand these back."""
+
+
+class TestTaskLeakMetric:
+    """The metrics `tasks` column reports a DELTA, not an absolute count.
+
+    MicroPython's uasyncio has no all_tasks(), so the old hasattr() guard left
+    the cell empty in all 10 327 rows of the 2026-08-07 field run. Tracking the
+    handles main() spawns works on both runtimes, and a delta makes a healthy
+    run read 0 while any drift shows up immediately.
+    """
+
+    @staticmethod
+    def _seed(monkeypatch, tasks, baseline):
+        import main as main_module
+
+        monkeypatch.setattr(main_module, "_spawned_tasks", list(tasks))
+        monkeypatch.setattr(main_module, "_task_baseline", baseline)
+        return main_module
+
+    def test_healthy_run_reports_zero(self, monkeypatch):
+        m = self._seed(monkeypatch, [_FakeTask() for _ in range(9)], 9)
+        assert m._get_runtime_load_snapshot()["task_count"] == 0
+
+    def test_a_dead_task_reports_a_negative_delta(self, monkeypatch):
+        tasks = [_FakeTask() for _ in range(9)]
+        tasks[3] = _FakeTask(finished=True)
+        m = self._seed(monkeypatch, tasks, 9)
+        assert m._get_runtime_load_snapshot()["task_count"] == -1
+
+    def test_an_extra_task_reports_a_positive_delta(self, monkeypatch):
+        m = self._seed(monkeypatch, [_FakeTask() for _ in range(11)], 9)
+        assert m._get_runtime_load_snapshot()["task_count"] == 2
+
+    def test_handles_without_done_count_as_live(self, monkeypatch):
+        """No done() on the runtime must read as "healthy", not as a phantom leak."""
+        m = self._seed(monkeypatch, [_OpaqueTask() for _ in range(9)], 9)
+        assert m._live_task_count() == 9
+        assert m._get_runtime_load_snapshot()["task_count"] == 0
+
+    def test_a_throwing_done_counts_as_live(self, monkeypatch):
+        class _Angry:
+            def done(self):
+                raise RuntimeError("nope")
+
+        m = self._seed(monkeypatch, [_Angry(), _FakeTask()], 2)
+        assert m._live_task_count() == 2
+
+    def test_track_task_returns_the_handle(self, monkeypatch):
+        m = self._seed(monkeypatch, [], 0)
+        handle = _FakeTask()
+        assert m._track_task(handle) is handle
+        assert m._live_task_count() == 1
+
+    def test_snapshot_never_omits_the_key(self, monkeypatch):
+        """Both metric sinks read this key; an absent one is what left the CSV blank."""
+        m = self._seed(monkeypatch, [], 0)
+        assert "task_count" in m._get_runtime_load_snapshot()
+
+
 @pytest.mark.asyncio
 class TestMainHealthCheck:
     """Tests for main loop health-check logic."""
@@ -510,6 +581,80 @@ class TestMainHealthCheck:
                 await main_module.main()
 
         mock_logger.check_size.assert_called()
+
+    async def test_task_count_matches_in_both_metric_sinks(self, monkeypatch):
+        """The mem-trend line and the metrics CSV must print the same figure.
+
+        They used to disagree on how to spell "unknown": the log printed -1
+        while the CSV cell was left empty for the very same missing value.
+        """
+        import main as main_module
+
+        monkeypatch.setattr(main_module, "validate_config", lambda: True)
+        monkeypatch.setitem(DEVICE_CONFIG["diagnostics"], "mem_trend_log", True)
+        monkeypatch.setitem(DEVICE_CONFIG["diagnostics"], "metrics_log", True)
+
+        fake_gc = Mock()
+        fake_gc.mem_alloc = Mock(return_value=100_000)
+        fake_gc.mem_free = Mock(return_value=150_000)
+        fake_gc.collect = Mock()
+        monkeypatch.setattr(main_module, "gc", fake_gc)
+
+        rows = []
+        mock_metrics = Mock()
+        mock_metrics.write_row = Mock(side_effect=rows.append)
+        monkeypatch.setattr(main_module, "MetricsLogger", lambda *a, **kw: mock_metrics)
+
+        mock_hw = Mock()
+        mock_hw.setup.return_value = True
+        mock_hw.get_rtc.return_value = Mock()
+        mock_hw.is_sd_mounted.return_value = True
+        monkeypatch.setattr(main_module, "HardwareFactory", lambda *a, **kw: mock_hw)
+
+        mock_buffer = Mock()
+        mock_buffer.get_metrics.return_value = {
+            "buffer_entries": 0,
+            "writes_to_fallback": 0,
+            "fallback_migrations": 0,
+            "writes_to_primary": 0,
+            "write_failures": 0,
+        }
+        mock_buffer.is_primary_available.return_value = True
+        mock_buffer._buffers = {}
+        monkeypatch.setattr(main_module, "BufferManager", lambda *a, **kw: mock_buffer)
+
+        mock_logger = Mock()
+        monkeypatch.setattr(main_module, "EventLogger", lambda *a, **kw: mock_logger)
+        monkeypatch.setattr(main_module, "TempHumidityLogger", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "ServiceReminder", lambda *a, **kw: Mock())
+        mock_buzzer = Mock()
+        mock_buzzer.startup = AsyncMock()
+        monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
+        monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: Mock(run_post=AsyncMock(return_value=True)))
+        monkeypatch.setattr(main_module.asyncio, "create_task", _mock_create_task)
+
+        call_count = 0
+
+        async def limited_sleep(duration):
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 2:
+                raise asyncio.CancelledError()
+
+        monkeypatch.setattr(main_module.asyncio, "sleep", limited_sleep)
+        monkeypatch.setattr(main_module.asyncio, "sleep_ms", limited_sleep)
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with pytest.raises(asyncio.CancelledError):
+                await main_module.main()
+
+        assert rows, "no metrics row was written"
+        csv_tasks = rows[-1]["tasks"]
+        assert csv_tasks is not None  # the field-run symptom: an empty cell
+        trend_lines = [c.args[1] for c in mock_logger.info.call_args_list if "mem trend" in str(c.args[1])]
+        assert trend_lines, "no mem-trend line was logged"
+        assert f"tasks={csv_tasks} " in trend_lines[-1]
 
     async def test_health_check_warns_on_buffered_entries(self, monkeypatch):
         """When buffer has entries, main loop logs warning."""
@@ -1109,9 +1254,12 @@ class TestMainInitFailures:
         mock_buzzer.startup = AsyncMock()
         monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
 
-        # Create a mock RTCTimeProvider with time_valid=False
+        # Create a mock RTCTimeProvider with time_valid=False. It still has to
+        # answer now_date_tuple with a real date: the live phase schedule asks
+        # the clock which grow week it is while the engine is being built.
         mock_tp = Mock()
         mock_tp.time_valid = False
+        mock_tp.now_date_tuple.return_value = (2026, 9, 1)
         monkeypatch.setattr(main_module, "RTCTimeProvider", lambda *a, **kw: mock_tp)
 
         mock_sm = Mock(run_post=AsyncMock(return_value=True))
@@ -1381,3 +1529,442 @@ class TestMainSDFailHard:
         # set_sd_status is called at least twice: once before POST (initial
         # reflection) and once immediately after POST (re-assert).
         assert mock_sm.set_sd_status.call_count >= 2
+
+
+@pytest.mark.asyncio
+class TestBootPhaseNotice:
+    """Boot-time re-raise of an unacknowledged grow-phase change."""
+
+    @staticmethod
+    def _boot(monkeypatch, needs_notice, acknowledged="stretch"):
+        """Run main() to its first sleep and return (oled, store) mocks."""
+        import main as main_module
+
+        oled = Mock(display_on=True)
+        monkeypatch.setattr(main_module, "OLEDDisplay", lambda *a, **kw: oled)
+
+        store = Mock()
+        store.needs_notice = Mock(return_value=needs_notice)
+        store.last_acknowledged = Mock(return_value=acknowledged)
+        monkeypatch.setattr(main_module, "PhaseNoticeStore", lambda *a, **kw: store)
+
+        monkeypatch.setattr(main_module, "validate_config", lambda: True)
+
+        mock_hw = Mock()
+        mock_hw.setup.return_value = True
+        mock_hw.get_rtc.return_value = Mock()
+        mock_hw.is_sd_mounted.return_value = True
+        monkeypatch.setattr(main_module, "HardwareFactory", lambda *a, **kw: mock_hw)
+
+        mock_buffer = Mock()
+        mock_buffer.get_metrics.return_value = {
+            "buffer_entries": 0,
+            "writes_to_fallback": 0,
+            "fallback_migrations": 0,
+            "writes_to_primary": 0,
+            "write_failures": 0,
+        }
+        mock_buffer.is_primary_available.return_value = True
+        monkeypatch.setattr(main_module, "BufferManager", lambda *a, **kw: mock_buffer)
+        monkeypatch.setattr(main_module, "EventLogger", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "TempHumidityLogger", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: Mock())
+        monkeypatch.setattr(main_module, "ServiceReminder", lambda *a, **kw: Mock())
+        mock_buzzer = Mock()
+        mock_buzzer.startup = AsyncMock()
+        monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: mock_buzzer)
+        monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: Mock(run_post=AsyncMock(return_value=True)))
+        monkeypatch.setattr(main_module.asyncio, "create_task", _mock_create_task)
+
+        async def stop_sleep(_):
+            raise asyncio.CancelledError()
+
+        monkeypatch.setattr(main_module.asyncio, "sleep", stop_sleep)
+        monkeypatch.setattr(main_module.asyncio, "sleep_ms", stop_sleep)
+        return main_module, oled, store
+
+    async def test_unacknowledged_phase_raises_the_notice_at_boot(self, monkeypatch):
+        """A reset must not swallow a change nobody has confirmed yet."""
+        main_module, oled, _store = self._boot(monkeypatch, needs_notice=True)
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with pytest.raises(asyncio.CancelledError):
+                await main_module.main()
+
+        oled.show_phase_notice.assert_called_once()
+        args = oled.show_phase_notice.call_args[0]
+        assert args[0] == "stretch"  # the phase the operator last confirmed
+        assert args[2] is None  # no invented start date for an old change
+        assert "rh_ideal" in args[3]
+
+    async def test_acknowledged_phase_boots_silently(self, monkeypatch):
+        """The common boot: nothing changed, so nothing is announced."""
+        main_module, oled, _store = self._boot(monkeypatch, needs_notice=False)
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with pytest.raises(asyncio.CancelledError):
+                await main_module.main()
+
+        oled.show_phase_notice.assert_not_called()
+
+    async def test_the_engine_notice_sink_is_wired_to_the_display(self, monkeypatch):
+        """A live phase change reaches the OLED, not just the boot comparison."""
+        main_module, oled, _store = self._boot(monkeypatch, needs_notice=False)
+        captured = {}
+
+        real_engine_cls = main_module.RegulationEngine
+
+        def _engine(*a, **kw):
+            engine = real_engine_cls(*a, **kw)
+            original = engine.set_phase_change_callback
+
+            def _set(cb):
+                captured["cb"] = cb
+                original(cb)
+
+            engine.set_phase_change_callback = _set
+            return engine
+
+        monkeypatch.setattr(main_module, "RegulationEngine", _engine)
+
+        with patch("time.localtime", return_value=FAKE_LOCALTIME):
+            with pytest.raises(asyncio.CancelledError):
+                await main_module.main()
+
+        assert "cb" in captured
+        captured["cb"]("stretch", "bloom", (2026, 10, 6), {"rh_ideal": 43.0})
+        oled.show_phase_notice.assert_called_once_with("stretch", "bloom", (2026, 10, 6), {"rh_ideal": 43.0})
+
+
+def _standard_boot(monkeypatch, oled_factory=None, sleeps=1, needs_notice=False, acknowledged="stretch"):
+    """Stub everything main() reaches for and stop it in the health loop.
+
+    Returns the handles a test asserts against. ``sleeps=1`` cancels at the
+    first health-loop sleep (nothing before the loop awaits asyncio.sleep);
+    ``sleeps=2`` lets exactly one health iteration run first.
+    """
+    import main as main_module
+
+    oled = Mock(display_on=True)
+    monkeypatch.setattr(main_module, "OLEDDisplay", oled_factory or (lambda *a, **kw: oled))
+
+    store = Mock()
+    store.needs_notice = Mock(return_value=needs_notice)
+    store.last_acknowledged = Mock(return_value=acknowledged)
+    monkeypatch.setattr(main_module, "PhaseNoticeStore", lambda *a, **kw: store)
+
+    monkeypatch.setattr(main_module, "validate_config", lambda: True)
+
+    hw = Mock()
+    hw.setup.return_value = True
+    hw.get_rtc.return_value = Mock()
+    hw.is_sd_mounted.return_value = True
+    monkeypatch.setattr(main_module, "HardwareFactory", lambda *a, **kw: hw)
+
+    buffer_manager = Mock()
+    buffer_manager.get_metrics.return_value = {
+        "buffer_entries": 0,
+        "writes_to_fallback": 0,
+        "fallback_migrations": 0,
+        "writes_to_primary": 0,
+        "write_failures": 0,
+    }
+    buffer_manager.is_primary_available.return_value = True
+    buffer_manager._buffers = {}
+    monkeypatch.setattr(main_module, "BufferManager", lambda *a, **kw: buffer_manager)
+
+    logger = Mock()
+    monkeypatch.setattr(main_module, "EventLogger", lambda *a, **kw: logger)
+    monkeypatch.setattr(main_module, "TempHumidityLogger", lambda *a, **kw: Mock())
+    led = Mock()
+    monkeypatch.setattr(main_module, "LEDButtonHandler", lambda *a, **kw: led)
+    monkeypatch.setattr(main_module, "ServiceReminder", lambda *a, **kw: Mock())
+    buzzer = Mock()
+    buzzer.startup = AsyncMock()
+    # A real dict: main() lists the pattern keys in its boot log, and a bare
+    # Mock is not iterable — which would send the buzzer down the init-failed
+    # path and quietly make every "did it beep?" assertion below vacuous.
+    buzzer.patterns = {"phase_pattern": [200, 100]}
+    monkeypatch.setattr(main_module, "BuzzerController", lambda *a, **kw: buzzer)
+    status = Mock(run_post=AsyncMock(return_value=True))
+    monkeypatch.setattr(main_module, "StatusManager", lambda *a, **kw: status)
+    monkeypatch.setattr(main_module.asyncio, "create_task", _mock_create_task)
+
+    seen = {"n": 0}
+
+    async def limited_sleep(_):
+        seen["n"] += 1
+        if seen["n"] >= sleeps:
+            raise asyncio.CancelledError()
+
+    monkeypatch.setattr(main_module.asyncio, "sleep", limited_sleep)
+    monkeypatch.setattr(main_module.asyncio, "sleep_ms", limited_sleep)
+
+    return {
+        "main": main_module,
+        "oled": oled,
+        "store": store,
+        "logger": logger,
+        "led": led,
+        "buzzer": buzzer,
+        "status": status,
+        "hw": hw,
+    }
+
+
+async def _run_main(rig):
+    with patch("time.localtime", return_value=FAKE_LOCALTIME):
+        with pytest.raises(asyncio.CancelledError):
+            await rig["main"].main()
+
+
+def _capture_engine_kwargs(monkeypatch, main_module):
+    """Record the kwargs main() builds the RegulationEngine with."""
+    captured = {}
+    real = main_module.RegulationEngine
+
+    def factory(*a, **kw):
+        captured.update(kw)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(main_module, "RegulationEngine", factory)
+    return captured
+
+
+@pytest.mark.asyncio
+class TestPreFreezeLoggerSignature:
+    """An SD/OTA payload skips frozen modules, so a new main.py can meet an old one.
+
+    TempHumidityLogger is frozen (tools/freeze_manifest.py TIER2) and gained
+    sensor-health arguments this release. The fallback construction used to
+    pass them too, so BOTH attempts raised TypeError, the exception escaped
+    main(), and the watchdog reset the board — a bootloop with no way in but
+    a reflash.
+    """
+
+    HEALTH_KEYS = ("warn_after_failures", "backoff_start_s", "backoff_max_s", "unreachable_heartbeat_s")
+
+    async def test_a_logger_that_rejects_the_health_kwargs_still_boots(self, monkeypatch):
+        rig = _standard_boot(monkeypatch)
+        built = []
+
+        def th_factory(*a, **kw):
+            if any(key in kw for key in self.HEALTH_KEYS):
+                raise TypeError("unexpected keyword argument 'warn_after_failures'")
+            built.append(kw)
+            return Mock()
+
+        monkeypatch.setattr(rig["main"], "TempHumidityLogger", th_factory)
+
+        await _run_main(rig)  # the symptom was this raising TypeError instead
+
+        assert len(built) == 1  # the second fallback, without the health kwargs
+        assert "status_manager" not in built[0]
+        errors = [str(c) for c in rig["logger"].error.call_args_list]
+        assert any("FLASHED" in e for e in errors), errors
+
+    async def test_a_current_logger_never_takes_the_degraded_path(self, monkeypatch):
+        rig = _standard_boot(monkeypatch)
+        built = []
+        monkeypatch.setattr(rig["main"], "TempHumidityLogger", lambda *a, **kw: built.append(kw) or Mock())
+
+        await _run_main(rig)
+
+        assert len(built) == 1
+        assert "warn_after_failures" in built[0]
+
+
+@pytest.mark.asyncio
+class TestIntakeSensorHealth:
+    """The intake SHT31 was the one sensor whose failures vanished entirely.
+
+    external_read() swallowed every exception into a None — no log, no warning
+    key, no backoff — so a dead intake probe presented to the exhaust gate and
+    the RH-reachability monitor as "nothing to report", forever.
+    """
+
+    KEY = "ext_sht31_unreachable"
+
+    @staticmethod
+    def _flaky_sht31(monkeypatch, main_module, state):
+        class FlakySHT31:
+            def __init__(self, *a, **kw):
+                pass
+
+            def measure(self):
+                state["reads"] += 1
+                if state["fail"]:
+                    raise OSError("intake bus wedged")
+
+            @property
+            def temperature(self):
+                return 21.0
+
+            @property
+            def humidity(self):
+                return 55.0
+
+        monkeypatch.setattr(main_module, "SHT31", FlakySHT31)
+
+    @staticmethod
+    def _controllable_health(monkeypatch, main_module, clock):
+        real = main_module.SensorHealth
+        monkeypatch.setattr(
+            main_module,
+            "SensorHealth",
+            lambda **kw: real(time_source=lambda: clock["t"], **kw),
+        )
+
+    async def test_failures_warn_once_and_recovery_clears(self, monkeypatch):
+        rig = _standard_boot(monkeypatch)
+        state = {"fail": True, "reads": 0}
+        clock = {"t": 0.0}
+        self._flaky_sht31(monkeypatch, rig["main"], state)
+        self._controllable_health(monkeypatch, rig["main"], clock)
+        kwargs = _capture_engine_kwargs(monkeypatch, rig["main"])
+
+        await _run_main(rig)
+
+        read = kwargs["external_read"]
+        assert read is not None
+        for _ in range(3):
+            assert read() is None
+        warnings = [str(c) for c in rig["logger"].warning.call_args_list if "intake SHT31" in str(c)]
+        assert len(warnings) == 1
+        assert "intake bus wedged" in warnings[0]  # the cause, not just the count
+        assert [c.args for c in rig["status"].set_warning.call_args_list if c.args[0] == self.KEY] == [(self.KEY, True)]
+
+        clock["t"] = 400.0  # past the backoff
+        state["fail"] = False
+        assert read() == (21.0, 55.0)
+        assert [c.args for c in rig["status"].set_warning.call_args_list if c.args[0] == self.KEY] == [
+            (self.KEY, True),
+            (self.KEY, False),
+        ]
+        recovered = [str(c) for c in rig["logger"].info.call_args_list if "intake SHT31 recovered" in str(c)]
+        assert len(recovered) == 1
+
+    async def test_a_dead_probe_is_not_hammered_every_tick(self, monkeypatch):
+        """Backoff has to reach the actual I2C attempt, not just the log line."""
+        rig = _standard_boot(monkeypatch)
+        state = {"fail": True, "reads": 0}
+        clock = {"t": 0.0}
+        self._flaky_sht31(monkeypatch, rig["main"], state)
+        self._controllable_health(monkeypatch, rig["main"], clock)
+        kwargs = _capture_engine_kwargs(monkeypatch, rig["main"])
+
+        await _run_main(rig)
+
+        read = kwargs["external_read"]
+        for _ in range(3):
+            read()
+        assert state["reads"] == 3  # unreachable now, backed off to 60 s
+        for _ in range(20):
+            assert read() is None
+        assert state["reads"] == 3  # not one more bus transaction
+
+    async def test_a_healthy_probe_is_never_throttled(self, monkeypatch):
+        """The engine already paces this at tick_s; a None every other tick
+        would disarm the RH-reachability window it feeds."""
+        rig = _standard_boot(monkeypatch)
+        state = {"fail": False, "reads": 0}
+        clock = {"t": 0.0}
+        self._flaky_sht31(monkeypatch, rig["main"], state)
+        self._controllable_health(monkeypatch, rig["main"], clock)
+        kwargs = _capture_engine_kwargs(monkeypatch, rig["main"])
+
+        await _run_main(rig)
+
+        read = kwargs["external_read"]
+        for _ in range(10):
+            assert read() == (21.0, 55.0)
+        assert state["reads"] == 10
+
+
+@pytest.mark.asyncio
+class TestPhaseNoticeWithoutADisplay:
+    """OLED init failure is non-fatal by design — the notice must survive it.
+
+    The whole chain (engine callback, buzzer, reminder LED, boot re-raise) used
+    to sit behind `oled is not None`, so a controller with a dead display
+    advanced its phases in complete silence.
+    """
+
+    @staticmethod
+    def _no_oled(monkeypatch):
+        def boom(*a, **kw):
+            raise OSError("no display on the bus")
+
+        return _standard_boot(monkeypatch, oled_factory=boom)
+
+    async def test_a_live_phase_change_still_rings_and_lights_up(self, monkeypatch):
+        rig = self._no_oled(monkeypatch)
+        kwargs = {}
+        real = rig["main"].RegulationEngine
+
+        def factory(*a, **kw):
+            engine = real(*a, **kw)
+            original = engine.set_phase_change_callback
+
+            def _set(cb):
+                kwargs["cb"] = cb
+                original(cb)
+
+            engine.set_phase_change_callback = _set
+            return engine
+
+        monkeypatch.setattr(rig["main"], "RegulationEngine", factory)
+
+        await _run_main(rig)
+
+        assert "cb" in kwargs, "the notice sink was never registered without a display"
+        kwargs["cb"]("stretch", "bloom", (2026, 10, 6), {"profile": "cannabis_bloom"})
+        rig["led"].set_on.assert_called_once()
+        rig["buzzer"].play_named.assert_called_once_with("phase_pattern")
+        warnings = [str(c) for c in rig["logger"].warning.call_args_list if "Grow phase change" in str(c)]
+        assert len(warnings) == 1
+
+    async def test_the_boot_re_raise_survives_a_missing_display(self, monkeypatch):
+        rig = _standard_boot(
+            monkeypatch,
+            oled_factory=lambda *a, **kw: (_ for _ in ()).throw(OSError("no display")),
+            needs_notice=True,
+        )
+
+        await _run_main(rig)
+
+        rig["led"].set_on.assert_called_once()
+        rig["buzzer"].play_named.assert_called_once_with("phase_pattern")
+
+
+@pytest.mark.asyncio
+class TestTaskLeakWarning:
+    """A nonzero delta is a fault to surface, not a column to file away."""
+
+    async def test_a_changed_task_set_raises_the_warning(self, monkeypatch):
+        rig = _standard_boot(monkeypatch, sleeps=2)
+        counts = iter([5, 4, 4, 4, 4, 4])
+        monkeypatch.setattr(rig["main"], "_live_task_count", lambda: next(counts))
+
+        await _run_main(rig)
+
+        calls = [c.args for c in rig["status"].set_warning.call_args_list if c.args[0] == "task_leak"]
+        assert calls == [("task_leak", True)]
+
+    async def test_a_healthy_run_leaves_it_clear(self, monkeypatch):
+        rig = _standard_boot(monkeypatch, sleeps=2)
+        monkeypatch.setattr(rig["main"], "_live_task_count", lambda: 7)
+
+        await _run_main(rig)
+
+        calls = [c.args for c in rig["status"].set_warning.call_args_list if c.args[0] == "task_leak"]
+        assert calls == [("task_leak", False)]
+
+    async def test_the_column_says_whether_it_can_detect_anything(self, monkeypatch):
+        """Without Task.done() the delta pins at 0 — indistinguishable from healthy."""
+        rig = _standard_boot(monkeypatch)
+
+        await _run_main(rig)
+
+        infos = [str(c) for c in rig["logger"].info.call_args_list if "task-leak metric" in str(c)]
+        assert len(infos) == 1

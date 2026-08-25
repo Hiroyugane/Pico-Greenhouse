@@ -19,7 +19,14 @@
 
 ## Schematic — nets, components, BOM
 
-### [ ] Fans are audibly loud at any speed — the PCA9685 cannot reach inaudible PWM
+### [~] Fans are audibly loud at any speed — ACCEPTED 2026-08-25, revisit at the next board
+
+> **Operator decision 2026-08-25:** the noise is accepted as PWM-inherent and
+> is **not** a precondition for anything. It stays filed because the next board
+> is the only place it can actually be fixed — the PCA9685 tops out at 1526 Hz
+> and inaudible fan PWM needs ≥ 20 kHz, so no firmware setting can reach it.
+> FAN.Q.1 is therefore no longer gating; if a board revision happens for other
+> reasons, pick from options A–D below while the schematic is open.
 
 **Filed:** 2026-07-28 ·
 chat-log entry ·
@@ -141,6 +148,45 @@ diodes (~1.6 V drop under load).
 > that made a human bypass the control system. Verify the reservoir level as
 > the innocent explanation first (hw-test FIELD.1), but treat GP19 as the
 > prime suspect until measured.
+
+> **2026-08-07 field evidence — GP19 is exonerated, the rail is not:** with the
+> humidifier back on the relay, the 2026-07-31 → 08-07 run shows the channel
+> **working**: in six of eight full-command episodes the chamber humidity rose
+> under engine control, by **+6.3, +7.5, +8.0 and +10.8 points**. The GP19 coil
+> had authority for a week. The one episode that failed (08-07 10:15–17:17,
+> seven hours at command 100 while RH *fell* 66.3 → 48.3 %) has the shape of an
+> **empty reservoir**, not a dead coil — it is the last episode before shutdown
+> and nothing else on the board misbehaved during it.
+>
+> The supply, however, produced two events this entry should own. On 08-06 the
+> log stops mid-stream and resumes with a fresh boot **twice**: 06:47:35 →
+> 06:55:03 (**7.5 min**) and 08:01:28 → 08:22:07 (**20.6 min**). Neither can be
+> a watchdog timeout — the WDT fires within 8 s, so a stall would leave a
+> seconds-long gap, not twenty minutes. Both look like the board losing power
+> and coming back. `reset_cause` reads `WDT_RESET`, which on the RP2040 does not
+> discriminate (the reset path runs through the watchdog block either way), so
+> the cause code is not evidence here; the **gap length** is. A third event in
+> the same family: the SD card dropped out at **08-01 03:57–04:20** (~23 min,
+> `StatusMgr: SD state changed: mount_failed`) and returned on its own.
+>
+> - **Add to the acceptance for the new board:** log a rail-voltage trace across
+>   a full day, not just a coil-pull-in spot check. Three unexplained
+>   multi-minute outages in seven days, with no watchdog explanation for any of
+>   them, is a supply problem hiding behind a healthy-looking firmware.
+> - **2026-08-25 — make the board measure its own rails.** The day-long trace
+>   above was scheduled as an external measurement campaign before the grow and
+>   has been **postponed into this revision instead**, on the grounds that a
+>   one-off bench trace is unlikely to catch an event that happens twice in
+>   seven days. Put the measurement **on the board**: a divider from each rail
+>   into a free ADC input (or a small I²C monitor), sampled by the existing
+>   metrics loop and written to the health CSV alongside `mem_used_pct`. Then a
+>   brownout is not something to be caught in the act — it is a column. Note
+>   GP28/ADC2 frees up when the soil probe moves to I²C
+>   (see the STEMMA entry in the PCB-layout section), which is exactly the input
+>   this needs.
+> - The tiered write path absorbed the SD event exactly as designed — 615
+>   fallback writes, nine migrations back to the card, **zero `write_failures`**
+>   and no data loss. That is not a reason to leave the supply alone.
 
 - **Quantify the load:** relay-coil bank = N coils × ~70–90 mA hold, plus
   inrush, on top of the Pico + I²C0 draw. Size the 5 V supply for the
@@ -684,6 +730,47 @@ memory: project-s8-uart-divider-revision
 > firmware plausibility filter alone — the filter suppresses the symptom, the
 > divider is the cause.
 
+> **2026-08-07 field evidence (link is dead, filter works):** the
+> 2026-07-31 → 08-07 SD run (7.2 days, firmware `9437f98`) removes the last
+> doubt. The S8 failed **34 s after the first boot** (`failures=2` at
+> 11:47:34), produced its last usable reading at **2026-08-01 08:39**, and then
+> returned nothing for six consecutive days — through **five boots**, two of
+> them full power cycles. The failure counter reached **12 848 consecutive**
+> before the 08-06 reboot and was climbing again at shutdown. The daily CSVs
+> for 08-02 … 08-07 contain the header row and nothing else.
+>
+> Two things this run settles. First, the **frame-integrity filter
+> (`efab3fe`) works**: where the previous run pushed 4.3 % physically
+> impossible values straight to the actuators, this run served **zero** bad
+> readings — `dev_c` sat at the neutral 50 for 9 162 of 10 327 metric rows
+> instead of driving the exhaust from noise. Second, the **fresh-air fallback
+> (`7036863`) works**: minutes 1–4 of every 30-minute cycle show an exhaust
+> command ≥ 60 in 93–97 % of CO₂-blind rows, exactly the configured
+> `interval_min 30 / duration_min 5 / command 60`. The chamber kept breathing
+> on a dead sensor.
+>
+> So the firmware side is done and proven, and the remaining fault is entirely
+> the physical link. One firmware defect does fall out of this run and is
+> separate from the divider: the dead sensor emitted **20 533 WARN lines —
+> 100 % of every warning the system produced in seven days** — which alone
+> drove 3–4 log rotations per day. A sensor that has failed N times in a row
+> should warn once and then rate-limit.
+
+> **2026-08-25 — the sensor was not in the tent, and that is a placement
+> finding.** The S8 was removed from the chamber early in the run because it
+> does not tolerate the high humidity a fruiting chamber runs at, and it was
+> then air-dried for a long period. So the 12 848 failures were partly a
+> disconnected sensor, and the divider measurement below is still owed —
+> but a second requirement now sits alongside it: **the S8 needs a mounting
+> position that is not inside a 95 %RH chamber.** The obvious candidate is the
+> exhaust duct, where chamber air passes but does not dwell, or an enclosure
+> port with a hydrophobic membrane. Decide the position before wiring the next
+> harness; a sensor that has to be removed whenever humidity is high is not a
+> sensor the regulation engine can depend on. Plant mode runs at 43–68 %RH,
+> which is far easier on it than the mushroom profile was — but "easier" is not
+> the same as "specified", so check the S8's rated humidity range against the
+> intended position rather than assuming.
+
 - Senseair S8 UART TXD is **5 V TTL** referenced to V+. Pico GPIO
   abs-max is **3.3 V + 0.5 V = 3.8 V**. Current R11 = 100 Ω in series
   is signal damping, not voltage protection — Pico clamp diodes
@@ -1042,9 +1129,33 @@ chat-log entry
   tracked under "I²C address map on silkscreen" in the PCB layout
   section.
 
-### [~] Soil moisture sensor → Adafruit STEMMA #4026 (I²C, 0x36) — DEFERRED 2026-06-29
+### [ ] Soil moisture sensor → Adafruit STEMMA #4026 (I²C, 0x36) — RE-INSTATED 2026-08-25
 
-> **Reversed 2026-06-29:** the STEMMA I²C swap is deferred. The soil issue
+> **Re-instated 2026-08-25 — the TLC555 path did not deliver.** The analog
+> replacement below was chosen because it needed no firmware change; it never
+> worked reliably in the pot. The STEMMA sensor has been re-ordered (the first
+> order was never delivered, which is a large part of why the analog detour
+> happened at all), and the plan in this entry is live again.
+>
+> Two things changed since it was first written. First, this is **no longer a
+> next-rev-only item**: the sensor plugs into an existing I²C0 drop, so it can
+> go in before the new board. Second, the STEMMA also carries a **temperature
+> sensor**, which finally makes root-zone temperature measurable — the gap that
+> made the "root zone 20–24 °C" requirement unimplementable in the plant-mode
+> plan.
+>
+> **Decided for the firmware side (2026-08-25):** root-zone temperature is
+> **logged and alarmed only**, not regulated. `_NUM_DIMS` is hard-wired to 3 in
+> `lib/regulation_normalizer.py`, and a fourth dimension would drag the arbiter
+> cause mask, the validator, every profile and the golden vectors with it — for
+> an actuator the system does not have. A CSV column, a line on the soil page
+> and a warning outside 20–26 °C carry the whole value at a fraction of the
+> cost.
+>
+> GP28/ADC2 **is** freed by this change, contrary to the deferral note below.
+
+> **Reversed 2026-06-29 (superseded by the note above):** the STEMMA I²C swap
+> is deferred. The soil issue
 > is instead resolved by replacing the dead NE555 with a TLC555-class CMOS
 > sensor, keeping the **analog GP28/ADC2 path** — VCC → 3V3 (pin 36), AOUT
 > → GP28, **no divider** (reverts to the
@@ -1081,44 +1192,46 @@ earlier 10 kΩ + 15 kΩ ADC divider entirely.
   cable side decided at harness build.
 - **GP28 / ADC2 freed.** No analog soil probe means no divider, no
   ADC_VREF gotcha, no 5 V → 3.3 V step-down problem. `adc_input: 28`
-  and the `adc_dry_raw` / `adc_wet_raw` keys are queued for removal
-  in the firmware-side rewrite (below). The pin becomes available
-  for any future analog peripheral.
-- **Firmware change queued (separate commit, lands with the new
-  PCB):** [lib/soil_logger.py](../../lib/soil_logger.py) rewritten
-  to read the Seesaw `touch_read` (channel 0) and the on-chip
-  temperature register over I²C instead of polling an ADC.
-  Calibration semantics **invert** versus the resistive-probe model:
-  with the capacitive Seesaw, **higher raw = wetter** (typical air
-  ≈ 200–400, fully saturated soil ≈ 1000–1500). Header becomes
-  `Timestamp,SeesawRaw,Percent,ProbeTempC` so the new probe
-  temperature joins the CSV row.
-- **Driver source:** port the constants from
+  and the `adc_dry_raw` / `adc_wet_raw` keys are **deleted** as of the
+  2026-08-25 firmware change below. The pin is available for the
+  rail-voltage measurement queued under the power-input entry.
+- **Firmware change SHIPPED 2026-08-25** (ahead of the new PCB, since
+  the probe plugs into an existing I²C drop):
+  [lib/soil_logger.py](../../lib/soil_logger.py) now takes an injected
+  driver and reads the seesaw touch channel plus the on-chip
+  temperature register instead of polling an ADC. Calibration semantics
+  **invert** versus the resistive-probe model: with the capacitive
+  seesaw, **higher raw = wetter** (air ≈ 200, saturated ≈ 2000), and the
+  validator enforces `raw_wet > raw_dry`. The CSV header is
+  `Timestamp,Raw,Percent,RootTempC` — the probe temperature joins the
+  row as an additive column.
+- **Driver:** [lib/stemma_soil.py](../../lib/stemma_soil.py) — the two
+  seesaw registers this board actually uses (`TOUCH_BASE` 0x0F +
+  channel offset 0x10, `STATUS_BASE` 0x00 + `TEMP` 0x04), ported from
   [Adafruit_CircuitPython_seesaw](https://github.com/adafruit/Adafruit_CircuitPython_seesaw)
-  (`MOISTURE_BASE`, `TOUCH_CHANNEL_OFFSET`, 16-bit big-endian read
-  sequence) into a small `lib/seesaw_soil.py`. No runtime dependency
-  on the Adafruit library — Pi Greenhouse is MicroPython, not
-  CircuitPython.
+  constants. No runtime dependency on the Adafruit library — Pi
+  Greenhouse is MicroPython, not CircuitPython.
 - **Verification:** post-fab eyes-on checklist in
   hw-test-log "Adafruit STEMMA #4026 soil sensor bring-up".
   Address on bus, dry/wet sweep, probe temperature within 5 °C of
   SHT31 at room temp.
 
-**Configuration impact (queued, not shipped this turn):**
+**Configuration impact (shipped 2026-08-25):**
 
-- `DEVICE_CONFIG["pins"]["adc_input"]` → **delete**.
+- `DEVICE_CONFIG["pins"]["adc_input"]` → **deleted**.
 - `DEVICE_CONFIG["soil_logger"]`:
-  - `adc_dry_raw` → rename `seesaw_dry_raw`, default ~300 (air).
-  - `adc_wet_raw` → rename `seesaw_wet_raw`, default ~1400 (saturated).
-    Validator inverts: wet must now be **>** dry.
+  - `adc_dry_raw` → `raw_dry`, placeholder 200 (air).
+  - `adc_wet_raw` → `raw_wet`, placeholder 2000 (saturated).
+    Validator inverted: wet must now be **>** dry.
   - new `i2c_address: 0x36`.
-  - new `i2c_bus: 0`.
-- `validate_config()` and
-  [tests/test_config.py](../../tests/test_config.py) rows move in
-  lockstep per
-  configurability.md.
-- `main.py` drops the ADC construction and passes the existing
-  `i2c0` instance to `SoilLogger`.
+  - new `root_temp_min_c: 20.0` / `root_temp_max_c: 26.0` (warning
+    thresholds only — root temperature has no actuator).
+  - no `i2c_bus` key: the probe shares the one I²C0 instance
+    `HardwareFactory` already owns.
+- `main.py` drops the ADC construction and passes that instance to
+  `StemmaSoil`, which is injected into `SoilLogger`.
+- Both placeholders still need a bench calibration (air / saturated)
+  before the probe is potted.
 
 ### [x] Case fan voltage selector + ambient fan Pico control
 

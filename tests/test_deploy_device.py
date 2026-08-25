@@ -206,6 +206,9 @@ class TestFirmwareAbi:
 class TestCli:
     def test_dry_run_lists_the_set(self, capsys, monkeypatch):
         monkeypatch.setattr(deploy_device, "compile_set", lambda entries, **kw: entries)
+        # main() resolves the mpy-cross binary before compiling; fake the
+        # resolution so the test exercises the listing, not the toolchain.
+        monkeypatch.setattr(deploy_device.shutil, "which", lambda name: "mpy-cross")
         assert deploy_device.main(["--dry-run"]) == 0
         out = capsys.readouterr().out
         assert "deploy set" in out

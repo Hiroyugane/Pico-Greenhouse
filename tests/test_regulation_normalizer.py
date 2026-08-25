@@ -140,3 +140,49 @@ class TestRegulationNormalizer:
         norm.update((14.0, 60.0, 800.0), 720, out)
         assert out[0] == 0.0
         assert first == 75.0
+
+
+class TestIdealAccessor:
+    """ideal() exposes the blended at_50 a monitor needs, without re-deriving it."""
+
+    @staticmethod
+    def _norm():
+        from lib.regulation_normalizer import RegulationNormalizer
+
+        profile = {
+            "day": {
+                "temp": {"at_0": 16.0, "at_50": 23.0, "at_100": 30.0},
+                "humidity": {"at_0": 28.0, "at_50": 43.0, "at_100": 62.0},
+                "co2": {"at_0": 400.0, "at_50": 900.0, "at_100": 1500.0},
+            },
+            "night": {
+                "temp": {"at_0": 13.0, "at_50": 21.0, "at_100": 27.0},
+                "humidity": {"at_0": 28.0, "at_50": 53.0, "at_100": 62.0},
+                "co2": {"at_0": 400.0, "at_50": 900.0, "at_100": 1500.0},
+            },
+        }
+        return RegulationNormalizer(profile, 420, 1140, 30, ("temp", "humidity", "co2"))
+
+    def test_day_and_night_endpoints(self):
+        norm = self._norm()
+        assert abs(norm.ideal(0, 1.0) - 23.0) < 1e-4
+        assert abs(norm.ideal(0, 0.0) - 21.0) < 1e-4
+        assert abs(norm.ideal(1, 1.0) - 43.0) < 1e-4
+        assert abs(norm.ideal(1, 0.0) - 53.0) < 1e-4
+
+    def test_blend_is_linear_between_them(self):
+        norm = self._norm()
+        assert abs(norm.ideal(1, 0.5) - 48.0) < 1e-4
+        assert abs(norm.ideal(2, 0.25) - 900.0) < 1e-4  # equal anchors, any b
+
+    def test_matches_the_anchor_update_uses(self):
+        """A reading at ideal(dim, b) must normalize to deviation 50."""
+        from array import array
+
+        norm = self._norm()
+        out = array("f", [0.0] * 3)
+        b = norm.update((23.0, 43.0, 900.0), 720, out)  # midday → b == 1
+        assert b == 1.0
+        for dim in range(3):
+            assert abs(out[dim] - 50.0) < 1e-4
+        assert abs(norm.ideal(1, b) - 43.0) < 1e-4

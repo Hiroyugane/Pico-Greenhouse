@@ -26,6 +26,7 @@ class TestConfigStructure:
             "pca9685",
             "co2_logger",
             "soil_logger",
+            "sensor_health",
             "Service_reminder",
             "buffer_manager",
             "event_logger",
@@ -1025,6 +1026,36 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["co2_logger"]["interval_s"] = original
 
+    def test_co2_logger_ships_disabled_after_the_s8_demount(self):
+        """The S8 does not survive chamber humidity; it is physically gone."""
+        from config import DEVICE_CONFIG
+
+        assert DEVICE_CONFIG["co2_logger"]["enabled"] is False
+
+    def test_co2_logger_enabled_must_be_a_bool(self):
+        """co2_logger.enabled = 'no' raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["co2_logger"]["enabled"]
+        config.DEVICE_CONFIG["co2_logger"]["enabled"] = "no"
+        try:
+            with pytest.raises(ValueError, match="co2_logger.enabled must be a bool"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["co2_logger"]["enabled"] = original
+
+    def test_co2_logger_missing_enabled_raises(self):
+        """Missing co2_logger.enabled raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["co2_logger"]["enabled"]
+        del config.DEVICE_CONFIG["co2_logger"]["enabled"]
+        try:
+            with pytest.raises(ValueError, match="Missing config key"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["co2_logger"]["enabled"] = original
+
     def test_co2_logger_hysteresis_inverted_raises(self):
         """co2_logger.override_ppm_on <= override_ppm_off raises ValueError."""
         import config
@@ -1064,32 +1095,93 @@ class TestValidateConfig:
         finally:
             config.DEVICE_CONFIG["soil_logger"]["interval_s"] = original
 
-    def test_soil_logger_dry_le_wet_raises(self):
-        """soil_logger.adc_dry_raw <= adc_wet_raw raises ValueError."""
+    def test_soil_logger_ships_the_inverted_capacitive_convention(self):
+        """The STEMMA probe reads HIGHER when wetter: raw_wet > raw_dry."""
+        from config import DEVICE_CONFIG
+
+        soil = DEVICE_CONFIG["soil_logger"]
+        assert soil["raw_wet"] > soil["raw_dry"]
+        assert soil["i2c_address"] == 0x36
+
+    def test_soil_logger_wet_le_dry_raises(self):
+        """soil_logger.raw_wet <= raw_dry raises ValueError (swapped calibration)."""
         import config
 
-        orig_dry = config.DEVICE_CONFIG["soil_logger"]["adc_dry_raw"]
-        orig_wet = config.DEVICE_CONFIG["soil_logger"]["adc_wet_raw"]
-        config.DEVICE_CONFIG["soil_logger"]["adc_dry_raw"] = 300
-        config.DEVICE_CONFIG["soil_logger"]["adc_wet_raw"] = 500
+        orig_dry = config.DEVICE_CONFIG["soil_logger"]["raw_dry"]
+        orig_wet = config.DEVICE_CONFIG["soil_logger"]["raw_wet"]
+        config.DEVICE_CONFIG["soil_logger"]["raw_dry"] = 1500
+        config.DEVICE_CONFIG["soil_logger"]["raw_wet"] = 500
         try:
-            with pytest.raises(ValueError, match="adc_dry_raw must be > adc_wet_raw"):
+            with pytest.raises(ValueError, match="raw_wet must be > raw_dry"):
                 config.validate_config()
         finally:
-            config.DEVICE_CONFIG["soil_logger"]["adc_dry_raw"] = orig_dry
-            config.DEVICE_CONFIG["soil_logger"]["adc_wet_raw"] = orig_wet
+            config.DEVICE_CONFIG["soil_logger"]["raw_dry"] = orig_dry
+            config.DEVICE_CONFIG["soil_logger"]["raw_wet"] = orig_wet
 
-    def test_soil_logger_dry_out_of_range_raises(self):
-        """soil_logger.adc_dry_raw outside 0-1023 raises ValueError."""
+    def test_soil_logger_raw_out_of_range_raises(self):
+        """soil_logger.raw_dry outside 0-4095 raises ValueError."""
         import config
 
-        original = config.DEVICE_CONFIG["soil_logger"]["adc_dry_raw"]
-        config.DEVICE_CONFIG["soil_logger"]["adc_dry_raw"] = 2000
+        original = config.DEVICE_CONFIG["soil_logger"]["raw_dry"]
+        config.DEVICE_CONFIG["soil_logger"]["raw_dry"] = 9000
         try:
-            with pytest.raises(ValueError, match="adc_dry_raw"):
+            with pytest.raises(ValueError, match="raw_dry must be an int 0-4095"):
                 config.validate_config()
         finally:
-            config.DEVICE_CONFIG["soil_logger"]["adc_dry_raw"] = original
+            config.DEVICE_CONFIG["soil_logger"]["raw_dry"] = original
+
+    def test_soil_logger_bad_i2c_address_raises(self):
+        """soil_logger.i2c_address outside the 7-bit range raises ValueError."""
+        import config
+
+        original = config.DEVICE_CONFIG["soil_logger"]["i2c_address"]
+        config.DEVICE_CONFIG["soil_logger"]["i2c_address"] = 0x80
+        try:
+            with pytest.raises(ValueError, match="soil_logger.i2c_address"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["soil_logger"]["i2c_address"] = original
+
+    def test_soil_logger_root_temp_window_defaults(self):
+        """Root-zone alarm window ships at 20-26 C (monitor only, no actuator)."""
+        from config import DEVICE_CONFIG
+
+        soil = DEVICE_CONFIG["soil_logger"]
+        assert soil["root_temp_min_c"] == 20.0
+        assert soil["root_temp_max_c"] == 26.0
+
+    def test_soil_logger_root_temp_inverted_window_raises(self):
+        """root_temp_max_c must exceed root_temp_min_c."""
+        import config
+
+        orig_min = config.DEVICE_CONFIG["soil_logger"]["root_temp_min_c"]
+        orig_max = config.DEVICE_CONFIG["soil_logger"]["root_temp_max_c"]
+        config.DEVICE_CONFIG["soil_logger"]["root_temp_min_c"] = 26.0
+        config.DEVICE_CONFIG["soil_logger"]["root_temp_max_c"] = 20.0
+        try:
+            with pytest.raises(ValueError, match="root_temp_max_c must be > root_temp_min_c"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["soil_logger"]["root_temp_min_c"] = orig_min
+            config.DEVICE_CONFIG["soil_logger"]["root_temp_max_c"] = orig_max
+
+    def test_soil_logger_root_temp_out_of_range_raises(self):
+        """A root-zone limit outside 0-50 C is a typo, not a setting."""
+        import config
+
+        original = config.DEVICE_CONFIG["soil_logger"]["root_temp_max_c"]
+        config.DEVICE_CONFIG["soil_logger"]["root_temp_max_c"] = 260.0
+        try:
+            with pytest.raises(ValueError, match="root_temp_max_c must be a number 0-50"):
+                config.validate_config()
+        finally:
+            config.DEVICE_CONFIG["soil_logger"]["root_temp_max_c"] = original
+
+    def test_pins_has_no_adc_input(self):
+        """GP28/ADC2 was freed by the I2C soil probe — no key may point at it."""
+        from config import DEVICE_CONFIG
+
+        assert "adc_input" not in DEVICE_CONFIG["pins"]
 
     def test_soil_logger_warn_pct_out_of_range_raises(self):
         """soil_logger.warn_pct_below outside 0-100 raises ValueError."""
@@ -1218,16 +1310,18 @@ class TestValidateConfig:
         import config
 
         original = config.DEVICE_CONFIG["mode"]
-        orig_profile = config.DEVICE_CONFIG["regulation"]["profile"]
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
         config.DEVICE_CONFIG["mode"] = "plant"
         # The regulation profile category is tied to the top-level mode, so a
-        # plant mode needs a plant profile selected.
+        # plant mode needs a plant profile selected. The schedule is off here
+        # so this test stays about the mode/category pairing alone.
+        config.DEVICE_CONFIG["regulation"]["phase_schedule"]["enabled"] = False
         config.DEVICE_CONFIG["regulation"]["profile"] = "cannabis"
         try:
             assert config.validate_config() is True
         finally:
             config.DEVICE_CONFIG["mode"] = original
-            config.DEVICE_CONFIG["regulation"]["profile"] = orig_profile
+            config.DEVICE_CONFIG["regulation"] = snap
 
     def test_display_negative_startup_banner_raises(self):
         """display.startup_banner_s < 0 raises ValueError."""
@@ -1871,12 +1965,41 @@ class TestRegulationConfig:
         import config
 
         snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
-        config.DEVICE_CONFIG["regulation"]["day_start_min"] = 1200
+        config.DEVICE_CONFIG["regulation"]["day_start_min"] = 1380  # after day_end_min
         try:
             with pytest.raises(ValueError, match="day_start_min"):
                 config.validate_config()
         finally:
             self._restore(snap)
+
+    def test_photoperiod_is_the_cannabis_20_4_window(self):
+        """02:00-22:00 = 20/4, with both ramps finishing inside the window."""
+        from config import DEVICE_CONFIG
+        from lib.regulation_normalizer import blend_factor
+
+        reg = DEVICE_CONFIG["regulation"]
+        start, end, ramp = reg["day_start_min"], reg["day_end_min"], reg["transition_min"]
+        assert (start, end) == (120, 1320)
+        assert end - start == 20 * 60
+        # The dusk ramp sits INSIDE the window and only reaches b=0 at day_end,
+        # which the clock must actually be able to read — a window ending at
+        # 1440 would leave the ramp unfinished at 23:59.
+        assert end < 24 * 60
+        assert start + ramp <= end - ramp  # ramps do not overlap
+        assert blend_factor(start, start, end, ramp) == 0.0
+        assert blend_factor(start + ramp, start, end, ramp) == 1.0
+        assert blend_factor(end - ramp, start, end, ramp) == 1.0
+        assert blend_factor(end, start, end, ramp) == 0.0
+
+    def test_growlight_base_level_is_full_and_capped_by_the_panel(self):
+        """light_level_day is the base level; dac_max_pct is the hardware ceiling."""
+        from config import DEVICE_CONFIG
+
+        growlight = DEVICE_CONFIG["regulation"]["regulators"]["growlight"]
+        assert growlight["light_level_day"] == 100.0
+        assert growlight["adapter"]["dac_max_pct"] == 91
+        # Weeks 1-2 dim through the profile override, not through the base level.
+        assert DEVICE_CONFIG["regulation"]["profiles"]["cannabis_seedling"]["light_level_day"] == 40.0
 
     def test_regulation_profile_unknown_raises(self):
         """regulation.profile not in profiles raises ValueError."""
@@ -1895,8 +2018,11 @@ class TestRegulationConfig:
         import config
 
         snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
-        # Top-level mode is 'mushroom'; selecting a plant profile must fail.
-        config.DEVICE_CONFIG["regulation"]["profile"] = "cannabis"
+        # Top-level mode is 'plant'; selecting a mushroom profile must fail.
+        # The schedule is switched off first so the category rule is what
+        # reports, not the "profile must equal the first phase" rule.
+        config.DEVICE_CONFIG["regulation"]["phase_schedule"]["enabled"] = False
+        config.DEVICE_CONFIG["regulation"]["profile"] = "cubensis"
         try:
             with pytest.raises(ValueError, match="category must match"):
                 config.validate_config()
@@ -2340,6 +2466,414 @@ class TestRegulationConfig:
             self._restore(snap)
 
 
+class TestPhaseScheduleConfig:
+    """Tests for the cannabis phase profiles and regulation.phase_schedule."""
+
+    @staticmethod
+    def _restore(snapshot):
+        import config
+
+        config.DEVICE_CONFIG["regulation"] = snapshot
+
+    @staticmethod
+    def _sched():
+        import config
+
+        return config.DEVICE_CONFIG["regulation"]["phase_schedule"]
+
+    # -- profiles ---------------------------------------------------------
+
+    def test_cannabis_phase_profiles_present_and_plant(self):
+        """All three phase profiles exist and are plant-category."""
+        from config import DEVICE_CONFIG
+
+        profiles = DEVICE_CONFIG["regulation"]["profiles"]
+        for name in ("cannabis_seedling", "cannabis_stretch", "cannabis_bloom"):
+            assert name in profiles, name
+            assert profiles[name]["category"] == "plant", name
+            for phase in ("day", "night"):
+                for dim in ("temp", "humidity", "co2"):
+                    anchors = profiles[name][phase][dim]
+                    assert anchors["at_0"] < anchors["at_50"] < anchors["at_100"]
+
+    def test_cannabis_temp_ideals_match_the_field_run(self):
+        """Day 23 / night 21 in every phase — the tent has no day/night swing.
+
+        Field run 2026-07-31..08-07 (10 327 rows): day median 22.8 C, night
+        median 22.7 C. Scored on those rows, 23/21 sits within +-10 deviation
+        77.2 % of the time against 55.8 % for the textbook 24/20 pair.
+        """
+        from config import DEVICE_CONFIG
+
+        profiles = DEVICE_CONFIG["regulation"]["profiles"]
+        for name in ("cannabis_seedling", "cannabis_stretch", "cannabis_bloom"):
+            assert profiles[name]["day"]["temp"]["at_50"] == 23.0, name
+            assert profiles[name]["night"]["temp"]["at_50"] == 21.0, name
+
+    def test_bloom_narrows_the_mold_gate_to_botrytis_range(self):
+        """Bloom's tighter at_100 moves the mold-risk rule to 26.0 C.
+
+        The conflict rule is phrased in deviation (["temp", "above", 30] =
+        deviation 80), so its physical trip point follows the profile anchors.
+        Bloom buys a tighter gate with at_100 = 28 instead of a second rule.
+        """
+        from config import DEVICE_CONFIG
+        from lib.regulation_normalizer import deviation
+
+        reg = DEVICE_CONFIG["regulation"]
+        # The rule this test is pinned to must still be the deviation-phrased one.
+        assert ["temp", "above", 30] in [list(t) for t in reg["conflicts"][0]["when"]]
+
+        def gate_c(profile_name):
+            anchors = reg["profiles"][profile_name]["day"]["temp"]
+            lo, hi = anchors["at_50"], anchors["at_100"]
+            # Invert deviation(): dev 80 → at_50 + 0.6 * (at_100 - at_50).
+            value = lo + 0.6 * (hi - lo)
+            assert abs(deviation(value, **anchors) - 80.0) < 1e-6
+            return value
+
+        assert abs(gate_c("cannabis_bloom") - 26.0) < 1e-6
+        assert abs(gate_c("cannabis_seedling") - 27.2) < 1e-6
+        assert abs(gate_c("cannabis_stretch") - 27.2) < 1e-6
+
+    def test_seedling_dims_the_light(self):
+        """Weeks 1-2 run the panel at 40 %; no later phase carries the key."""
+        from config import DEVICE_CONFIG
+
+        profiles = DEVICE_CONFIG["regulation"]["profiles"]
+        assert profiles["cannabis_seedling"]["light_level_day"] == 40.0
+        assert "light_level_day" not in profiles["cannabis_stretch"]
+        assert "light_level_day" not in profiles["cannabis_bloom"]
+
+    def test_profile_light_level_out_of_range_raises(self):
+        """A profile light_level_day outside 0-100 raises ValueError."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["profiles"]["cannabis_seedling"]["light_level_day"] = 140.0
+        try:
+            with pytest.raises(ValueError, match="light_level_day must be 0-100"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_profile_surface_overrides_accepted(self):
+        """A partial surface override on a known regulator validates."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["profiles"]["cannabis_bloom"]["surface_overrides"] = {
+            "humidifier": {"bx_lo1": 55.0}
+        }
+        try:
+            assert config.validate_config() is True
+        finally:
+            self._restore(snap)
+
+    def test_profile_surface_overrides_unknown_regulator_raises(self):
+        """surface_overrides keys must be regulator names."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["profiles"]["cannabis_bloom"]["surface_overrides"] = {
+            "dehumidifier": {"gain": 1.0}
+        }
+        try:
+            with pytest.raises(ValueError, match="unknown regulator"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_profile_surface_overrides_unknown_param_raises(self):
+        """An override param that freeze_surface would not know raises early."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["profiles"]["cannabis_bloom"]["surface_overrides"] = {
+            "humidifier": {"bx_low1": 55.0}
+        }
+        try:
+            with pytest.raises(ValueError, match="is not a surface param"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_profile_surface_overrides_out_of_bounds_raises(self):
+        """Override values honour the same bounds as a full surface."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["profiles"]["cannabis_bloom"]["surface_overrides"] = {
+            "humidifier": {"gain": 5000.0}
+        }
+        try:
+            with pytest.raises(ValueError, match="must be a number in"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_profile_surface_overrides_inverted_output_window_raises(self):
+        """An override may not collapse the rescale window evaluate() divides by.
+
+        The fragment's own bounds allow out_min = 100 and out_max = 0 — each is
+        individually inside [-1000, 1000]. Only the MERGED surface shows the
+        inversion, and the engine would otherwise carry it all the way to a
+        ZeroDivisionError on the device's first tick.
+        """
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["profiles"]["cannabis_bloom"]["surface_overrides"] = {
+            "humidifier": {"out_min": 100.0, "out_max": 0.0}
+        }
+        try:
+            with pytest.raises(ValueError, match="out_min must be < out_max"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_profile_surface_override_partial_out_min_is_merged_before_checking(self):
+        """Half an inversion is still an inversion: out_min alone must be caught."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        # The base humidifier surface has out_max = 100; out_min = 200 inverts it.
+        config.DEVICE_CONFIG["regulation"]["profiles"]["cannabis_bloom"]["surface_overrides"] = {
+            "humidifier": {"out_min": 200.0}
+        }
+        try:
+            with pytest.raises(ValueError, match="out_min must be < out_max"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    # -- bloom silences the humidifier ------------------------------------
+
+    def test_bloom_overrides_the_humidifier_surface(self):
+        """Bloom is the phase that carries the neutral humidifier override."""
+        from config import DEVICE_CONFIG
+
+        profiles = DEVICE_CONFIG["regulation"]["profiles"]
+        assert profiles["cannabis_bloom"]["surface_overrides"]["humidifier"] == {
+            "mult": 0.0,
+            "out_min": 0.0,
+            "out_max": 100.0,
+        }
+        # The two earlier phases must NOT carry it — they still humidify.
+        for name in ("cannabis_seedling", "cannabis_stretch"):
+            assert "humidifier" not in profiles[name].get("surface_overrides", {}), name
+
+    def test_bloom_humidifier_surface_is_exactly_zero_over_the_whole_grid(self):
+        """The merged bloom surface evaluates to EXACTLY 0.0 for every input pair.
+
+        Not "small" and not "usually zero": the relay decision downstream is a
+        threshold comparison, so anything that can round above off_below is a
+        contact that closes. Sweep both deviation axes at 0.5-point resolution
+        (plus the out-of-range values a clamped normalizer can never emit, as a
+        belt-and-braces check on the hinge terms) and require the exact float.
+        """
+        from config import DEVICE_CONFIG
+        from lib.regulation_surface import evaluate, freeze_surface
+
+        regulators = DEVICE_CONFIG["regulation"]["regulators"]
+        merged = dict(regulators["humidifier"]["surface"])
+        merged.update(DEVICE_CONFIG["regulation"]["profiles"]["cannabis_bloom"]["surface_overrides"]["humidifier"])
+        params = freeze_surface(merged)
+
+        axis = [i * 0.5 for i in range(0, 201)] + [-50.0, -1.0, 101.0, 150.0]
+        worst = 0.0
+        for dev_h in axis:  # x = RH deviation
+            for dev_t in axis:  # y = temp deviation
+                value = evaluate(params, dev_h, dev_t)
+                if value > worst:
+                    worst = value
+                assert value == 0.0, (dev_h, dev_t, value)
+        assert worst == 0.0
+
+    def test_bloom_humidifier_command_can_never_reach_the_relay(self):
+        """Zero sits under off_below, so the contact cannot even be held closed."""
+        from config import DEVICE_CONFIG
+
+        adapter = DEVICE_CONFIG["regulation"]["regulators"]["humidifier"]["adapter"]
+        assert 0.0 < adapter["off_below"] < adapter["on_above"]
+
+    # -- phase_schedule ---------------------------------------------------
+
+    def test_phase_schedule_default_valid(self):
+        """The shipped schedule validates and carries the expected phases."""
+        import config
+
+        assert config.validate_config() is True
+        sched = self._sched()
+        assert [p["name"] for p in sched["phases"]] == ["seedling", "stretch", "bloom"]
+        assert [p["weeks"] for p in sched["phases"]] == [2, 3, 0]
+        assert sched["start_date"] == (2026, 9, 1)
+
+    def test_the_shipped_config_is_the_cannabis_go_live_combination(self):
+        """mode, profile and schedule flipped together on 2026-08-25."""
+        from config import DEVICE_CONFIG
+
+        assert DEVICE_CONFIG["mode"] == "plant"
+        assert DEVICE_CONFIG["regulation"]["profile"] == "cannabis_seedling"
+        assert DEVICE_CONFIG["regulation"]["phase_schedule"]["enabled"] is True
+
+    def test_phase_schedule_enabled_requires_the_first_phase_profile(self):
+        """A live schedule whose regulation.profile disagrees raises."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["profile"] = "cannabis_stretch"
+        try:
+            with pytest.raises(ValueError, match="must equal the first phase's profile"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_phase_schedule_enabled_with_matching_profile_validates(self):
+        """Flipping mode + profile + enabled together is the legal combination."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        mode = config.DEVICE_CONFIG["mode"]
+        config.DEVICE_CONFIG["mode"] = "plant"
+        config.DEVICE_CONFIG["regulation"]["profile"] = "cannabis_seedling"
+        config.DEVICE_CONFIG["regulation"]["phase_schedule"]["enabled"] = True
+        try:
+            assert config.validate_config() is True
+        finally:
+            config.DEVICE_CONFIG["mode"] = mode
+            self._restore(snap)
+
+    def test_phase_schedule_bad_start_date_shape_raises(self):
+        """start_date must be a three-element tuple."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["phase_schedule"]["start_date"] = (2026, 9)
+        try:
+            with pytest.raises(ValueError, match="start_date must be a"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_phase_schedule_impossible_start_date_raises(self):
+        """A day that does not exist in that month raises (30 February)."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["phase_schedule"]["start_date"] = (2026, 2, 30)
+        try:
+            with pytest.raises(ValueError, match="start_date day must be"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_phase_schedule_leap_day_accepted(self):
+        """29 February is valid in a leap year and invalid in a common one."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        try:
+            config.DEVICE_CONFIG["regulation"]["phase_schedule"]["start_date"] = (2028, 2, 29)
+            assert config.validate_config() is True
+            config.DEVICE_CONFIG["regulation"]["phase_schedule"]["start_date"] = (2026, 2, 29)
+            with pytest.raises(ValueError, match="start_date day must be"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_phase_schedule_absurd_year_raises(self):
+        """A year outside 2020-2100 is an unset clock, not a grow."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["phase_schedule"]["start_date"] = (1970, 1, 1)
+        try:
+            with pytest.raises(ValueError, match="start_date year"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_phase_schedule_unknown_profile_raises(self):
+        """Every referenced profile must exist."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["phase_schedule"]["phases"][1]["profile"] = "triffid"
+        try:
+            with pytest.raises(ValueError, match="not in regulation.profiles"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_phase_schedule_mushroom_profile_raises(self):
+        """A phase schedule is a plant concept — mushroom profiles are rejected."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["phase_schedule"]["phases"][1]["profile"] = "cubensis"
+        try:
+            with pytest.raises(ValueError, match="must be a plant profile"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_phase_schedule_negative_weeks_raises(self):
+        """weeks must be an int >= 0."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["phase_schedule"]["phases"][0]["weeks"] = -1
+        try:
+            with pytest.raises(ValueError, match="weeks must be an int"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_phase_schedule_open_ended_middle_phase_raises(self):
+        """weeks == 0 anywhere but last would make every later phase dead."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["phase_schedule"]["phases"][0]["weeks"] = 0
+        try:
+            with pytest.raises(ValueError, match="may only be 0 on the last phase"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_phase_schedule_open_ended_last_phase_accepted(self):
+        """weeks == 0 on the last phase is the shipped 'until harvest' case."""
+        import config
+
+        assert config.DEVICE_CONFIG["regulation"]["phase_schedule"]["phases"][-1]["weeks"] == 0
+        assert config.validate_config() is True
+
+    def test_phase_schedule_empty_phases_raises(self):
+        """An empty phase list is not a schedule."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["phase_schedule"]["phases"] = []
+        try:
+            with pytest.raises(ValueError, match="phases must be a non-empty list"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+    def test_phase_schedule_enabled_must_be_bool(self):
+        """enabled is a bool, not a truthy string."""
+        import config
+
+        snap = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        config.DEVICE_CONFIG["regulation"]["phase_schedule"]["enabled"] = "yes"
+        try:
+            with pytest.raises(ValueError, match="enabled must be a bool"):
+                config.validate_config()
+        finally:
+            self._restore(snap)
+
+
 class TestCo2FilteringConfig:
     """Plausibility window, checksum flag, staleness timeout, and the FAE block."""
 
@@ -2432,3 +2966,417 @@ class TestCo2FilteringConfig:
                 config.validate_config()
         finally:
             fae["command"] = original
+
+
+class TestSensorHealthConfig:
+    """Edge-triggered sensor reporting policy + poll backoff ladder."""
+
+    @staticmethod
+    def _swap(key, value):
+        import config
+
+        cfg = config.DEVICE_CONFIG["sensor_health"]
+        original = cfg[key]
+        cfg[key] = value
+        return cfg, original
+
+    def test_defaults_validate(self):
+        """Shipped defaults are a valid policy."""
+        import config
+
+        assert config.validate_config() is True
+
+    def test_defaults_are_sane(self):
+        from config import DEVICE_CONFIG
+
+        cfg = DEVICE_CONFIG["sensor_health"]
+        assert cfg["warn_after_failures"] >= 1
+        assert cfg["backoff_start_s"] > 0
+        assert cfg["backoff_max_s"] >= cfg["backoff_start_s"]
+        assert cfg["unreachable_heartbeat_s"] >= 0
+
+    def test_missing_key_raises(self):
+        import config
+
+        cfg = config.DEVICE_CONFIG["sensor_health"]
+        original = cfg["backoff_start_s"]
+        del cfg["backoff_start_s"]
+        try:
+            with pytest.raises(ValueError, match="Missing config key"):
+                config.validate_config()
+        finally:
+            cfg["backoff_start_s"] = original
+
+    def test_warn_after_failures_below_one_raises(self):
+        """Zero would report "unreachable" before a single read had failed."""
+        import config
+
+        cfg, original = self._swap("warn_after_failures", 0)
+        try:
+            with pytest.raises(ValueError, match="warn_after_failures must be an int >= 1"):
+                config.validate_config()
+        finally:
+            cfg["warn_after_failures"] = original
+
+    def test_warn_after_failures_non_int_raises(self):
+        import config
+
+        cfg, original = self._swap("warn_after_failures", 3.5)
+        try:
+            with pytest.raises(ValueError, match="warn_after_failures must be an int"):
+                config.validate_config()
+        finally:
+            cfg["warn_after_failures"] = original
+
+    def test_backoff_start_zero_raises(self):
+        """A zero backoff would poll a dead sensor in a tight loop."""
+        import config
+
+        cfg, original = self._swap("backoff_start_s", 0)
+        try:
+            with pytest.raises(ValueError, match="backoff_start_s must be a number > 0"):
+                config.validate_config()
+        finally:
+            cfg["backoff_start_s"] = original
+
+    def test_backoff_max_below_start_raises(self):
+        """A ceiling under the first step would make the ladder run backwards."""
+        import config
+
+        cfg, original = self._swap("backoff_max_s", 30)
+        try:
+            with pytest.raises(ValueError, match="backoff_max_s must be >= backoff_start_s"):
+                config.validate_config()
+        finally:
+            cfg["backoff_max_s"] = original
+
+    def test_backoff_max_equal_to_start_is_allowed(self):
+        """Equal values mean "one backoff step, no doubling" — a valid policy."""
+        import config
+
+        start = config.DEVICE_CONFIG["sensor_health"]["backoff_start_s"]
+        cfg, original = self._swap("backoff_max_s", start)
+        try:
+            assert config.validate_config() is True
+        finally:
+            cfg["backoff_max_s"] = original
+
+    def test_negative_heartbeat_raises(self):
+        import config
+
+        cfg, original = self._swap("unreachable_heartbeat_s", -1)
+        try:
+            with pytest.raises(ValueError, match="unreachable_heartbeat_s must be a number >= 0"):
+                config.validate_config()
+        finally:
+            cfg["unreachable_heartbeat_s"] = original
+
+    def test_heartbeat_zero_is_silent_and_valid(self):
+        import config
+
+        cfg, original = self._swap("unreachable_heartbeat_s", 0)
+        try:
+            assert config.validate_config() is True
+        finally:
+            cfg["unreachable_heartbeat_s"] = original
+
+
+class TestHumidifierWatchdogConfig:
+    """Effectiveness thresholds + the supply buzzer pattern they announce with."""
+
+    @staticmethod
+    def _swap(key, value):
+        import config
+
+        cfg = config.DEVICE_CONFIG["regulation"]["humidifier_watchdog"]
+        original = cfg[key]
+        cfg[key] = value
+        return cfg, original
+
+    def test_defaults_validate(self):
+        import config
+
+        assert config.validate_config() is True
+
+    def test_defaults_match_the_field_episodes(self):
+        """One hour / half a point — the gap between the working and empty runs.
+
+        Working humidifier episodes gained 1.1, 0.97 and 5.0 RH points per hour;
+        the empty-tank one lost 1.3. A 0.5-point threshold over an hour sits in
+        the gap with room on both sides.
+        """
+        from config import DEVICE_CONFIG
+
+        cfg = DEVICE_CONFIG["regulation"]["humidifier_watchdog"]
+        assert cfg["ineffective_window_s"] == 3600
+        assert cfg["ineffective_min_rise"] == 0.5
+
+    def test_zero_window_raises(self):
+        """A zero-length window would judge the humidifier on its first tick."""
+        import config
+
+        cfg, original = self._swap("ineffective_window_s", 0)
+        try:
+            with pytest.raises(ValueError, match="ineffective_window_s must be > 0"):
+                config.validate_config()
+        finally:
+            cfg["ineffective_window_s"] = original
+
+    def test_negative_min_rise_raises(self):
+        """A non-positive rise threshold can never be failed — it is not a test."""
+        import config
+
+        cfg, original = self._swap("ineffective_min_rise", -0.5)
+        try:
+            with pytest.raises(ValueError, match="ineffective_min_rise must be > 0"):
+                config.validate_config()
+        finally:
+            cfg["ineffective_min_rise"] = original
+
+    def test_non_numeric_threshold_raises(self):
+        import config
+
+        cfg, original = self._swap("ineffective_min_rise", "0.5")
+        try:
+            with pytest.raises(ValueError, match="ineffective_min_rise must be > 0"):
+                config.validate_config()
+        finally:
+            cfg["ineffective_min_rise"] = original
+
+    def test_missing_key_raises(self):
+        """A half-written block is worse than none — the engine would KeyError."""
+        import config
+
+        cfg = config.DEVICE_CONFIG["regulation"]["humidifier_watchdog"]
+        original = cfg.pop("ineffective_window_s")
+        try:
+            with pytest.raises(ValueError, match="Missing config key: regulation.humidifier_watchdog"):
+                config.validate_config()
+        finally:
+            cfg["ineffective_window_s"] = original
+
+    # -- the buzzer pattern the watchdog plays ----------------------------
+
+    def test_supply_pattern_present_and_distinct(self):
+        """A falling motif — every other pattern is a repeated single tone."""
+        from config import DEVICE_CONFIG
+
+        buzzer = DEVICE_CONFIG["buzzer"]
+        supply = buzzer["supply_pattern"]
+        freqs = [step[0] for step in supply]
+        assert freqs == sorted(freqs, reverse=True)
+        assert len(set(freqs)) == len(freqs)
+        for name in ("error_pattern", "alert_pattern", "reminder_pattern"):
+            assert buzzer[name] != supply, name
+            # The others are all monotone; this one must not be mistaken for them.
+            assert len(set(step[0] for step in buzzer[name])) == 1, name
+
+    def test_supply_pattern_is_picked_up_by_the_main_wiring(self):
+        """main.py hands the buzzer every *_melody / *_pattern list it finds."""
+        from config import DEVICE_CONFIG
+
+        selected = {
+            k for k, v in DEVICE_CONFIG["buzzer"].items() if isinstance(v, list) and k.endswith(("_melody", "_pattern"))
+        }
+        assert "supply_pattern" in selected
+
+    def test_missing_supply_pattern_raises(self):
+        """play_named() shrugs at an unknown name, so a silent alarm must not ship."""
+        import config
+
+        buzzer = config.DEVICE_CONFIG["buzzer"]
+        original = buzzer.pop("supply_pattern")
+        try:
+            with pytest.raises(ValueError, match="buzzer.supply_pattern must be a non-empty list"):
+                config.validate_config()
+        finally:
+            buzzer["supply_pattern"] = original
+
+    def test_malformed_pattern_step_raises(self):
+        """Steps are (freq_hz, duration_ms, pause_ms) triples, not pairs."""
+        import config
+
+        buzzer = config.DEVICE_CONFIG["buzzer"]
+        original = buzzer["supply_pattern"]
+        buzzer["supply_pattern"] = [(1319, 120)]
+        try:
+            with pytest.raises(ValueError, match="steps must be"):
+                config.validate_config()
+        finally:
+            buzzer["supply_pattern"] = original
+
+    def test_negative_pattern_value_raises(self):
+        import config
+
+        buzzer = config.DEVICE_CONFIG["buzzer"]
+        original = buzzer["error_pattern"]
+        buzzer["error_pattern"] = [(400, -200, 100)]
+        try:
+            with pytest.raises(ValueError, match="step values must be ints"):
+                config.validate_config()
+        finally:
+            buzzer["error_pattern"] = original
+
+
+class TestRhUnreachableConfig:
+    """Thresholds for the RH-target reachability warning (external sensor)."""
+
+    @staticmethod
+    def _swap(key, value):
+        import config
+
+        cfg = config.DEVICE_CONFIG["regulation"]["external_sensor"]
+        original = cfg[key]
+        cfg[key] = value
+        return cfg, original
+
+    def test_defaults_validate(self):
+        import config
+
+        assert config.validate_config() is True
+
+    def test_defaults_are_present_and_provisional(self):
+        """Shipped starting guesses, not field-derived numbers — retune expected."""
+        from config import DEVICE_CONFIG
+
+        cfg = DEVICE_CONFIG["regulation"]["external_sensor"]
+        assert cfg["rh_unreachable_margin"] == 5.0
+        assert cfg["rh_unreachable_window_s"] == 1800
+
+    def test_they_live_with_the_sensor_that_feeds_them(self):
+        """The detector no-ops without the sensor, so keep them together."""
+        from config import DEVICE_CONFIG
+
+        cfg = DEVICE_CONFIG["regulation"]["external_sensor"]
+        assert cfg["enabled"] is True  # intake SHT31 fitted at 0x45 (go-live)
+        assert {"rh_unreachable_margin", "rh_unreachable_window_s"} <= set(cfg)
+
+    def test_zero_margin_raises(self):
+        """A zero margin warns the instant the room is one point over ideal."""
+        import config
+
+        cfg, original = self._swap("rh_unreachable_margin", 0)
+        try:
+            with pytest.raises(ValueError, match="rh_unreachable_margin must be > 0"):
+                config.validate_config()
+        finally:
+            cfg["rh_unreachable_margin"] = original
+
+    def test_negative_window_raises(self):
+        import config
+
+        cfg, original = self._swap("rh_unreachable_window_s", -60)
+        try:
+            with pytest.raises(ValueError, match="rh_unreachable_window_s must be > 0"):
+                config.validate_config()
+        finally:
+            cfg["rh_unreachable_window_s"] = original
+
+    def test_non_numeric_margin_raises(self):
+        import config
+
+        cfg, original = self._swap("rh_unreachable_margin", "5")
+        try:
+            with pytest.raises(ValueError, match="rh_unreachable_margin must be > 0"):
+                config.validate_config()
+        finally:
+            cfg["rh_unreachable_margin"] = original
+
+    def test_missing_key_raises(self):
+        import config
+
+        cfg = config.DEVICE_CONFIG["regulation"]["external_sensor"]
+        original = cfg.pop("rh_unreachable_window_s")
+        try:
+            with pytest.raises(ValueError, match="Missing config key: regulation.external_sensor"):
+                config.validate_config()
+        finally:
+            cfg["rh_unreachable_window_s"] = original
+
+    def test_bloom_target_sits_under_the_assumed_room(self):
+        """This is why the warning exists: 43 %RH is below a 35-70 %RH room's top.
+
+        The tent's only humidity-lowering path is dilution toward room air, so a
+        room above the ideal plus the margin makes the bloom setpoint physically
+        unreachable — hence a warning rather than a moved target.
+        """
+        from config import DEVICE_CONFIG
+
+        reg = DEVICE_CONFIG["regulation"]
+        ideal = reg["profiles"]["cannabis_bloom"]["day"]["humidity"]["at_50"]
+        margin = reg["external_sensor"]["rh_unreachable_margin"]
+        assert ideal + margin < 70.0  # the top of the assumed room range
+
+
+class TestPhaseNoticeConfig:
+    """The acknowledge-required phase-change notice: its melody and its store."""
+
+    # -- buzzer.phase_pattern ---------------------------------------------
+
+    def test_phase_pattern_present_and_distinct(self):
+        """A rising interval sounded twice — no other pattern repeats a figure."""
+        from config import DEVICE_CONFIG
+
+        buzzer = DEVICE_CONFIG["buzzer"]
+        phase = buzzer["phase_pattern"]
+        assert len(phase) >= 2
+        for name in ("startup_melody", "error_pattern", "alert_pattern", "reminder_pattern", "supply_pattern"):
+            assert buzzer[name] != phase, name
+        # Two identical rising pairs: the repeat IS the signature.
+        assert phase[0][0] < phase[1][0]
+        assert [step[0] for step in phase[:2]] == [step[0] for step in phase[2:4]]
+
+    def test_phase_pattern_is_picked_up_by_the_main_wiring(self):
+        """main.py hands the buzzer every *_melody / *_pattern list it finds."""
+        from config import DEVICE_CONFIG
+
+        selected = {
+            k for k, v in DEVICE_CONFIG["buzzer"].items() if isinstance(v, list) and k.endswith(("_melody", "_pattern"))
+        }
+        assert "phase_pattern" in selected
+
+    def test_missing_phase_pattern_raises(self):
+        """play_named() shrugs at an unknown name, so a silent notice must not ship."""
+        import config
+
+        buzzer = config.DEVICE_CONFIG["buzzer"]
+        original = buzzer.pop("phase_pattern")
+        try:
+            with pytest.raises(ValueError, match="buzzer.phase_pattern must be a non-empty list"):
+                config.validate_config()
+        finally:
+            buzzer["phase_pattern"] = original
+
+    # -- regulation.phase_schedule.ack_storage_path -----------------------
+
+    def test_ack_storage_path_defaults_to_internal_flash(self):
+        """The notice has to survive with the SD card pulled, so: not /sd."""
+        from config import DEVICE_CONFIG
+
+        path = DEVICE_CONFIG["regulation"]["phase_schedule"]["ack_storage_path"]
+        assert path.startswith("/")
+        assert not path.startswith("/sd")
+
+    def test_missing_ack_storage_path_raises(self):
+        import config
+
+        sched = config.DEVICE_CONFIG["regulation"]["phase_schedule"]
+        original = sched.pop("ack_storage_path")
+        try:
+            with pytest.raises(ValueError, match="ack_storage_path must be an absolute path"):
+                config.validate_config()
+        finally:
+            sched["ack_storage_path"] = original
+
+    def test_relative_ack_storage_path_raises(self):
+        """A relative path lands wherever the process happens to be; refuse it."""
+        import config
+
+        sched = config.DEVICE_CONFIG["regulation"]["phase_schedule"]
+        original = sched["ack_storage_path"]
+        sched["ack_storage_path"] = "phase_ack.txt"
+        try:
+            with pytest.raises(ValueError, match="ack_storage_path must be an absolute path"):
+                config.validate_config()
+        finally:
+            sched["ack_storage_path"] = original

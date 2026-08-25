@@ -4,6 +4,7 @@ pytest-cov>=4.0
 pytest-mock>=3.12
 pytest-watch>=4.2
 pre-commit>=3.6
-ruff>=0.4
+# Pinned: formatter output must match CI's `ruff format --check` exactly.
+ruff==0.15.1
 # Tooling only (tools/gen_case_legend.py) — never imported by device code.
 reportlab>=4.0

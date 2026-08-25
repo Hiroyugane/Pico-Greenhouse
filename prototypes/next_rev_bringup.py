@@ -51,7 +51,7 @@ if sys.implementation.name != "micropython":
 from config import DEVICE_CONFIG  # noqa: E402  (kept after the host path shim)
 
 _PINS = DEVICE_CONFIG["pins"]
-SOIL_PIN = _PINS["adc_input"]  # GP28
+SOIL_ADDR = DEVICE_CONFIG.get("soil_logger", {}).get("i2c_address", 0x36)  # STEMMA on I2C0
 I2C_PORT = _PINS["rtc_i2c_port"]
 I2C_SDA = _PINS["rtc_sda"]
 I2C_SCL = _PINS["rtc_scl"]
@@ -161,35 +161,38 @@ def _safe_all_off():
 # or None. They never raise out — _run_item wraps them too.
 
 
-def _load_print_raw():
+def _load_soil_probe():
     try:
         from lib.soil_logger import print_raw
+        from lib.stemma_soil import StemmaSoil
 
-        return print_raw
+        return print_raw, StemmaSoil(i2c=_i2c(), address=SOIL_ADDR)
     except Exception as e:
-        print("    lib.soil_logger.print_raw unavailable: %s" % e)
-        return None
+        print("    STEMMA soil probe unavailable: %s" % e)
+        return None, None
 
 
 def act_soil_three_point():
-    pr = _load_print_raw()
-    if pr is None:
+    pr, sensor = _load_soil_probe()
+    if pr is None or sensor is None:
         return None
     vals = {}
     for label in ("air/bone-dry", "moist soil", "water"):
         _input("    Place probe in %s, then press Enter to read..." % label)
         try:
-            vals[label] = pr(SOIL_PIN)
+            vals[label] = pr(sensor)[0]
         except Exception as e:
             print("    read failed: %s" % e)
             vals[label] = None
     dry = vals.get("air/bone-dry")
     wet = vals.get("water")
     if isinstance(dry, int) and isinstance(wet, int):
-        if dry > wet:
-            print("    OK: dry(%d) > wet(%d). Set soil_logger.adc_dry_raw=%d, adc_wet_raw=%d." % (dry, wet, dry, wet))
+        # Capacitive probe: WETTER READS HIGHER, the opposite of the old
+        # analog convention this checklist used to print.
+        if wet > dry:
+            print("    OK: wet(%d) > dry(%d). Set soil_logger.raw_dry=%d, raw_wet=%d." % (wet, dry, dry, wet))
         else:
-            print("    >>> PROBLEM: dry(%d) must be > wet(%d) for the validator/convention." % (dry, wet))
+            print("    >>> PROBLEM: wet(%d) must be > dry(%d) for the validator/convention." % (wet, dry))
     return "air=%s moist=%s water=%s" % (vals.get("air/bone-dry"), vals.get("moist soil"), vals.get("water"))
 
 
@@ -293,11 +296,11 @@ SECTIONS = [
         ],
     ),
     (
-        "Soil (TLC555 / GP28, plant mode)",
+        "Soil (Adafruit STEMMA #4026 on I2C0, plant mode)",
         [
             _item(
                 "SOIL.2",
-                "3-point air/moist/water separate, dry>wet; then set adc_dry_raw/adc_wet_raw + reboot for %/LED/CSV.",
+                "3-point air/moist/water separate, wet>dry; then set raw_dry/raw_wet + reboot for %/LED/CSV.",
                 act_soil_three_point,
             ),
         ],

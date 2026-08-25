@@ -37,7 +37,7 @@ if sys.implementation.name != "micropython":  # type: ignore[union-attr]
 
 import machine
 import uasyncio as asyncio
-from machine import ADC, UART, WDT, Pin
+from machine import UART, WDT, Pin
 
 from config import _REG_DIMENSIONS, _REG_NAMES, DEVICE_CONFIG, validate_config
 from lib import version  # mutable: ships in the OTA payload, stays on the filesystem
@@ -131,6 +131,7 @@ except ImportError:  # frozen into the firmware as a top-level module
 
 _feed_boot_wdt()
 from lib.oled_display import OLEDDisplay
+from lib.phase_notice import PhaseNoticeStore
 
 _feed_boot_wdt()
 from lib.regulation_adapters import (
@@ -147,6 +148,10 @@ from lib.regulation_engine import RegulationEngine
 _feed_boot_wdt()
 from lib.relay import RelayController
 
+try:
+    from lib.sensor_health import SensorHealth
+except ImportError:  # frozen into the firmware as a top-level module
+    from sensor_health import SensorHealth
 try:
     from lib.sht31 import SHT31
 except ImportError:  # frozen into the firmware as a top-level module
@@ -272,6 +277,43 @@ def _enter_sd_failure_state(status_manager, wdt, countdown_s):
         machine.reset()
 
 
+# Handles of the long-lived tasks main() spawns in Step 9, plus the count that
+# was live once spawning finished. MicroPython's uasyncio has no all_tasks(),
+# so the metrics loop cannot ask the scheduler how many tasks exist — which is
+# why the `tasks` column was empty in all 10 327 rows of the 2026-08-07 field
+# run. Keeping our own handles works on both runtimes, and reporting the
+# DELTA from the boot-time baseline turns the column into a leak detector: a
+# healthy run reads 0, and anything else means a task died or multiplied.
+_spawned_tasks = []
+_task_baseline = 0
+
+
+def _track_task(task):
+    """Record a spawned task handle for the leak-detector metric."""
+    _spawned_tasks.append(task)
+    return task
+
+
+def _live_task_count() -> int:
+    """How many of the tracked tasks are still running.
+
+    ``done()`` is absent on some MicroPython builds; a handle we cannot
+    interrogate counts as live, which keeps the delta at 0 rather than
+    inventing a phantom leak.
+    """
+    live = 0
+    for task in _spawned_tasks:
+        done = getattr(task, "done", None)
+        if done is not None:
+            try:
+                if done():
+                    continue
+            except Exception:
+                pass
+        live += 1
+    return live
+
+
 def _get_runtime_load_snapshot() -> dict:
     """Collect lightweight runtime load indicators for diagnostics."""
     snapshot = {}
@@ -291,10 +333,12 @@ def _get_runtime_load_snapshot() -> dict:
             # Telemetry is best-effort; never fail the control loop.
             pass
 
-    # Useful in host simulation to correlate with accidental task fan-out.
+    # Task-leak indicator: live tracked tasks minus however many were live once
+    # Step 9 finished. 0 on a healthy run; nonzero means the task set changed.
+    # Deliberately NOT asyncio.all_tasks() — that exists only on CPython, so the
+    # device (the only runtime that matters here) always skipped it.
     try:
-        if hasattr(asyncio, "all_tasks"):
-            snapshot["task_count"] = len(asyncio.all_tasks())
+        snapshot["task_count"] = _live_task_count() - _task_baseline
     except Exception:
         pass
 
@@ -344,7 +388,7 @@ async def main():
 
     # Step 1b: Initialize watchdog timer (early, before any other hardware)
     # If the system freezes during init or runtime, the watchdog will reset it.
-    global _wdt
+    global _wdt, _task_baseline
     system_config = DEVICE_CONFIG.get("system", {})
     wdt_timeout_ms = system_config.get("watchdog_timeout_ms", 8000)
     wdt_feed_interval_ms = system_config.get("watchdog_feed_interval_ms", 2000)
@@ -550,6 +594,15 @@ async def main():
     # Step 6: Create SHT31 sensor and TempHumidityLogger
     th_config = DEVICE_CONFIG.get("temp_humidity_logger", {})
     sht31_config = DEVICE_CONFIG.get("sht31", {})
+    # Shared edge-triggered sensor-reporting policy (one WARN per outage, one
+    # INFO on recovery, backed-off polling in between). See config.sensor_health.
+    health_config = DEVICE_CONFIG.get("sensor_health", {})
+    health_kwargs = {
+        "warn_after_failures": health_config.get("warn_after_failures", 3),
+        "backoff_start_s": health_config.get("backoff_start_s", 60),
+        "backoff_max_s": health_config.get("backoff_max_s", 300),
+        "unreachable_heartbeat_s": health_config.get("unreachable_heartbeat_s", 0),
+    }
     sht31 = SHT31(
         i2c=hardware.get_i2c(),
         address=sht31_config.get("i2c_address", 0x44),
@@ -570,23 +623,42 @@ async def main():
             retry_delay_s=th_config.get("retry_delay_s", 0.5),
             max_history=DEVICE_CONFIG.get("display", {}).get("max_history", 120),
             write_queue=write_queue,
+            **health_kwargs,
         )
     except Exception as e:
         logger.error("MAIN", f"TempHumidityLogger init failed: {e}")
-        # Create a minimal logger without status manager to keep system running
-        th_logger = TempHumidityLogger(
-            sensor=sht31,
-            time_provider=time_provider,
-            buffer_manager=buffer_manager,
-            logger=logger,
-            interval=th_config.get("interval_s", 30),
-            sensor_root=DEVICE_CONFIG["paths"]["sensor_root"],
-            sensor_type=th_config.get("sensor_type", "th"),
-            max_retries=th_config.get("max_retries", 3),
-            retry_delay_s=th_config.get("retry_delay_s", 0.5),
-            max_history=DEVICE_CONFIG.get("display", {}).get("max_history", 120),
-            write_queue=write_queue,
-        )
+        # Create a minimal logger without status manager to keep system running.
+        minimal_kwargs = {
+            "sensor": sht31,
+            "time_provider": time_provider,
+            "buffer_manager": buffer_manager,
+            "logger": logger,
+            "interval": th_config.get("interval_s", 30),
+            "sensor_root": DEVICE_CONFIG["paths"]["sensor_root"],
+            "sensor_type": th_config.get("sensor_type", "th"),
+            "max_retries": th_config.get("max_retries", 3),
+            "retry_delay_s": th_config.get("retry_delay_s", 0.5),
+            "max_history": DEVICE_CONFIG.get("display", {}).get("max_history", 120),
+            "write_queue": write_queue,
+        }
+        with_health = dict(minimal_kwargs)
+        with_health.update(health_kwargs)
+        try:
+            th_logger = TempHumidityLogger(**with_health)
+        except TypeError as te:
+            # The logger is a FROZEN module and an SD/OTA payload deliberately
+            # skips frozen modules — so a new main.py can meet an old frozen
+            # TempHumidityLogger that has never heard of the sensor-health
+            # arguments. Without this second attempt the TypeError escapes
+            # main(), the watchdog resets, and the only way back in is a
+            # reflash. Degrade instead, and say exactly what to do about it.
+            logger.error(
+                "MAIN",
+                "TempHumidityLogger rejected the sensor-health arguments "
+                f"({te}) — running with a pre-freeze logger signature. "
+                "This release must be FLASHED; an OTA drop cannot replace frozen modules.",
+            )
+            th_logger = TempHumidityLogger(**minimal_kwargs)
 
     wdt.feed()  # Feed after TempHumidityLogger init
 
@@ -657,76 +729,109 @@ async def main():
     # Step 7b3: Create CO2 logger (UART0 SenseAir-style sensor). Its cached
     # last_ppm feeds the regulation engine's CO2 dimension; venting is the
     # engine's job (exhaust surface + additive CO2 term), not an override.
+    # co2_logger.enabled=False means the sensor is physically gone (the S8 does
+    # not tolerate chamber humidity): build nothing at all rather than logging a
+    # dead sensor's failures.
     co2_config = DEVICE_CONFIG.get("co2_logger", {})
     co2_logger_obj = None
-    try:
-        co2_uart = UART(
-            DEVICE_CONFIG["pins"]["co2_uart_id"],
-            baudrate=DEVICE_CONFIG["pins"]["co2_baudrate"],
-            tx=Pin(DEVICE_CONFIG["pins"]["co2_uart_tx"]),
-            rx=Pin(DEVICE_CONFIG["pins"]["co2_uart_rx"]),
-        )
-        co2_logger_obj = CO2Logger(
-            uart=co2_uart,
-            time_provider=time_provider,
-            buffer_manager=buffer_manager,
-            logger=logger,
-            interval_s=co2_config.get("interval_s", 30),
-            warmup_s=co2_config.get("warmup_s", 30),
-            max_retries=co2_config.get("max_retries", 3),
-            override_ppm_on=co2_config.get("override_ppm_on", 1000),
-            override_ppm_off=co2_config.get("override_ppm_off", 800),
-            sensor_root=DEVICE_CONFIG["paths"]["sensor_root"],
-            sensor_type=co2_config.get("sensor_type", "co2"),
-            write_queue=write_queue,
-            status_manager=status_manager,
-            verify_checksum=co2_config.get("verify_checksum", True),
-            plausible_min_ppm=co2_config.get("plausible_min_ppm", 300),
-            plausible_max_ppm=co2_config.get("plausible_max_ppm", 5000),
-            stale_after_s=co2_config.get("stale_after_s", 300),
-        )
-    except Exception as e:
-        logger.warning("MAIN", f"CO2Logger init failed (non-critical): {e}")
-        co2_logger_obj = None
+    if not co2_config.get("enabled", True):
+        logger.info("MAIN", "co2_logger disabled — sensor demounted, not constructed")
+    else:
+        try:
+            co2_uart = UART(
+                DEVICE_CONFIG["pins"]["co2_uart_id"],
+                baudrate=DEVICE_CONFIG["pins"]["co2_baudrate"],
+                tx=Pin(DEVICE_CONFIG["pins"]["co2_uart_tx"]),
+                rx=Pin(DEVICE_CONFIG["pins"]["co2_uart_rx"]),
+            )
+            co2_logger_obj = CO2Logger(
+                uart=co2_uart,
+                time_provider=time_provider,
+                buffer_manager=buffer_manager,
+                logger=logger,
+                interval_s=co2_config.get("interval_s", 30),
+                warmup_s=co2_config.get("warmup_s", 30),
+                max_retries=co2_config.get("max_retries", 3),
+                override_ppm_on=co2_config.get("override_ppm_on", 1000),
+                override_ppm_off=co2_config.get("override_ppm_off", 800),
+                sensor_root=DEVICE_CONFIG["paths"]["sensor_root"],
+                sensor_type=co2_config.get("sensor_type", "co2"),
+                write_queue=write_queue,
+                status_manager=status_manager,
+                verify_checksum=co2_config.get("verify_checksum", True),
+                plausible_min_ppm=co2_config.get("plausible_min_ppm", 300),
+                plausible_max_ppm=co2_config.get("plausible_max_ppm", 5000),
+                stale_after_s=co2_config.get("stale_after_s", 300),
+                **health_kwargs,
+            )
+        except Exception as e:
+            logger.warning("MAIN", f"CO2Logger init failed (non-critical): {e}")
+            co2_logger_obj = None
 
-    # Step 7b4: Create SoilLogger (GP28 ADC2 single-probe).
+    # Step 7b4: Create SoilLogger (Adafruit STEMMA #4026 on the shared I2C0).
     # Plant mode only — mushroom mode skips construction entirely.
-    # Calibration constants live in config; use prototypes via the
-    # `print_raw()` REPL helper in lib/soil_logger.py to retune them
-    # per sensor + soil pot. Warning LED flips when % < warn_pct_below.
+    # Calibration constants live in config; use the `print_raw()` REPL helper
+    # in lib/soil_logger.py to retune them per probe + substrate. Warning LED
+    # flips when % < warn_pct_below, and root-zone temperature outside
+    # root_temp_min_c..max_c raises root_temp_low / root_temp_high.
+    #
+    # The driver performs no I/O at construction, so a probe that is absent or
+    # unplugged does not stop the boot: the logger is built, its reads miss,
+    # and the shared health machine reports soil_unreachable once and backs
+    # the polling off — the same degraded path every other sensor takes.
     soil_config = DEVICE_CONFIG.get("soil_logger", {})
     soil_logger_obj = None
     if is_plant_mode:
-        # Plant-mode-only import: keeps the SoilLogger bytecode off the heap
-        # in mushroom mode, where no soil probe is constructed.
+        # Plant-mode-only imports: keeps the SoilLogger + driver bytecode off
+        # the heap in mushroom mode, where no soil probe is constructed.
         try:
             from lib.soil_logger import SoilLogger
         except ImportError:  # frozen into the firmware as a top-level module
             from soil_logger import SoilLogger
+        try:
+            from lib.stemma_soil import StemmaSoil
+        except ImportError:  # frozen into the firmware as a top-level module
+            from stemma_soil import StemmaSoil
 
         try:
-            soil_adc = ADC(Pin(DEVICE_CONFIG["pins"]["adc_input"]))
+            soil_address = soil_config.get("i2c_address", 0x36)
+            soil_sensor = StemmaSoil(i2c=hardware.get_i2c(), address=soil_address)
             soil_logger_obj = SoilLogger(
-                adc=soil_adc,
+                sensor=soil_sensor,
                 time_provider=time_provider,
                 buffer_manager=buffer_manager,
                 logger=logger,
                 interval_s=soil_config.get("interval_s", 60),
-                adc_dry_raw=soil_config.get("adc_dry_raw", 850),
-                adc_wet_raw=soil_config.get("adc_wet_raw", 350),
+                raw_dry=soil_config.get("raw_dry", 200),
+                raw_wet=soil_config.get("raw_wet", 2000),
                 warn_pct_below=soil_config.get("warn_pct_below", 20),
+                root_temp_min_c=soil_config.get("root_temp_min_c", 20.0),
+                root_temp_max_c=soil_config.get("root_temp_max_c", 26.0),
                 sensor_root=DEVICE_CONFIG["paths"]["sensor_root"],
                 sensor_type=soil_config.get("sensor_type", "soil"),
                 write_queue=write_queue,
                 status_manager=status_manager,
+                **health_kwargs,
             )
             logger.info(
                 "MAIN",
-                f"SoilLogger on GP{DEVICE_CONFIG['pins']['adc_input']} "
-                f"(dry={soil_config.get('adc_dry_raw', 850)}, "
-                f"wet={soil_config.get('adc_wet_raw', 350)}, "
-                f"warn<{soil_config.get('warn_pct_below', 20)}%)",
+                f"SoilLogger on I2C0 0x{soil_address:02X} "
+                f"(dry={soil_config.get('raw_dry', 200)}, "
+                f"wet={soil_config.get('raw_wet', 2000)}, "
+                f"warn<{soil_config.get('warn_pct_below', 20)}%, "
+                f"root {soil_config.get('root_temp_min_c', 20.0)}-"
+                f"{soil_config.get('root_temp_max_c', 26.0)}C)",
             )
+        except TypeError as e:
+            # Same frozen-module hazard as the TH logger above, but this one
+            # already degrades safely (soil monitoring simply stays absent),
+            # so name the cause rather than adding a second construction.
+            logger.warning(
+                "MAIN",
+                f"SoilLogger rejected its arguments ({e}) — pre-freeze module signature; "
+                "soil monitoring stays off until the firmware is FLASHED.",
+            )
+            soil_logger_obj = None
         except Exception as e:
             logger.warning("MAIN", f"SoilLogger init failed (non-critical): {e}")
             soil_logger_obj = None
@@ -790,6 +895,18 @@ async def main():
     reg_cfg = DEVICE_CONFIG["regulation"]
     regulation_engine = None
     reg_switches = {}  # raw on/off handles for the OLED debug actions
+
+    # Grow-phase acknowledgement store. The engine advances the phase by itself
+    # every few weeks, so the operator has to confirm the change AT THE CASE —
+    # and this file is what makes that confirmation outlive a reset. Built
+    # BEFORE the engine because the engine needs the acknowledged phase as its
+    # cold-boot fallback: with an implausible RTC date it cannot resolve the
+    # schedule, and the phase a human last confirmed beats week one.
+    sched_cfg = reg_cfg.get("phase_schedule") or {}
+    phase_notice = PhaseNoticeStore(
+        storage_path=sched_cfg.get("ack_storage_path", "/phase_ack.txt"),
+        logger=logger,
+    )
     if reg_cfg.get("enabled", False):
         regulators = reg_cfg["regulators"]
 
@@ -900,26 +1017,69 @@ async def main():
         }
         reg_adapters = [adapter_by_name[n] for n in _REG_NAMES]
 
-        # Optional second SHT31 (external air) gates exhaust effectiveness.
+        # Optional second SHT31 (external air) gates exhaust effectiveness and
+        # feeds the RH-reachability monitor. It used to be the ONE sensor whose
+        # failures were swallowed whole — no log, no warning key, no backoff —
+        # so a dead intake probe presented as "the room is fine" forever.
         external_read = None
         ext_cfg = reg_cfg["external_sensor"]
         if ext_cfg["enabled"]:
             try:
                 ext_sht = SHT31(i2c=hardware.get_i2c(), address=ext_cfg["i2c_address"])
+                # normal_interval_s = 0: the engine already paces this read at
+                # regulation.tick_s, and throttling a HEALTHY sensor here would
+                # feed the monitors a None every other tick. The health machine
+                # is here for the backoff ladder while the probe is dead and
+                # for the one-WARN/one-INFO edge policy every other sensor has.
+                ext_health = SensorHealth(normal_interval_s=0, **health_kwargs)
+                ext_state = {"err": "", "flagged": False}
+
+                def _ext_alert(active):
+                    """Edge-triggered operator warning; repeated calls are free."""
+                    if active == ext_state["flagged"]:
+                        return
+                    ext_state["flagged"] = active
+                    try:
+                        status_manager.set_warning("ext_sht31_unreachable", active)
+                    except Exception as exc:
+                        logger.debug("MAIN", f"intake SHT31 alert failed: {exc}")
 
                 def external_read():
+                    """(t, h) or None. None means "no fresh reading", nothing more."""
+                    if not ext_health.poll_due():
+                        return None  # backed off: do not touch a wedged bus
                     try:
                         ext_sht.measure()
-                        return (ext_sht.temperature, ext_sht.humidity)
-                    except Exception:
+                        reading = (ext_sht.temperature, ext_sht.humidity)
+                    except Exception as exc:
+                        ext_state["err"] = str(exc)[:80]
+                        if ext_health.record_failure():
+                            logger.warning(
+                                "MAIN",
+                                "intake SHT31 unreachable after {} failed reads; polling backed off to {}s ({})".format(
+                                    ext_health.consecutive_failures,
+                                    ext_health.interval_s(),
+                                    ext_state["err"],
+                                ),
+                            )
+                            _ext_alert(True)
                         return None
+                    if ext_health.record_success():
+                        logger.info(
+                            "MAIN",
+                            "intake SHT31 recovered after {}s unreachable ({} failed reads total)".format(
+                                ext_health.last_outage_s, ext_health.total_failures
+                            ),
+                        )
+                    _ext_alert(False)
+                    return reading
 
                 logger.info("MAIN", f"External SHT31 at 0x{ext_cfg['i2c_address']:02X} gates exhaust")
             except Exception as e:
                 logger.warning("MAIN", f"External SHT31 init failed; exhaust gate constant: {e}")
 
         def _reg_alarm(kind):
-            """Buzzer side effects for emergency/latch transitions (rate-limited by the engine)."""
+            """Buzzer side effects for engine-raised alarms (rate-limited by the engine)."""
             if buzzer is None:
                 return
             try:
@@ -927,6 +1087,10 @@ async def main():
                     asyncio.create_task(buzzer.error())
                 elif kind == "emergency":
                     asyncio.create_task(buzzer.alert())
+                elif kind == "supply":
+                    # Consumable/supply alarm — currently only the humidifier
+                    # effectiveness watchdog ("go refill the reservoir").
+                    asyncio.create_task(buzzer.play_named("supply_pattern"))
                 else:  # release
                     asyncio.create_task(buzzer.beep())
             except Exception as exc:
@@ -943,10 +1107,22 @@ async def main():
             external_read=external_read,
             logger=logger,
             alarm_cb=_reg_alarm,
+            status_manager=status_manager,
+            fallback_phase=phase_notice.last_acknowledged(),
         )
+        # The engine resolves its phase from the RTC at construction, so read
+        # the ACTIVE profile back out of it rather than echoing the configured
+        # one — after a reboot in week six those two differ, and the boot log is
+        # where an operator checks which phase the controller thinks it is in.
+        # (The phase-change notice callback is left unset here; the OLED
+        # acknowledge flow claims it in a later step.)
+        reg_state = regulation_engine.get_state()
+        phase = reg_state["phase"]
         logger.info(
             "MAIN",
-            f"Regulation engine ready (profile={reg_cfg['profile']}, tick={reg_cfg['tick_s']}s)",
+            "Regulation engine ready (profile={}, phase={}, tick={}s)".format(
+                reg_state["profile"], phase if phase else "none", reg_cfg["tick_s"]
+            ),
         )
     else:
         logger.warning("MAIN", "Regulation engine disabled in config — no actuator control active")
@@ -993,6 +1169,27 @@ async def main():
         auto_register_button=False,
         logger=logger,
     )
+
+    def _phase_notice_raised():
+        """Reach an operator who is not looking at the case: LED on, one melody."""
+        led_handler.set_on()
+        if buzzer is not None:
+            try:
+                asyncio.create_task(buzzer.play_named("phase_pattern"))
+            except Exception as exc:
+                logger.warning("MAIN", f"Phase-notice buzzer failed: {exc}")
+
+    def _phase_notice_acked(phase):
+        """Persist the acknowledgement, then release the LED if nothing else wants it."""
+        phase_notice.acknowledge(phase)
+        # GP8 is the service reminder's LED and its monitor loop drives it from
+        # its own state. Only switch it off when the reminder is not itself due,
+        # so acknowledging a phase change can never cancel a service signal.
+        try:
+            if not reminder.get_status().get("is_due", False):
+                led_handler.set_off()
+        except Exception as exc:
+            logger.warning("MAIN", f"Phase-notice LED release failed: {exc}")
 
     wdt.feed()  # Feed before OLED init (I2C scan + initial render can be slow)
 
@@ -1076,6 +1273,8 @@ async def main():
                 ),
                 debug_test_growlight_dim_step_s=debug_cfg.get("test_growlight_dim_step_s", 1),
                 debug_test_relay_pulse_s=debug_cfg.get("test_relay_pulse_s", 1),
+                notice_raise_cb=_phase_notice_raised,
+                notice_ack_cb=_phase_notice_acked,
             )
             wdt.feed()  # Feed after OLED init
             logger.info("MAIN", f"OLED display initialized (on={oled.display_on})")
@@ -1101,61 +1300,123 @@ async def main():
         long_press=_on_long_press,
     )
 
-    # Step 9: Spawn all async tasks
+    # Claim the engine's phase-change notice for the display, and re-raise one
+    # that a reset would otherwise have swallowed. Two cases collapse into the
+    # same comparison: the controller advanced and reset before anyone saw the
+    # notice, and the controller was switched off across a phase boundary
+    # entirely. A first boot seeds the store instead and stays silent.
+    #
+    # Deliberately NOT gated on the OLED existing: display init is non-fatal by
+    # design, and a controller whose screen failed still advances its phases.
+    # Without a screen there is no acknowledge path, so the reminder LED simply
+    # stays on and the buzzer plays once — the correct degraded signal.
+    if regulation_engine is not None:
+
+        def _announce_phase(old, new, date_tuple, summary):
+            """Log, then show it on the OLED, or fall back to LED + buzzer alone."""
+            logger.warning(
+                "MAIN",
+                "Grow phase change needs acknowledgement: {} -> {} (profile {})".format(
+                    old, new, (summary or {}).get("profile")
+                ),
+            )
+            if oled is not None:
+                try:
+                    # show_phase_notice drives the LED and the buzzer itself
+                    # through notice_raise_cb, so do not raise them twice.
+                    oled.show_phase_notice(old, new, date_tuple, summary)
+                    return
+                except Exception as exc:
+                    logger.warning("MAIN", f"Phase notice display failed: {exc}")
+            _phase_notice_raised()
+
+        regulation_engine.set_phase_change_callback(_announce_phase)
+        boot_phase = regulation_engine.get_state()["phase"]
+        if phase_notice.needs_notice(boot_phase):
+            acknowledged = phase_notice.last_acknowledged()
+            logger.info("MAIN", f"Unacknowledged phase change: {acknowledged} -> {boot_phase}")
+            # No date: the change may have happened days ago, while the
+            # controller was off. Printing today would claim a start date that
+            # is simply wrong, so a boot-raised notice says "ab sofort" — the
+            # phase IS in effect now, which is the part we actually know.
+            _announce_phase(acknowledged, boot_phase, None, regulation_engine.phase_summary())
+
+    # Step 9: Spawn all async tasks.
+    #
+    # Every handle goes through _track_task() so the health loop can report a
+    # task-leak delta; without it the metrics `tasks` column is blank on the
+    # device, which is exactly what the 2026-08-07 field run recorded.
     logger.info("MAIN", "Spawning async tasks...")
+    _spawned_tasks.clear()
 
     # Spawn watchdog feed task first (highest priority for system stability)
-    asyncio.create_task(feed_watchdog(wdt, wdt_feed_interval_ms, logger))
+    _track_task(asyncio.create_task(feed_watchdog(wdt, wdt_feed_interval_ms, logger)))
     logger.debug("MAIN", "task spawned", task="feed_watchdog")
 
     # Spawn SD-LED blink task (blinks GP5 while the SD state is mount_failed;
     # no_card is solid on and mounted is off, both held by set_sd_state)
-    asyncio.create_task(status_manager.sd_blink_loop(status_led_config.get("sd_fault_blink_ms", 500)))
+    _track_task(asyncio.create_task(status_manager.sd_blink_loop(status_led_config.get("sd_fault_blink_ms", 500))))
     logger.debug("MAIN", "task spawned", task="status_manager.sd_blink_loop")
 
     # Spawn write queue drain task (async SD write batching)
     # Drain task is resilient and catches all exceptions internally (never dies)
-    asyncio.create_task(write_queue.start_drain_task())
+    _track_task(asyncio.create_task(write_queue.start_drain_task()))
     logger.debug("MAIN", "task spawned", task="write_queue.start_drain_task")
 
     # Spawn fallback pruning task (async file maintenance, decoupled from drain)
     # Periodically trims fallback file when it exceeds max size limit
-    asyncio.create_task(buffer_manager.start_fallback_prune_task(check_interval=10))
+    _track_task(asyncio.create_task(buffer_manager.start_fallback_prune_task(check_interval=10)))
     logger.debug("MAIN", "task spawned", task="buffer_manager.start_fallback_prune_task")
 
     # Spawn fan cycle tasks
     for fan in fans:
-        asyncio.create_task(fan.start_cycle())
+        _track_task(asyncio.create_task(fan.start_cycle()))
         logger.debug("MAIN", "task spawned", task=f"{fan.name}.start_cycle")
 
     # Spawn the regulation engine tick loop (owns every regulated actuator)
     if regulation_engine is not None:
-        asyncio.create_task(regulation_engine.run())
+        _track_task(asyncio.create_task(regulation_engine.run()))
         logger.debug("MAIN", "task spawned", task="regulation_engine.run")
 
     # Spawn other async tasks
-    asyncio.create_task(th_logger.log_loop())
+    _track_task(asyncio.create_task(th_logger.log_loop()))
     logger.debug("MAIN", "task spawned", task="th_logger.log_loop")
     if co2_logger_obj is not None:
-        asyncio.create_task(co2_logger_obj.log_loop())
+        _track_task(asyncio.create_task(co2_logger_obj.log_loop()))
         logger.debug("MAIN", "task spawned", task="co2_logger.log_loop")
     if soil_logger_obj is not None:
-        asyncio.create_task(soil_logger_obj.log_loop())
+        _track_task(asyncio.create_task(soil_logger_obj.log_loop()))
         logger.debug("MAIN", "task spawned", task="soil_logger.log_loop")
-    asyncio.create_task(reminder.monitor())
+    _track_task(asyncio.create_task(reminder.monitor()))
     logger.debug("MAIN", "task spawned", task="reminder.monitor")
-    asyncio.create_task(
-        led_handler.poll_button(
-            interval_ms=system_config.get("button_poll_ms", 50),
+    _track_task(
+        asyncio.create_task(
+            led_handler.poll_button(
+                interval_ms=system_config.get("button_poll_ms", 50),
+            )
         )
     )
     logger.debug("MAIN", "task spawned", task="led_handler.poll_button")
 
     if oled is not None:
-        asyncio.create_task(oled.refresh_loop())
+        _track_task(asyncio.create_task(oled.refresh_loop()))
         logger.debug("MAIN", "task spawned", task="oled.refresh_loop")
 
-    logger.info("MAIN", "All tasks spawned. System running.")
+    # Baseline for the task-leak delta: whatever is live right now is "normal",
+    # so a healthy run reports 0 forever and any drift is visible immediately.
+    _task_baseline = _live_task_count()
+    logger.info("MAIN", f"All tasks spawned. System running. ({_task_baseline} tasks)")
+    # Say once whether the leak column can actually detect anything. On a
+    # MicroPython build without Task.done() every handle counts as live, so the
+    # delta pins at 0 forever — indistinguishable from a healthy run unless the
+    # log says so here.
+    if any(getattr(task, "done", None) is not None for task in _spawned_tasks):
+        logger.info("MAIN", "task-leak metric live (Task.done() available on this build)")
+    else:
+        logger.info(
+            "MAIN",
+            "task-leak metric DEGRADED: this build has no Task.done(), so the tasks column can only ever read 0",
+        )
 
     # Main event loop with adaptive health-check interval:
     # - Normal: 60 s (configurable via system.health_check_interval_s)
@@ -1238,6 +1499,18 @@ async def main():
         if load_snapshot and logger.debug_enabled:
             logger.debug("MAIN", "runtime load", **load_snapshot)
 
+        # One figure, both sinks. The mem-trend line used to print -1 while the
+        # CSV cell for the same missing value was left empty, so a reader could
+        # not tell whether the two disagreed or simply spelled "unknown" two
+        # different ways.
+        task_leak = load_snapshot.get("task_count")
+        task_count = task_leak if task_leak is not None else -1
+        # Act on the number instead of only recording it: a task that died or
+        # multiplied is a fault the operator can see on the ALERTS screen and
+        # the warning LED, not a column somebody might read months later.
+        # set_warning is idempotent — repeats neither re-log nor re-buzz.
+        status_manager.set_warning("task_leak", task_leak is not None and task_leak != 0)
+
         # Persistent heap-trend sample (INFO, greppable) when enabled. Unlike
         # the debug "runtime load" line above, this reaches system.log without
         # debug_to_file, so a headless greenhouse records the slow climb toward
@@ -1245,7 +1518,6 @@ async def main():
         # this gc.collect(); post_alloc_b is the leak signal to watch.
         if diagnostics_config.get("mem_trend_log", False) and mem_alloc_pre is not None:
             reclaimed = mem_alloc_pre - mem_alloc
-            task_count = load_snapshot.get("task_count", -1)
             logger.info(
                 "MAIN",
                 "mem trend | "
@@ -1264,7 +1536,7 @@ async def main():
                 "mem_free_b": load_snapshot.get("mem_free_b"),
                 "mem_alloc_b": load_snapshot.get("mem_alloc_b"),
                 "mem_used_pct": load_snapshot.get("mem_used_pct"),
-                "tasks": load_snapshot.get("task_count"),
+                "tasks": task_count,
                 "queue_depth": write_queue.get_queue_size(),
                 "buffered": buffered,
                 "sd_fallback_writes": metrics["writes_to_fallback"],
@@ -1283,7 +1555,14 @@ async def main():
                     row["emergency"] = st["emergency"]
                     row["dev_t"] = dev[0]
                     row["dev_h"] = dev[1]
-                    row["dev_c"] = dev[2]
+                    # Blank, not 50.0, when the CO2 channel is blind. The
+                    # normalizer neutralises a missing reading to dead-centre,
+                    # so a written 50 is indistinguishable from "exactly on
+                    # target" — and with the S8 demounted that was every row.
+                    row["dev_c"] = dev[2] if st.get("co2") is not None else None
+                    # Which phase governed this row. The profile now changes by
+                    # itself, so a CSV read weeks later is unreadable without it.
+                    row["phase"] = st["phase"]
                     row["cmd_heater"] = cmd.get("heater")
                     row["cmd_follower"] = cmd.get("heater_follower")
                     row["cmd_cooler"] = cmd.get("cooler")

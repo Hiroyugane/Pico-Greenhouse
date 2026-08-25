@@ -34,7 +34,7 @@ alternatives) and are the authority when the two disagree.
 | [`sht31`](#sensors) | Temp/humidity sensor address |
 | [`temp_humidity_logger`](#sensors) | T/H poll cadence and retries |
 | [`co2_logger`](#sensors) | CO₂ poll, frame integrity, staleness |
-| [`soil_logger`](#sensors) | Soil ADC calibration (plant mode) |
+| [`soil_logger`](#sensors) | Soil probe calibration + root-zone limits (plant mode) |
 | [`fans`](#fans--pca9685) | Fans *outside* the regulation engine |
 | [`pca9685`](#fans--pca9685) | PWM driver address, frequency, inversion |
 | [`regulation`](#regulation) | The whole control pipeline |
@@ -56,9 +56,9 @@ alternatives) and are the authority when the two disagree.
 ```
 
 Picks which optional components are constructed. `"plant"` builds the
-`SoilLogger` on GP28; `"mushroom"` skips it entirely — no object, no task, no
-I/O. The active `regulation.profile`'s `category` must match this mode, and
-`validate_config()` enforces it.
+`SoilLogger` and its STEMMA probe; `"mushroom"` skips both entirely — no object,
+no task, no I/O. The active `regulation.profile`'s `category` must match this
+mode, and `validate_config()` enforces it.
 
 Grow-light dimming is **not** controlled by the mode. It is decided by
 `regulation.regulators.growlight.dimmable`, because the MCP4725 costs nothing
@@ -74,7 +74,8 @@ the per-pin connector references.
 Notable keys: `heater_mosfet` (GP3, active HIGH — the one non-relay switch),
 `relay_cooler` / `relay_humidifier` / `relay_growlight` (GP18/19/20),
 `relay_reserved_1` (GP21, wired but unclaimed), `sd_detect` (GP15),
-`co2_uart_tx` / `co2_uart_rx` / `co2_baudrate`, `adc_input` (GP28).
+`co2_uart_tx` / `co2_uart_rx` / `co2_baudrate`. GP28/ADC2 carries no key: the
+soil probe moved to I²C and the pin is free.
 
 `relay_reserved_2..4` (GP22/26/27) exist in the dict but have no net on the
 connector — they are driven HIGH at boot and otherwise unused.
@@ -117,10 +118,14 @@ of defence against a sensor that fails in humid air:
 OLED page. Actual venting is the engine's job through the CO₂ deviation
 dimension.
 
-**`soil_logger`** *(plant mode)* — `adc_dry_raw` and `adc_wet_raw` are stated in
-0–1023 space (what the `print_raw()` REPL helper prints) and scaled internally
-from the RP2040's 16-bit reads. Wet must be lower than dry. `warn_pct_below`
-raises the warning LED.
+**`soil_logger`** *(plant mode)* — an Adafruit STEMMA #4026 capacitive probe on
+I²C0 at `i2c_address` (0x36). `raw_dry` and `raw_wet` are raw seesaw counts (what
+the `print_raw()` REPL helper prints); **wet must be higher than dry** — the
+capacitive probe reads higher when wetter, the opposite of the analog probe it
+replaced. The shipped 200/2000 are placeholders: calibrate in air and in
+saturated substrate before potting. `warn_pct_below` raises the warning LED, and
+`root_temp_min_c` / `root_temp_max_c` bound the root-zone temperature the same
+probe reports (logged and alarmed only, never regulated).
 
 ## fans & pca9685
 

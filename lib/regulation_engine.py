@@ -4,8 +4,13 @@
 # Wires normalizer → surfaces → arbiter → adapters and runs them every tick_s.
 # Reads only cached sensor values (no new sensor reads); the per-tick path is
 # allocation-free (preallocated float buffers, no dict/list/f-string churn).
+# Optionally advances the active species profile on a week-based phase schedule
+# (regulation.phase_schedule) — resolved from the calendar, gated on a date
+# change, and rebuilt through the single _activate_profile() path.
 # Emergency/latch transitions raise buzzer + event-log side effects through
 # injected callbacks so the engine stays hardware-decoupled and testable.
+# Also hosts two monitor-only detectors — humidifier effectiveness and RH-target
+# reachability — which never touch an actuator, only raise operator warnings.
 
 import time
 from array import array
@@ -15,6 +20,31 @@ import uasyncio as asyncio
 from lib.regulation_arbiter import RegulationArbiter
 from lib.regulation_normalizer import RegulationNormalizer, severity
 from lib.regulation_surface import evaluate, freeze_surface
+
+
+def _days_from_civil(year, month, day):
+    """Days since 1970-01-01 for a proleptic-Gregorian date (integer math only).
+
+    Howard Hinnant's civil-from-days inverse. Used to turn (today - start_date)
+    into a day count so the phase schedule is ABSOLUTE: a controller that
+    reboots mid-grow resolves the same phase the running one was in, instead of
+    replaying the schedule from week one.
+    """
+    y = year - (1 if month <= 2 else 0)
+    era = (y if y >= 0 else y - 399) // 400
+    yoe = y - era * 400
+    mp = month - 3 if month > 2 else month + 9
+    doy = (153 * mp + 2) // 5 + day - 1
+    doe = yoe * 365 + yoe // 4 - yoe // 100 + doy
+    return era * 146097 + doe - 719468
+
+
+# fixed: how far before its own start_date a resolved calendar date may fall
+# before the schedule refuses to believe it. Two years is generous enough for a
+# schedule configured well ahead of the grow, and short enough to reject the
+# RP2040's own 2021-01-01 power-on default, which an unreadable DS3231 leaves
+# in place. Not operator-tunable — it is a sanity bound, not a setting.
+_MAX_PRE_START_DAYS = 730
 
 
 def _effect_factor(delta, full_delta, min_factor):
@@ -42,7 +72,9 @@ class RegulationEngine:
         external_read=None,
         logger=None,
         alarm_cb=None,
+        status_manager=None,
         clock=None,
+        fallback_phase=None,
     ):
         """
         Args:
@@ -56,9 +88,17 @@ class RegulationEngine:
             external_read: optional callable() -> (t_out, h_out) or None.
             logger: optional EventLogger for band-transition events.
             alarm_cb: optional callable(kind) for buzzer alarms
-                (kind in {"emergency","latch","release"}).
+                (kind in {"emergency","latch","release","supply"}).
+            status_manager: optional StatusManager for named warning keys
+                (monitor-only detectors; the engine never reads it back).
             clock: optional callable() -> monotonic seconds (adapter min-cycle);
                 defaults to time.time.
+            fallback_phase: optional phase NAME (a plain string, not a store)
+                to adopt when the very first schedule resolve is held because
+                the RTC date is implausible. main.py passes the last phase the
+                operator acknowledged, so a controller that boots with a dead
+                coin cell stays in the phase it was actually in instead of
+                dropping back to week one.
         """
         self._reg_names = reg_names
         self._dim_order = dim_order
@@ -69,6 +109,7 @@ class RegulationEngine:
         self._external_read = external_read
         self._logger = logger
         self._alarm_cb = alarm_cb
+        self._status = status_manager
         self._clock = clock or time.time
         self._tick_s = float(reg_cfg["tick_s"])
 
@@ -87,34 +128,57 @@ class RegulationEngine:
 
         n = len(reg_names)
         regulators = reg_cfg["regulators"]
+        self._regulators = regulators
+        self._profiles = reg_cfg["profiles"]
+        self._day_start_min = reg_cfg["day_start_min"]
+        self._day_end_min = reg_cfg["day_end_min"]
+        self._transition_min = reg_cfg["transition_min"]
 
-        # Normalizer + arbiter built from the config (pure data).
-        profile = reg_cfg["profiles"][reg_cfg["profile"]]
-        self._norm = RegulationNormalizer(
-            profile,
-            reg_cfg["day_start_min"],
-            reg_cfg["day_end_min"],
-            reg_cfg["transition_min"],
-            dim_order,
-        )
         self._arb = RegulationArbiter.from_config(reg_cfg, reg_names, dim_order, self._tick_s)
 
-        # Frozen surface params + (x,y) dim indices per surface-driven regulator.
+        # Per-profile state (normalizer, frozen surfaces, light level) is built
+        # by _activate_profile — the single place it is ever created, so a phase
+        # change and a cold boot take the identical code path.
+        self._norm = None
         self._surface_params = [None] * n
         self._surface_dims = [None] * n
-        for i, name in enumerate(reg_names):
-            r = regulators[name]
-            if r["driven"] == "surface":
-                self._surface_params[i] = freeze_surface(r["surface"])
-                dx = dim_order.index(r["dims"][0])
-                dy = dim_order.index(r["dims"][1])
-                self._surface_dims[i] = (dx, dy)
+        self._base_light_day = float(regulators["growlight"]["light_level_day"])
+        self._light_level_day = self._base_light_day
+        self._profile_name = reg_cfg["profile"]
+        self._activate_profile(reg_cfg["profile"])
 
         # Regulator indices used by the derived/tod/exhaust paths.
         self._i_heater = reg_names.index("heater")
         self._i_follower = reg_names.index("heater_follower")
         self._i_growlight = reg_names.index("growlight")
+        self._i_humidifier = reg_names.index("humidifier")
         self._co2_idx = dim_order.index("co2")
+        self._hum_idx = dim_order.index("humidity")
+
+        # Humidifier effectiveness watchdog (monitor only — see _check_humidifier).
+        # Every field below is a scalar and the check runs branch-first, so the
+        # per-tick cost is one compare on the overwhelmingly common path.
+        watchdog = reg_cfg.get("humidifier_watchdog")
+        hum_adapter = regulators["humidifier"].get("adapter") or {}
+        on_above = hum_adapter.get("on_above")
+        self._hum_watch = watchdog is not None and on_above is not None
+        self._hum_on_above = float(on_above) if on_above is not None else 0.0
+        self._hum_window_s = float(watchdog["ineffective_window_s"]) if watchdog else 0.0
+        self._hum_min_rise = float(watchdog["ineffective_min_rise"]) if watchdog else 0.0
+        self._hum_on_since = None  # monotonic start of the current on-window
+        self._hum_off_since = None  # monotonic start of the current off-window
+        self._hum_win_rh = 0.0  # RH when that window opened
+        self._hum_warned = False  # warning currently raised (edge guard)
+        self._hum_warn_rh = 0.0  # RH when it was raised (the recovery baseline)
+        # The relay, not the raw command, is what "running" means: the adapter
+        # holds the appliance on from on_above all the way down to off_below,
+        # so a command oscillating between those two never interrupts it.
+        # Bound once — the per-tick path reads a flag and an attribute.
+        self._hum_adapter = adapters[self._i_humidifier]
+        self._hum_use_adapter = hasattr(self._hum_adapter, "active")
+        # The TH logger's health machine, so the watchdog can tell a real flat
+        # RH from the frozen last_humidity a dead sensor leaves behind.
+        self._th_health = getattr(th_logger, "health", None)
 
         follower = regulators["heater_follower"]
         self._follower_gain = float(follower["follower_gain"])
@@ -135,8 +199,6 @@ class RegulationEngine:
                 self._co2_break[i] = float(regulators[name]["co2_break"])
         self._any_external = any(self._ext_active)
 
-        self._light_level_day = float(regulators["growlight"]["light_level_day"])
-
         # Fresh-air exchange fallback for a blind CO2 channel. The window is
         # derived from wall-clock minutes rather than a tick counter so it is
         # deterministic across reboots — a controller that resets mid-window
@@ -153,6 +215,17 @@ class RegulationEngine:
         self._ext_min_c = float(ext["min_factor"])
         self._ext_full_rh = float(ext["full_delta_rh"])
         self._ext_min_rh = float(ext["min_factor_rh"])
+        # Latest external reading, cached into scalars once per tick so the
+        # exhaust multiplier and the RH-reachability monitor share one I2C read.
+        self._ext_t = None
+        self._ext_h = None
+
+        # RH-target reachability monitor (monitor only — see _check_rh_target).
+        self._rh_margin = float(ext.get("rh_unreachable_margin", 0.0))
+        self._rh_window_s = float(ext.get("rh_unreachable_window_s", 0.0))
+        self._rh_watch = self._rh_margin > 0.0 and self._rh_window_s > 0.0
+        self._rh_over_since = None  # monotonic start of the sustained excess
+        self._rh_warned = False  # warning currently raised (edge guard)
 
         # Preallocated per-tick buffers.
         self._dev = array("f", [50.0] * len(dim_order))
@@ -163,19 +236,351 @@ class RegulationEngine:
         # Latest state (for OLED/debug; not built per tick).
         self._b = 0.0
         self._gmax = 0.0
+        # Last CO2 reading the pipeline actually consumed. None means the
+        # dimension was neutralised, which the metrics CSV has to be able to
+        # tell apart from "sitting exactly on the ideal" — both read dev 50.
+        self._co2_in = None
+
+        # Week-based phase schedule (plant grows). Disabled = every field below
+        # is inert and tick() never asks the clock for a date.
+        sched = reg_cfg.get("phase_schedule")
+        self._phase_enabled = bool(sched["enabled"]) if sched else False
+        self._phases = sched["phases"] if self._phase_enabled else None
+        self._phase_index = -1
+        self._phase_name = None
+        self._on_phase_change = None
+        self._rtc_warned = False
+        self._fallback_phase = fallback_phase
+        # Cached date, compared element-wise so the fast path allocates nothing
+        # of its own. (0,0,0) can never match a real date, so the first tick
+        # after boot always resolves.
+        self._date_y = 0
+        self._date_m = 0
+        self._date_d = 0
+        if self._phase_enabled:
+            start = sched["start_date"]
+            self._phase_start_day = _days_from_civil(int(start[0]), int(start[1]), int(start[2]))
+            # Resolve at construction, not on the first tick: a controller that
+            # reboots in week six must be in the right phase before the first
+            # actuator command goes out, not one tick_s later.
+            self._maybe_advance_phase(announce=False)
+
+    # -- profile activation (phase schedule) -------------------------------
+
+    def _activate_profile(self, name):
+        """(Re)build every profile-derived object. Allocates — never call per tick.
+
+        This is the ONE place phase state is created: __init__ routes through it
+        for the configured profile and the schedule calls it again on each phase
+        change, so a boot deep in a grow is byte-identical to having advanced
+        into that phase.
+        """
+        profile = self._profiles[name]
+        self._norm = RegulationNormalizer(
+            profile,
+            self._day_start_min,
+            self._day_end_min,
+            self._transition_min,
+            self._dim_order,
+        )
+        # Surfaces are re-frozen from the BASE config every time, with this
+        # profile's overrides merged on top, so overrides never accumulate
+        # across phases — a phase without them gets the shipped surface back.
+        overrides = profile.get("surface_overrides")
+        for i, reg_name in enumerate(self._reg_names):
+            r = self._regulators[reg_name]
+            if r["driven"] != "surface":
+                continue
+            surface = r["surface"]
+            if overrides:
+                over = overrides.get(reg_name)
+                if over:
+                    surface = dict(surface)
+                    surface.update(over)
+            self._surface_params[i] = freeze_surface(surface)
+            self._surface_dims[i] = (
+                self._dim_order.index(r["dims"][0]),
+                self._dim_order.index(r["dims"][1]),
+            )
+        self._light_level_day = float(profile.get("light_level_day", self._base_light_day))
+        # Is the humidifier switched off for the whole of this phase? A surface
+        # override that pins mult to 0 collapses the hinge plane to a constant
+        # zero command, which sits permanently under the adapter's off_below —
+        # i.e. a dead appliance (see cannabis_bloom in config.py). Resolved here
+        # rather than at notice time so the operator notice reads the same fact
+        # the surfaces were frozen from.
+        hum_over = overrides.get("humidifier") if overrides else None
+        self._humidifier_silenced = bool(hum_over) and float(hum_over.get("mult", 1.0)) == 0.0
+        # A phase that silences the humidifier retires every claim about its
+        # effectiveness: the command is 0 for the whole phase, so a raised
+        # warning could never clear on its own — and a warning set that is
+        # permanently non-empty silences the buzzer for EVERY later warning,
+        # because StatusManager only sounds it on the empty→non-empty edge.
+        # (hasattr: __init__ activates a profile before the watchdog exists.)
+        if self._humidifier_silenced and hasattr(self, "_hum_warned"):
+            self._release_hum_warning()
+            self._hum_on_since = None
+            self._hum_off_since = None
+        self._profile_name = name
+
+    def _phase_for_day(self, day_offset):
+        """Index of the phase covering ``day_offset`` days after start_date.
+
+        Absolute: derived from the offset alone, never from the previous phase.
+        A negative offset (start_date still in the future) resolves to the first
+        phase; ``weeks: 0`` marks the open-ended terminal phase.
+        """
+        if day_offset < 0:
+            return 0
+        last = len(self._phases) - 1
+        elapsed = 0
+        for i in range(last + 1):
+            weeks = self._phases[i]["weeks"]
+            if weeks <= 0:
+                return i
+            elapsed += weeks * 7
+            if day_offset < elapsed:
+                return i
+        # Every phase bounded and all of them elapsed: hold the last one.
+        return last
+
+    def _date_plausible(self, date):
+        """Can this date be believed enough to move a grow phase on it?
+
+        The sentinel test this replaced ((0,0,0)) caught the ONE failure mode
+        the time provider can no longer produce on-device: now_date_tuple()
+        only returns it when time.localtime() itself raises, which it does not
+        on MicroPython. The failures that actually happen return a date that is
+        merely WRONG — a DS3231 with a flat coin cell powers up at 2000-01-01,
+        and an unreadable DS3231 leaves the RP2040 at its own 2021-01-01
+        default. Either one resolves to "day one", which silently walks a
+        flowering canopy back to the seedling profile: light 40 %, RH ideal
+        68 %, humidifier un-silenced, mould gate loosened — i.e. botrytis
+        conditions, announced as one routine info line.
+
+        So the gate is plausibility, not a sentinel. Four clauses, each
+        catching something the others do not:
+
+        * a calendar-shaped year and a real month/day (kills (0,0,0) and the
+          2000-01-01 a flat coin cell produces);
+        * the provider's OWN verdict on its clock, when it exposes one — but
+          only when it exposes one, because a DS3231 that cannot be READ never
+          updates that flag and leaves it optimistically True;
+        * which is why the last clause exists: a date that predates the
+          schedule's own start_date by more than two years cannot be today,
+          whatever the year looks like. That is what catches the RP2040's
+          2021-01-01 power-on default surviving an unreadable RTC.
+        """
+        if not (2020 <= date[0] <= 2100):
+            return False
+        if not (1 <= date[1] <= 12) or not (1 <= date[2] <= 31):
+            return False
+        if not getattr(self._time, "time_valid", True):
+            return False
+        return _days_from_civil(date[0], date[1], date[2]) - self._phase_start_day >= -_MAX_PRE_START_DAYS
+
+    def _hold_phase(self):
+        """Keep the current phase and make the reason operator-visible.
+
+        The date cache is deliberately left stale, so every later tick retries
+        the resolve instead of the first bad date poisoning the schedule for
+        the rest of the run.
+        """
+        if not self._rtc_warned:
+            self._rtc_warned = True
+            self._event("warning", "regulation phase held: RTC date implausible")
+            self._set_warning("rtc_phase_held", True)
+        if self._phase_index < 0:
+            self._adopt_fallback_phase()
+
+    def _adopt_fallback_phase(self):
+        """Cold boot with an unusable clock: start from the acknowledged phase.
+
+        Without this the engine sits at phases[0] — week one — which is the
+        single worst guess available, because the operator only ever
+        acknowledges a phase the controller was really in.
+        """
+        name = self._fallback_phase
+        if not name:
+            return
+        for i, phase in enumerate(self._phases):
+            if phase["name"] != name:
+                continue
+            self._activate_profile(phase["profile"])
+            self._phase_index = i
+            self._phase_name = phase["name"]
+            self._event("warning", "regulation phase fell back to the acknowledged {}".format(name))
+            return
+        self._event("warning", "regulation fallback phase {} is not in the schedule".format(name))
+
+    def _maybe_advance_phase(self, announce=True):
+        """Re-resolve the active phase, but only when the calendar date changed.
+
+        Gated hard on the date so 2879 of 2880 daily ticks cost one
+        now_date_tuple() — a localtime() call plus two small tuples — and three
+        integer compares. That is not free, but against a 30 s tick it is
+        noise, and the alternative (caching the date behind the provider)
+        would put the schedule one clock-correction behind the RTC.
+        """
+        date = self._time.now_date_tuple()
+        if date[0] == self._date_y and date[1] == self._date_m and date[2] == self._date_d:
+            return
+        if not self._date_plausible(date):
+            self._hold_phase()
+            return
+        if self._rtc_warned:
+            # First believable date after a hold. Re-arm the one-shot as well
+            # as clearing the key: a SECOND clock failure has to warn again.
+            self._rtc_warned = False
+            self._set_warning("rtc_phase_held", False)
+            self._event("info", "regulation phase hold released: RTC date plausible again")
+        index = self._phase_for_day(_days_from_civil(date[0], date[1], date[2]) - self._phase_start_day)
+        if index == self._phase_index:
+            self._date_y = date[0]
+            self._date_m = date[1]
+            self._date_d = date[2]
+            return
+
+        previous = self._phase_name
+        phase = self._phases[index]
+        # Activate FIRST, commit the state afterwards. _activate_profile
+        # allocates a normalizer and re-freezes every surface, which can
+        # MemoryError on a tight heap; committing the phase name and the date
+        # cache before that would leave the engine reporting a phase it is not
+        # running and never retrying, because the cached date already matches.
+        self._activate_profile(phase["profile"])
+        self._phase_index = index
+        self._phase_name = phase["name"]
+        self._date_y = date[0]
+        self._date_m = date[1]
+        self._date_d = date[2]
+        if not announce:
+            return
+        self._event(
+            "info",
+            "regulation phase {} -> {} (profile {}, {:04d}-{:02d}-{:02d})".format(
+                previous, self._phase_name, phase["profile"], date[0], date[1], date[2]
+            ),
+        )
+        if self._on_phase_change:
+            try:
+                self._on_phase_change(
+                    previous,
+                    self._phase_name,
+                    date,
+                    self.phase_summary(),
+                )
+            except Exception as exc:  # a notice sink must never stop the engine
+                self._event("warning", "phase-change notice failed: {}".format(exc))
+
+    def phase_summary(self):
+        """What the ACTIVE profile means for the operator, as a plain dict.
+
+        The three numbers a phase change actually costs someone attention for,
+        not just the profile's name: the RH setpoint (the DAY anchor, b=1 — the
+        notice is about the phase, not about what time it happens to be), the
+        light level, and whether the humidifier runs at all this phase.
+
+        Built on demand rather than cached so a notice raised at BOOT — from
+        the acknowledgement store, with no live transition behind it — reads
+        identically to one raised by the transition itself. Allocates: only
+        ever called on a phase change or at boot, never per tick.
+        """
+        return {
+            "profile": self._profile_name,
+            "light_level_day": self._light_level_day,
+            "rh_ideal": self._norm.ideal(self._hum_idx, 1.0),
+            "humidifier_silenced": self._humidifier_silenced,
+        }
+
+    def set_phase_change_callback(self, callback):
+        """Set the operator-notice sink: callback(old, new, date_tuple, summary).
+
+        Wired by main.py to the OLED acknowledge flow; None (the default) is a
+        no-op, which is what the tests and a headless build use.
+        """
+        self._on_phase_change = callback
 
     # -- external-effectiveness multiplier (exhaust only) ------------------
 
-    def _external_mult(self, temp_in, hum_in):
-        if not (self._ext_enabled and self._any_external and self._external_read):
-            return 1.0
+    def _read_external(self):
+        """Sample the external (intake/room) sensor once per tick into scalars.
+
+        Two consumers now share the reading — the exhaust effectiveness
+        multiplier and the RH-reachability monitor — so it is read here rather
+        than inside _external_mult, which used to own it. Both stay silent while
+        the sensor is disabled or answering None.
+        """
+        self._ext_t = None
+        self._ext_h = None
+        if not (self._ext_enabled and self._external_read):
+            return
         ext = self._external_read()
-        if not ext:
+        if ext:
+            self._ext_t = ext[0]
+            self._ext_h = ext[1]
+
+    def _external_mult(self, temp_in, hum_in):
+        if not (self._any_external and self._ext_t is not None):
             return 1.0
-        t_out, h_out = ext
-        ft = _effect_factor(temp_in - t_out, self._ext_full_c, self._ext_min_c)
-        fh = _effect_factor(hum_in - h_out, self._ext_full_rh, self._ext_min_rh)
+        ft = _effect_factor(temp_in - self._ext_t, self._ext_full_c, self._ext_min_c)
+        fh = _effect_factor(hum_in - self._ext_h, self._ext_full_rh, self._ext_min_rh)
         return ft * fh
+
+    # -- RH-target reachability monitor (monitor only) ---------------------
+
+    def _check_rh_target(self, now_s):
+        """Warn when the room's own humidity puts the RH setpoint out of reach.
+
+        MONITOR ONLY — no actuator, no buzzer, one warning key.
+
+        The tent has no dehumidifier. Its only humidity-lowering path is the
+        exhaust, which dilutes toward room air, so the floor it can reach is the
+        room it stands in. Against the assumed 35-70 %RH room, the bloom ideal
+        of 43 %RH is periodically not achievable by any command the engine can
+        issue, and the actuators will simply run flat out failing.
+
+        The operator decision is to keep the setpoint FIXED and say so, rather
+        than sliding the target to whatever is achievable today: a target that
+        chases the room is no longer a target. So this raises
+        rh_target_unreachable and leaves the regulation untouched.
+
+        The ideal comes from the live normalizer (rebuilt by _activate_profile
+        on every phase change) and the current day/night blend, never from a
+        config constant — bloom's 43 and seedling's 68 have opposite verdicts
+        against the same room.
+
+        Allocation-free: one subtraction, one timestamp, one flag.
+        """
+        room = self._ext_h
+        if room is None:
+            # Sensor disabled or not answering: no opinion either way, and
+            # crucially no MEMORY either. A surviving _rh_over_since would let
+            # the first reading after an outage trip the whole window
+            # instantly on one sample, and a surviving warning could never
+            # clear while the sensor stayed dead. Both are re-established
+            # within one window once readings come back.
+            self._rh_over_since = None
+            if self._rh_warned:
+                self._rh_warned = False
+                self._set_warning("rh_target_unreachable", False)
+            return
+        ideal = self._norm.ideal(self._hum_idx, self._b)
+        if room - ideal <= self._rh_margin:
+            self._rh_over_since = None
+            if self._rh_warned:
+                self._rh_warned = False
+                self._set_warning("rh_target_unreachable", False)
+            return
+        if self._rh_warned:
+            return
+        if self._rh_over_since is None:
+            self._rh_over_since = now_s
+            return
+        if now_s - self._rh_over_since >= self._rh_window_s:
+            self._rh_warned = True
+            self._set_warning("rh_target_unreachable", True)
+            self._event("warning", "room humidity above the RH target: setpoint unreachable")
 
     # -- fresh-air exchange fallback ---------------------------------------
 
@@ -195,6 +600,117 @@ class RegulationEngine:
         if minutes % self._fae_interval_min < self._fae_duration_min:
             return self._fae_command
         return 0.0
+
+    # -- humidifier effectiveness watchdog (monitor only) ------------------
+
+    def _check_humidifier(self, command, hum, now_s):
+        """Warn when the humidifier is energised and the air is not getting wetter.
+
+        MONITOR ONLY. Nothing in here touches an actuator, a floor or the
+        arbiter — the entire output is a warning key, one WARN line and one
+        buzzer pattern. That is deliberate: the humidifier's tank runs dry as a
+        matter of routine at the RH the early phases ask for, and the correct
+        response is a human with a watering can, not a firmware override.
+
+        The rule is the only evidence the hardware offers. The GP19 relay
+        switches the appliance's mains supply and nothing comes back — no tank
+        level, no humidistat state, not even a current reading — so the sole
+        way to tell "misting" from "plugged in but empty" is the effect on RH.
+        Commanded on CONTINUOUSLY for ineffective_window_s while RH gained less
+        than ineffective_min_rise over that window = it is not working. Any
+        interruption of the on-state restarts the window, because a humidifier
+        that was off for part of it was never given the chance.
+
+        Clearing has three routes, all of them "the claim is no longer
+        supported": RH climbs ineffective_min_rise above where it stood when
+        the warning fired (a refilled tank, or a room that recovered on its
+        own); the appliance has not been energised for a full window, so
+        "running without effect" describes nothing; or the phase schedule
+        silences the humidifier outright (handled in _activate_profile). A
+        warning with no exit is worse than no warning — it pins the
+        StatusManager's warning set permanently non-empty, and the buzzer only
+        sounds on the empty→non-empty edge.
+
+        Allocation-free: a handful of scalars and an early return.
+        """
+        on = self._humidifier_on(command)
+
+        # Off-window: track how long the relay has been open, and release a
+        # standing warning once that reaches a full judgement window.
+        if on:
+            self._hum_off_since = None
+        elif self._hum_off_since is None:
+            self._hum_off_since = now_s
+        elif self._hum_warned and now_s - self._hum_off_since >= self._hum_window_s:
+            self._release_hum_warning()
+
+        health = self._th_health
+        if health is not None and health.is_unreachable():
+            # last_humidity FREEZES on sensor failure — it is never reset to
+            # None — so a dead SHT31 presents as a perfectly flat RH and would
+            # convict a full reservoir, then latch, because the frozen delta
+            # can never rise either. Lost evidence is not evidence: disarm the
+            # window and judge nothing. A raised warning is deliberately NOT
+            # cleared here (that would be evidence of recovery, which this is
+            # not); the off-window and the RH-rise edge above own the release.
+            self._hum_on_since = None
+            return
+
+        if hum is None:
+            # A blind sensor cannot testify either way. Disarm rather than
+            # accumulate a window against readings that are not there.
+            self._hum_on_since = None
+            return
+
+        if self._hum_warned and hum - self._hum_warn_rh >= self._hum_min_rise:
+            self._release_hum_warning()
+            self._hum_on_since = None
+
+        if not on:
+            self._hum_on_since = None
+            return
+
+        if self._hum_on_since is None:
+            self._hum_on_since = now_s
+            self._hum_win_rh = hum
+            return
+        if now_s - self._hum_on_since < self._hum_window_s:
+            return
+
+        # A full window of uninterrupted demand has elapsed — judge it, then
+        # re-open a fresh window from here either way, so a persistent fault is
+        # measured continuously without ever re-firing the alarm.
+        if hum - self._hum_win_rh < self._hum_min_rise:
+            if not self._hum_warned:
+                self._hum_warned = True
+                self._hum_warn_rh = hum
+                self._set_warning("humidifier_ineffective", True)
+                self._event("warning", "humidifier commanded on with no RH response")
+                self._alarm("supply")
+        elif self._hum_warned:
+            self._release_hum_warning()
+        self._hum_on_since = now_s
+        self._hum_win_rh = hum
+
+    def _humidifier_on(self, command):
+        """Is the appliance actually energised right now?
+
+        The command is not the answer. RelayHysteresisAdapter closes above
+        on_above (18) and only opens below off_below (7), so a command
+        oscillating 10-25 holds the relay CONTINUOUSLY on while resetting a
+        command-threshold window on every dip — a dry tank under a wobbling
+        command would never be detected. Ask the adapter that owns the relay;
+        fall back to the threshold compare for adapters that cannot say.
+        """
+        if self._hum_use_adapter:
+            return bool(self._hum_adapter.active)
+        return command > self._hum_on_above
+
+    def _release_hum_warning(self):
+        """Drop the effectiveness warning if it is raised (idempotent)."""
+        if self._hum_warned:
+            self._hum_warned = False
+            self._set_warning("humidifier_ineffective", False)
 
     # -- target vector build ----------------------------------------------
 
@@ -250,15 +766,20 @@ class RegulationEngine:
         if now_s is None:
             now_s = self._clock()
 
+        if self._phase_enabled:
+            self._maybe_advance_phase()
+
         temp = self._th.last_temperature
         hum = self._th.last_humidity
         co2 = self._co2.last_ppm if self._co2 is not None else None
+        self._co2_in = co2
 
         minutes = self._time.get_seconds_since_midnight() // 60
         self._b = self._norm.update((temp, hum, co2), minutes, self._dev)
         for i in range(len(self._sev)):
             self._sev[i] = severity(self._dev[i])
 
+        self._read_external()
         ext_mult = self._external_mult(temp if temp is not None else 0.0, hum if hum is not None else 0.0)
         self._compute_targets(ext_mult, self._fae_floor(co2, minutes))
 
@@ -267,6 +788,11 @@ class RegulationEngine:
         out = self._out
         for i, adapter in enumerate(self._adapters):
             adapter.apply(out[i], now_s)
+
+        if self._hum_watch:
+            self._check_humidifier(out[self._i_humidifier], hum, now_s)
+        if self._rh_watch:
+            self._check_rh_target(now_s)
 
         self._handle_signals()
 
@@ -293,6 +819,11 @@ class RegulationEngine:
         if self._alarm_cb:
             self._alarm_cb(kind)
 
+    def _set_warning(self, key, active):
+        """Raise/clear a named operator warning; a missing sink is a no-op."""
+        if self._status:
+            self._status.set_warning(key, active)
+
     # -- async task --------------------------------------------------------
 
     async def run(self):
@@ -316,6 +847,10 @@ class RegulationEngine:
         """Build a state snapshot (called by OLED/debug, not per tick)."""
         return {
             "blend": self._b,
+            # Active species profile, and the schedule phase that selected it
+            # (None when no phase schedule is running).
+            "profile": self._profile_name,
+            "phase": self._phase_name,
             "global_severity": self._gmax,
             # Severity restricted to the directions allowed to escalate — this,
             # not global_severity, is what fires emergency/latch.
@@ -323,6 +858,10 @@ class RegulationEngine:
             "band": self._arb.band_index(self._gmax),
             "latched": self._arb.latched,
             "emergency": self._arb.emergency_active,
+            # The CO2 reading the last tick consumed (None = blind channel).
+            # dev[co2] is 50 either way, so this is the only way a reader can
+            # tell "on target" from "no sensor".
+            "co2": self._co2_in,
             "deviations": list(self._dev),
             "severities": list(self._sev),
             "commanded": {name: self._out[i] for i, name in enumerate(self._reg_names)},

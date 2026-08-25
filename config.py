@@ -70,6 +70,21 @@ _SURFACE_PARAMS = (
     ("out_max", -1000.0, 1000.0, 100.0),  # clamp hi (also rescale ceil)
 )
 _SURFACE_PARAM_NAMES = tuple(p[0] for p in _SURFACE_PARAMS)
+# name → (lo, hi) for validating PARTIAL surface dicts (profile overrides).
+_SURFACE_BOUNDS = {name: (lo, hi) for name, lo, hi, _default in _SURFACE_PARAMS}
+# Days per month, index 0 = January (February gets +1 in a leap year).
+_DAYS_IN_MONTH = (31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+# Buzzer patterns the firmware plays BY NAME. main.py hands the BuzzerController
+# every "*_melody"/"*_pattern" list it finds, and play_named() shrugs at a name
+# it does not know — so a missing entry here is an alarm that never sounds.
+_BUZZER_PATTERNS = (
+    "startup_melody",
+    "error_pattern",
+    "alert_pattern",
+    "reminder_pattern",
+    "supply_pattern",
+    "phase_pattern",
+)
 
 # Deviation dimensions and the ordered regulator (command-vector) names. The
 # arbiter's target vector T[] is indexed by _REG_NAMES order — also load-bearing.
@@ -121,7 +136,10 @@ DEVICE_CONFIG = {
     # so the only cost of being in the wrong mode is what's missing — not
     # idle objects holding RAM. The active regulation.profile's category
     # must match this mode (validated at boot).
-    "mode": "mushroom",
+    #
+    # "plant" since the 2026-08-25 cannabis go-live: the soil logger is armed
+    # and the plant OLED page is live.
+    "mode": "plant",
     # Hardware Pins
     #
     # Pico GPIO layout — matches PCB schematic SCH_Pico-Greenhouse-PCB_2026-05-14
@@ -157,7 +175,7 @@ DEVICE_CONFIG = {
     #   GP21-GP22: Reserved relays (REL_CON pins 5-6, future use)
     #   GP25:      On-board LED (heartbeat)
     #   GP26-GP27: Reserved relays (REL_CON pins 7-8, future use)
-    #   GP28:      ADC input (ADC_CON pin 4; ADC_VREF on Pico pin 35)
+    #   GP28:      free (ex ADC_CON pin 4; the soil probe moved to I2C0)
     #
     # RES_BTN on the PCB is wired to the Pico's 3V3_EN line (hardware reset),
     # not a GPIO; "button_reserved" below points at the GP2 breakout for any
@@ -197,10 +215,10 @@ DEVICE_CONFIG = {
         "relay_reserved_2": 22,  # GP22 — Reserved relay (REL_CON pin 6)
         "relay_reserved_3": 26,  # GP26 — Reserved relay (REL_CON pin 7)
         "relay_reserved_4": 27,  # GP27 — Reserved relay (REL_CON pin 8)
-        # Analog input (ADC_CON pin 4; ADC_VREF on Pico pin 35)
-        # Queued for removal once the Adafruit STEMMA #4026 I²C soil
-        # sensor swap ships — see docs/hardware/next-revision.md.
-        "adc_input": 28,  # GP28 — ADC input (ADC_CON pin 4)
+        # GP28 / ADC2 is FREE. The analog soil probe that used to live on
+        # ADC_CON pin 4 is gone (Adafruit STEMMA #4026 on I²C0 replaced it),
+        # so `adc_input` was deleted rather than left pointing at nothing.
+        # The next board revision claims the pin for rail-voltage measurement.
         # On-board LED
         "onboard_led": 25,  # GP25 — Pico on-board LED (heartbeat)
     },
@@ -343,34 +361,38 @@ DEVICE_CONFIG = {
         "freq_hz": 60,
         "invert": False,
     },
-    # Soil Moisture Logger Configuration (GP28 / ADC2, single-probe)
+    # Soil Logger Configuration (Adafruit STEMMA #4026 on I²C0, address 0x36)
     #
-    # NOTE (2026-06-29): the dead NE555 capacitive probe is replaced by a
-    # TLC555-class CMOS sensor (TLC555 / 7555 / ICM7555 / LMC555) — a
-    # HARDWARE-ONLY swap. The earlier Adafruit STEMMA #4026 I²C plan is
-    # deferred (chat-log 2026-06-29); the analog ADC path stays. Firmware
-    # impact is ZERO code change: `adc_input: 28`, lib/soil_logger.py, and
-    # the `adc_dry_raw > adc_wet_raw` convention already match a capacitive
-    # sensor (dry = high AOUT = high raw). The only firmware action is a
-    # bench recalibration of adc_dry_raw / adc_wet_raw once the TLC555 unit
-    # is fitted — the 850/350 defaults below are NE555-era placeholders and
-    # the 3V3 TLC555 range will differ. Wiring: VCC → 3V3 (Pico pin 36, NOT
-    # 5 V and NOT ADC_VREF pin 35), AOUT → GP28, no divider. See
-    # docs/hardware/next-revision.md "Soil moisture sensor".
+    # The analog TLC555 path never worked reliably in the pot, so the probe is
+    # now the capacitive STEMMA sensor: it plugs into an existing I²C0 drop
+    # (SDA GP0 / SCL GP1, 3V3, GND) alongside the SHT31s, RTC, OLED, DAC and
+    # PWM driver, needs no divider and no ADC_VREF, and frees GP28/ADC2
+    # entirely. Driver: lib/stemma_soil.py (minimal seesaw), injected into
+    # SoilLogger by main.py. See docs/hardware/next-revision.md
+    # "Soil moisture sensor".
     #
-    # Raw ADC range on the RP2040 is 0-65535 (read_u16) but the plan
-    # speaks in the conventional 0-1023 10-bit space. SoilLogger scales
-    # the read_u16 result down internally; the calibration constants are
-    # specified in 0-1023 space because that's what the REPL helper
-    # (print_raw) prints. Calibrate against actual sensor + soil pot:
-    # adc_dry_raw = raw value with probe in air / bone-dry soil,
-    # adc_wet_raw = raw value with probe in saturated soil. Wet must be
-    # < dry (lower raw = more conductive = more water).
+    # CALIBRATION CONVENTION IS INVERTED versus the old resistive probe:
+    # with a capacitive sensor HIGHER RAW = WETTER, so raw_wet must be > raw_dry
+    # (the validator enforces that direction). The values below are
+    # PRE-CALIBRATION PLACEHOLDERS from the Adafruit datasheet range — the
+    # first bench job with the probe in hand is to run the print_raw() REPL
+    # helper in lib/soil_logger.py twice, once in air and once in saturated
+    # substrate, and paste the two counts in here BEFORE the probe is potted.
+    #
+    # The same probe reports root-zone temperature. It is LOGGED AND ALARMED
+    # ONLY, never regulated: nothing in the enclosure heats the pot, and a
+    # fourth regulation dimension would drag the arbiter, every profile and the
+    # golden vectors along for no actuator. root_temp_min_c/max_c bound the
+    # healthy window; outside it the operator gets root_temp_low /
+    # root_temp_high on the warning LED.
     "soil_logger": {
         "interval_s": 60,  # Log cadence (seconds) — soil moves slowly
-        "adc_dry_raw": 850,  # Raw 10-bit reading for 0% moisture (in-air)
-        "adc_wet_raw": 350,  # Raw 10-bit reading for 100% moisture (saturated)
+        "i2c_address": 0x36,  # STEMMA seesaw address (0x36-0x39 via AD0/AD1)
+        "raw_dry": 200,  # PLACEHOLDER raw count for 0% (probe in air)
+        "raw_wet": 2000,  # PLACEHOLDER raw count for 100% (saturated)
         "warn_pct_below": 20,  # Trigger warning LED when soil < this %
+        "root_temp_min_c": 20.0,  # Below this: root_temp_low warning
+        "root_temp_max_c": 26.0,  # Above this: root_temp_high warning
         "sensor_type": "soil",  # Folder + filename prefix under paths.sensor_root
     },
     # CO2 Sensor Logger Configuration (SenseAir S8 / equivalent on UART0)
@@ -389,6 +411,16 @@ DEVICE_CONFIG = {
     # term was active against 3.6 when it was not: the fan was mostly being
     # driven by UART framing errors. See the internal chat-log 2026-07-31.
     "co2_logger": {
+        # False since 2026-08-25: the SenseAir S8 is DEMOUNTED. It is specified
+        # 0-95 %RH non-condensing and the 2026-07-31..08-07 field run had it
+        # dead for the whole week — 20 533 warning lines, 100 % of every
+        # warning the system logged, from a sensor that could not survive the
+        # chamber. A deliberately removed sensor must not even be constructed:
+        # with this False main.py builds no UART and no logger, so there is no
+        # task, no I/O and no unreachable warning to explain. The regulation
+        # engine's CO2 dimension normalises to neutral without a reading, and
+        # regulation.fresh_air_exchange keeps the chamber breathing on a timer.
+        "enabled": False,
         "interval_s": 30,  # Poll cadence (seconds)
         "warmup_s": 30,  # Sensor warm-up window where read failures don't escalate
         "max_retries": 3,  # UART read retries per poll
@@ -417,6 +449,29 @@ DEVICE_CONFIG = {
         # neutral afterwards is that an unrelated reboot cleared the cache. 0
         # disables the timeout.
         "stale_after_s": 300,
+    },
+    # Sensor-health reporting policy (shared by every sensor logger).
+    #
+    # A dead sensor used to emit one WARN line per failed read forever: the
+    # 2026-07-31..08-07 field run logged 20 533 CO2 warnings — 100 % of every
+    # warning the system produced — which alone drove 3-4 log rotations a day
+    # and buried every other warning in the file. The failure was real; the
+    # per-read repetition carried no information after the first line.
+    #
+    # So reporting is EDGE-triggered, not level-triggered: short blips stay at
+    # DEBUG, the transition into "unreachable" emits exactly one WARN, the
+    # unreachable state itself is silent, and recovery emits exactly one INFO.
+    # The durable, operator-visible channel is the StatusManager warning
+    # (co2_unreachable / sht31_unreachable), not the log.
+    #
+    # Polling also backs off while unreachable — there is no point asking a
+    # dead sensor every 30 s — doubling backoff_start_s up to backoff_max_s.
+    # Any successful read snaps the interval straight back to normal.
+    "sensor_health": {
+        "warn_after_failures": 3,  # Consecutive failures before "unreachable"
+        "backoff_start_s": 60,  # First backed-off poll interval (seconds)
+        "backoff_max_s": 300,  # Ceiling for the doubling backoff (seconds)
+        "unreachable_heartbeat_s": 0,  # Reminder cadence while unreachable; 0 = silent
     },
     # Grow light schedule + dimming live under regulation.regulators.growlight
     # (tod-driven, MCP4725 via adapter dac_i2c_address/dac_max_pct).
@@ -543,6 +598,30 @@ DEVICE_CONFIG = {
         "reminder_pattern": [
             (880, 100, 200),  # A5
             (880, 100, 0),
+        ],
+        # Consumable/supply alarm — currently "the humidifier is commanded on
+        # and the air is not getting wetter", i.e. go refill the reservoir.
+        # Deliberately the only DESCENDING motif in the set: error, alert and
+        # reminder are all repeated single tones, so a falling three-note figure
+        # is distinguishable from the next room without counting beeps.
+        "supply_pattern": [
+            (1319, 120, 40),  # E6
+            (1047, 120, 40),  # C6
+            (784, 320, 0),  # G5 — the fall is the signature
+        ],
+        # The controller changed grow phase by itself and the OLED is holding a
+        # notice that only a button press clears. Played ONCE at the moment the
+        # notice is raised — it is a "come and look", not an alarm, so nothing
+        # repeats it; the reminder LED and the notice itself do the waiting.
+        # A rising two-note figure sounded TWICE: every other pattern is either
+        # one run of three tones (startup, supply) or a repeated single pitch
+        # (error, alert, reminder), so a repeated interval is recognisable from
+        # the next room without counting beeps.
+        "phase_pattern": [
+            (988, 120, 40),  # B5
+            (1319, 200, 160),  # E6
+            (988, 120, 40),  # B5
+            (1319, 200, 0),  # E6
         ],
     },
     # OLED Display Configuration (SSD1306 on shared I2C1 bus)
@@ -733,26 +812,55 @@ DEVICE_CONFIG = {
         "tick_s": 30,  # Evaluation cadence (seconds)
         # Active species profile — must exist in profiles below AND its
         # category must match the top-level mode (mushroom↔mushroom, plant↔plant).
-        "profile": "cubensis",
+        # With phase_schedule.enabled this must be the FIRST phase's profile;
+        # the scheduler advances it from there as the weeks pass.
+        "profile": "cannabis_seedling",
         # Severity band edges (strictly ascending, last = 50):
         # perfect / ideal / organic / minor / major / emergency / shutdown.
         "band_edges": [5, 10, 20, 30, 40, 50],
         # Time-of-day blend (minutes since midnight). b=1 full day, b=0 full
         # night, linear ramp of width transition_min on each edge.
-        "day_start_min": 420,  # 07:00
-        "day_end_min": 1140,  # 19:00
+        #
+        # 02:00-22:00 is the cannabis 20/4 photoperiod (2026-08-25 go-live).
+        # The window deliberately ends at 22:00 rather than midnight: the dusk
+        # ramp lives INSIDE the window (blend_factor() only returns 0 at
+        # minutes >= day_end, and the clock never reaches 1440), so a window
+        # ending at 24:00 would clip the ramp instead of finishing it. With
+        # 120-1320 both 30-minute ramps fit.
+        "day_start_min": 120,  # 02:00
+        "day_end_min": 1320,  # 22:00
         "transition_min": 30,
         # Optional external SHT31 (gates exhaust effectiveness only). When
         # disabled the multiplier is a constant 1.0. full_delta = outside must
         # be cooler/drier by this much for full effect; min_factor = floor when
         # outside is as warm/humid or worse.
+        #
+        # The same sensor also backs the RH-target-reachability warning. The
+        # tent can only be driven toward room air — exhaust dilutes, and there
+        # is no dehumidifier — so it cannot hold an RH ideal that sits far below
+        # the room it stands in. The bloom target of 43 %RH is periodically
+        # unreachable against the assumed 35-70 %RH room, and the operator
+        # decision is to leave the setpoint alone and say so instead of moving
+        # the target to whatever happens to be achievable today. Monitor only:
+        # no actuator, no buzzer, one warning key.
+        #
+        # NOTE: unlike the humidifier watchdog's thresholds, the two
+        # rh_unreachable_* values below are NOT derived from field data — they
+        # are starting guesses and are expected to be retuned once a season of
+        # room-RH logs exists. Widen the margin if the warning nags; lengthen
+        # the window if it trips on cooking/showering transients.
         "external_sensor": {
-            "enabled": False,
+            # Enabled 2026-08-25: the intake SHT31-D is fitted, strapped to
+            # 0x45 (ADR to VIN) so it does not collide with the chamber
+            # sensor at 0x44.
+            "enabled": True,
             "i2c_address": 0x45,
             "full_delta_c": 3.0,
             "min_factor": 0.2,
             "full_delta_rh": 10.0,
             "min_factor_rh": 0.4,
+            "rh_unreachable_margin": 5.0,  # RH points room may exceed the ideal by
+            "rh_unreachable_window_s": 1800,  # sustained for this long before warning
         },
         # Fresh-air exchange fallback, for when the CO2 reading is unavailable.
         #
@@ -778,6 +886,32 @@ DEVICE_CONFIG = {
             "interval_min": 30,  # start a window every N minutes
             "duration_min": 5,  # hold the floor for this long
             "command": 60.0,  # floor applied to the CO2-carrying regulators
+        },
+        # Humidifier effectiveness watchdog — MONITOR ONLY, never a control
+        # action. Nothing here can move an actuator; the whole block buys one
+        # warning key, one WARN line and one buzzer pattern.
+        #
+        # The GP19 relay switches the humidifier's 230 V supply, and the
+        # appliance reports nothing back: the Pico cannot read its tank level,
+        # its own humidistat, or whether it is misting at all. At the RH targets
+        # the seedling and stretch phases ask for, the reservoir empties faster
+        # than it gets refilled, so a dry tank is the NORMAL state rather than a
+        # fault — and the controller happily commands a dead appliance forever
+        # without noticing. The only evidence available is EFFECT: the contact
+        # is closed and the air is not getting wetter.
+        #
+        # Both numbers come from the field episodes rather than from theory.
+        # Working humidifier runs raised RH by 1.1, 0.97 and 5.0 points per
+        # hour; the run with an empty tank FELL 1.3 points per hour. A one-hour
+        # window with a half-point threshold separates those two populations
+        # with room on both sides, and an hour is also short enough that a
+        # refill still matters when the operator hears the beep.
+        #
+        # The detector may be aggressive on purpose: a false positive costs a
+        # beep and a warning LED, while a miss costs a phase spent dry.
+        "humidifier_watchdog": {
+            "ineffective_window_s": 3600,  # continuous on-time before judging
+            "ineffective_min_rise": 0.5,  # RH points that must be gained over it
         },
         # Escalation gating — which deviation DIRECTIONS may escalate to the
         # forced emergency / latch vectors.
@@ -958,6 +1092,157 @@ DEVICE_CONFIG = {
                     "co2": {"at_0": 400.0, "at_50": 800.0, "at_100": 1500.0},
                 },
             },
+            # --- Cannabis, one profile per growth phase (see phase_schedule) ---
+            #
+            # The three profiles below are driven by the week-based schedule
+            # rather than being selected by hand: seedling for the first two
+            # weeks, stretch for the following three, bloom until harvest.
+            #
+            # TEMPERATURE IS THE SAME IN ALL THREE — day 23 C, night 21 C — and
+            # that is a measurement, not laziness. The 2026-07-31..08-07 field
+            # run puts the tent's day median at 22.8 C and its night median at
+            # 22.7 C: this enclosure has no day/night swing to speak of, because
+            # nothing in it can actively cool. Scored against those 10 327 real
+            # rows, day 23 / night 21 lands within +-10 deviation 77.2 % of the
+            # time; the textbook day 24 / night 20 pair manages 55.8 %. Anchors
+            # that the room can actually sit inside are worth more than anchors
+            # copied from a grow guide written for a room with a chiller.
+            #
+            # Deviation-space consequence worth knowing before editing these:
+            # the mold-risk conflict rule (see conflicts, below) is phrased in
+            # DEVIATION ("temp above 30" = deviation 80), so its physical
+            # trip point is a function of each profile's temp anchors. With
+            # at_50 = 23 and at_100 = 30 it sits at 27.2 C; bloom deliberately
+            # narrows at_100 to 28 so the same rule arms at 26.0 C, inside the
+            # botrytis range that ruins a flowering canopy. Do not "fix" the
+            # bloom anchor to match the other two — the tighter gate IS the
+            # feature, and it is bought with an anchor change rather than a
+            # second conflict rule.
+            #
+            # Humidity walks down phase by phase (68 -> 50 -> 43 %RH ideal),
+            # which is the standard VPD progression. The 2026-08-07 evidence
+            # says the tent's natural RH without the humidifier is 45-50 %, so
+            # bloom's ideal is close to the room's resting state and seedling
+            # is the phase that leans on the humidifier hardest.
+            "cannabis_seedling": {
+                "category": "plant",
+                # Weeks 1-2: a seedling under full canopy light bleaches. 40 %
+                # is the operator's chosen level for the propagation phase; the
+                # schedule restores the growlight's configured level (80 %) when
+                # the stretch phase activates, because no later profile carries
+                # this key.
+                "light_level_day": 40.0,
+                "day": {
+                    "temp": {"at_0": 16.0, "at_50": 23.0, "at_100": 30.0},
+                    "humidity": {"at_0": 45.0, "at_50": 68.0, "at_100": 85.0},
+                    "co2": {"at_0": 350.0, "at_50": 800.0, "at_100": 1600.0},
+                },
+                "night": {
+                    "temp": {"at_0": 14.0, "at_50": 21.0, "at_100": 28.0},
+                    "humidity": {"at_0": 45.0, "at_50": 68.0, "at_100": 85.0},
+                    "co2": {"at_0": 350.0, "at_50": 800.0, "at_100": 1600.0},
+                },
+            },
+            "cannabis_stretch": {
+                "category": "plant",
+                "day": {
+                    "temp": {"at_0": 16.0, "at_50": 23.0, "at_100": 30.0},
+                    "humidity": {"at_0": 32.0, "at_50": 50.0, "at_100": 70.0},
+                    "co2": {"at_0": 400.0, "at_50": 1000.0, "at_100": 1600.0},
+                },
+                "night": {
+                    "temp": {"at_0": 14.0, "at_50": 21.0, "at_100": 28.0},
+                    "humidity": {"at_0": 32.0, "at_50": 50.0, "at_100": 70.0},
+                    "co2": {"at_0": 400.0, "at_50": 1000.0, "at_100": 1600.0},
+                },
+            },
+            "cannabis_bloom": {
+                "category": "plant",
+                # THE HUMIDIFIER IS OFF FOR THE WHOLE OF BLOOM, and this is the
+                # mechanism that turns it off.
+                #
+                # The relay on GP19 switches the humidifier's 230 V SUPPLY, so an
+                # open contact is a dead appliance — there is no half measure and
+                # no feedback channel. Bloom does not want one: the 2026-08-07
+                # field run measured the tent settling at 45.3-48.7 %RH with no
+                # effective humidifier, which straddles this profile's 43 %
+                # ideal. Bloom's problem is drying the air, not wetting it, and
+                # the tent has no dehumidifier — so the correct bloom command is
+                # simply "never".
+                #
+                # It is done with a SURFACE override rather than an adapter
+                # threshold because that is where a setpoint decision belongs:
+                # the adapter owns relay quirks (hysteresis, min-cycle) and knows
+                # nothing about grow phases. mult = 0 collapses the whole hinge
+                # plane to raw = 0 for every (dev_h, dev_t) pair, and pinning
+                # out_min/out_max to 0/100 fixes the rescale window so the output
+                # is EXACTLY 0.0 rather than whatever the base surface's clamp
+                # range would rescale zero into. Command 0 sits permanently under
+                # the adapter's off_below (7.0), so the contact can never close.
+                #
+                # The regulator itself is still built, still arbitrated and still
+                # logged: the metrics CSV shows cmd_humidifier = 0 for every
+                # bloom row instead of a hole, which is what makes "off on
+                # purpose" distinguishable from "missing" months later.
+                "surface_overrides": {
+                    "humidifier": {"mult": 0.0, "out_min": 0.0, "out_max": 100.0},
+                },
+                "day": {
+                    # at_100 = 28 (not 30) pulls the mold-risk gate down to
+                    # 26.0 C — see the block comment above.
+                    "temp": {"at_0": 15.0, "at_50": 23.0, "at_100": 28.0},
+                    "humidity": {"at_0": 28.0, "at_50": 43.0, "at_100": 62.0},
+                    "co2": {"at_0": 400.0, "at_50": 900.0, "at_100": 1500.0},
+                },
+                "night": {
+                    "temp": {"at_0": 13.0, "at_50": 21.0, "at_100": 27.0},
+                    "humidity": {"at_0": 28.0, "at_50": 43.0, "at_100": 62.0},
+                    "co2": {"at_0": 400.0, "at_50": 900.0, "at_100": 1500.0},
+                },
+            },
+        },
+        # Week-based phase schedule (plant grows).
+        #
+        # A cannabis grow is not one setpoint set: a seedling wants warm, humid
+        # air and a quarter of the light a flowering plant does. Rather than
+        # asking the operator to edit `profile` on the right evening, the engine
+        # derives the active phase from the calendar: (today - start_date) in
+        # days, cut into 7-day blocks by the `weeks` field. Determination is
+        # ABSOLUTE, not incremental, so a controller that reboots mid-grow lands
+        # in the right phase on its first tick instead of restarting week one.
+        #
+        # `weeks: 0` means "until further notice" and is only legal on the last
+        # phase — bloom runs until the operator harvests and re-seeds the date.
+        #
+        # start_date is a (year, month, day) tuple in the same shape the time
+        # provider's now_date_tuple() returns, and it is the GERMINATION date.
+        #
+        # A profile named here may carry two optional override keys that are
+        # applied when its phase activates and dropped again when the next
+        # phase does not carry them:
+        #   light_level_day   — replaces regulators.growlight.light_level_day
+        #   surface_overrides — {regulator: {surface_param: value}}, merged over
+        #                       that regulator's base surface before it is
+        #                       frozen (no entries yet; bloom will use it).
+        #
+        # Enabled at the 2026-08-25 cannabis go-live, together with
+        # mode -> "plant" and profile -> the first phase's profile (the
+        # validator requires those two to agree while the schedule is live).
+        "phase_schedule": {
+            "enabled": True,
+            "start_date": (2026, 9, 1),  # germination date, (year, month, day)
+            # Where the LAST ACKNOWLEDGED phase name is kept, so the OLED
+            # phase-change notice survives a reset: on boot the controller
+            # compares the phase it resolved against this file and re-raises the
+            # notice when they differ. Internal flash (same convention as
+            # Service_reminder.storage_path) — never the SD card, because the
+            # notice has to work with the card pulled.
+            "ack_storage_path": "/phase_ack.txt",
+            "phases": [
+                {"name": "seedling", "profile": "cannabis_seedling", "weeks": 2},
+                {"name": "stretch", "profile": "cannabis_stretch", "weeks": 3},
+                {"name": "bloom", "profile": "cannabis_bloom", "weeks": 0},  # 0 = until end
+            ],
         },
         # Regulators (command-vector slots). driven: "surface" evaluates the
         # 2D hinge surface over dims=[x,y]; "follower" derives from the heater
@@ -1356,7 +1641,12 @@ DEVICE_CONFIG = {
             },
             "growlight": {
                 "driven": "tod",
-                "light_level_day": 80.0,  # dimmable target at full day (b=1)
+                # Base level at full day (b=1). 100 % is the panel's own
+                # working level — dac_max_pct (91) is the hardware ceiling
+                # that caps it, not a dimmer setting. cannabis_seedling's
+                # profile override dims this to 40 % for weeks 1-2; the
+                # schedule restores this value when stretch activates.
+                "light_level_day": 100.0,
                 # The light is TWO actuators driven by one command: the mains
                 # relay and the 0-10V dimmer line. Left on because the dimmer
                 # does nothing for mushrooms but costs nothing when the MCP4725
@@ -1524,6 +1814,106 @@ def _validate_anchor_set(anchors, ctx):
         raise ValueError("{} anchors must be strictly ascending (at_0 < at_50 < at_100)".format(ctx))
 
 
+def _validate_surface_overrides(overrides, regulators, ctx):
+    """Validate a profile's partial per-regulator surface overrides.
+
+    Unlike _validate_surface these are PARTIAL: only the params a phase wants
+    to move are listed, and the engine merges them over the regulator's base
+    surface before freezing. Both key levels are checked here because a typo
+    would otherwise be silently ignored (unknown regulator) or blow up at boot
+    inside freeze_surface (unknown param).
+
+    The MERGED surface is validated too, not just the fragment. evaluate()
+    rescales its clamped output by (out_max - out_min), so an override that
+    touches either of those two params can produce a zero or negative window
+    that no bounds check on the fragment alone would catch — and it would only
+    surface as a ZeroDivisionError on the first tick, on the device.
+    """
+    if not isinstance(overrides, dict):
+        raise ValueError("{} must be a dict".format(ctx))
+    for reg_name, params in overrides.items():
+        if reg_name not in _REG_NAMES:
+            raise ValueError("{} references unknown regulator {!r}".format(ctx, reg_name))
+        rctx = "{}.{}".format(ctx, reg_name)
+        if not isinstance(params, dict) or not params:
+            raise ValueError("{} must be a non-empty dict of surface params".format(rctx))
+        for pname, value in params.items():
+            bounds = _SURFACE_BOUNDS.get(pname)
+            if bounds is None:
+                raise ValueError("{}.{} is not a surface param".format(rctx, pname))
+            lo, hi = bounds
+            if not isinstance(value, (int, float)) or isinstance(value, bool) or not (lo <= value <= hi):
+                raise ValueError("{}.{} must be a number in [{}, {}]".format(rctx, pname, lo, hi))
+        base = regulators.get(reg_name) if isinstance(regulators, dict) else None
+        if isinstance(base, dict) and isinstance(base.get("surface"), dict):
+            merged = dict(base["surface"])
+            merged.update(params)
+            _validate_surface(merged, "{} merged over regulators.{}.surface".format(rctx, reg_name))
+
+
+def _validate_phase_schedule(sched, profiles, active_profile):
+    """Validate regulation.phase_schedule (the week-based plant phase plan)."""
+    ctx = "regulation.phase_schedule"
+    if not isinstance(sched, dict):
+        raise ValueError("{} must be a dict".format(ctx))
+    if not isinstance(sched.get("enabled"), bool):
+        raise ValueError("{}.enabled must be a bool".format(ctx))
+
+    start = sched.get("start_date")
+    if not isinstance(start, (tuple, list)) or len(start) != 3:
+        raise ValueError("{}.start_date must be a (year, month, day) tuple".format(ctx))
+    year, month, day = start
+    for part in start:
+        if not isinstance(part, int) or isinstance(part, bool):
+            raise ValueError("{}.start_date entries must be ints".format(ctx))
+    if not (2020 <= year <= 2100):
+        raise ValueError("{}.start_date year must be 2020-2100".format(ctx))
+    if not (1 <= month <= 12):
+        raise ValueError("{}.start_date month must be 1-12".format(ctx))
+    leap = month == 2 and year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+    max_day = _DAYS_IN_MONTH[month - 1] + (1 if leap else 0)
+    if not (1 <= day <= max_day):
+        raise ValueError("{}.start_date day must be 1-{} for month {}".format(ctx, max_day, month))
+
+    ack_path = sched.get("ack_storage_path")
+    if not isinstance(ack_path, str) or not ack_path.startswith("/"):
+        raise ValueError("{}.ack_storage_path must be an absolute path string".format(ctx))
+
+    phases = sched.get("phases")
+    if not isinstance(phases, list) or not phases:
+        raise ValueError("{}.phases must be a non-empty list".format(ctx))
+    last = len(phases) - 1
+    for i, phase in enumerate(phases):
+        pctx = "{}.phases[{}]".format(ctx, i)
+        if not isinstance(phase, dict):
+            raise ValueError("{} must be a dict".format(pctx))
+        name = phase.get("name")
+        if not isinstance(name, str) or not name:
+            raise ValueError("{}.name must be a non-empty string".format(pctx))
+        pname = phase.get("profile")
+        if pname not in profiles:
+            raise ValueError("{}.profile {!r} not in regulation.profiles".format(pctx, pname))
+        if profiles[pname].get("category") != "plant":
+            raise ValueError("{}.profile {!r} must be a plant profile".format(pctx, pname))
+        weeks = phase.get("weeks")
+        if not isinstance(weeks, int) or isinstance(weeks, bool) or weeks < 0:
+            raise ValueError("{}.weeks must be an int >= 0".format(pctx))
+        # weeks == 0 is the open-ended terminal phase ("until the operator
+        # harvests"). Anywhere but last it would make every later phase dead.
+        if weeks == 0 and i != last:
+            raise ValueError("{}.weeks may only be 0 on the last phase".format(pctx))
+
+    # Only enforced while the schedule is live: the engine activates the first
+    # phase on its first tick, so a mismatch here would mean the controller
+    # boots on one profile and silently swaps to another seconds later.
+    if sched["enabled"] and active_profile != phases[0]["profile"]:
+        raise ValueError(
+            "{}: regulation.profile must equal the first phase's profile {!r} while enabled".format(
+                ctx, phases[0]["profile"]
+            )
+        )
+
+
 def _validate_reg_adapter(adapter, reg_name, pins_cfg):
     """Validate a regulator's actuator-adapter block by type."""
     ctx = "regulation.regulators.{}.adapter".format(reg_name)
@@ -1639,6 +2029,12 @@ def _validate_regulation(reg_cfg, pins_cfg, top_mode):
         v = ext.get(key)
         if not isinstance(v, (int, float)) or isinstance(v, bool) or not (0 <= v <= 1):
             raise ValueError("regulation.external_sensor.{} must be 0-1".format(key))
+    for key in ("rh_unreachable_margin", "rh_unreachable_window_s"):
+        if key not in ext:
+            raise ValueError("Missing config key: regulation.external_sensor.{}".format(key))
+        v = ext[key]
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
+            raise ValueError("regulation.external_sensor.{} must be > 0".format(key))
 
     esc = reg_cfg.get("escalation")
     if not isinstance(esc, dict) or set(esc) != set(_REG_DIMENSIONS):
@@ -1681,12 +2077,28 @@ def _validate_regulation(reg_cfg, pins_cfg, top_mode):
                 if dim not in pcfg[phase]:
                     raise ValueError("Missing config key: {}.{}.{}".format(pctx, phase, dim))
                 _validate_anchor_set(pcfg[phase][dim], "{}.{}.{}".format(pctx, phase, dim))
+        # Optional per-profile overrides, applied by the engine when a phase
+        # schedule activates this profile (absent = the regulator defaults hold).
+        if "light_level_day" in pcfg:
+            v = pcfg["light_level_day"]
+            if not isinstance(v, (int, float)) or isinstance(v, bool) or not (0 <= v <= 100):
+                raise ValueError("{}.light_level_day must be 0-100".format(pctx))
+        if "surface_overrides" in pcfg:
+            _validate_surface_overrides(
+                pcfg["surface_overrides"],
+                reg_cfg.get("regulators"),
+                "{}.surface_overrides".format(pctx),
+            )
 
     profile = reg_cfg["profile"]
     if profile not in profiles:
         raise ValueError("regulation.profile {!r} not in profiles".format(profile))
     if profiles[profile]["category"] != _REG_CATEGORY_MODE.get(top_mode):
         raise ValueError("regulation.profile category must match top-level mode {!r}".format(top_mode))
+
+    sched = reg_cfg.get("phase_schedule")
+    if sched is not None:
+        _validate_phase_schedule(sched, profiles, profile)
 
     fae = reg_cfg.get("fresh_air_exchange")
     if fae is not None:
@@ -1704,6 +2116,17 @@ def _validate_regulation(reg_cfg, pins_cfg, top_mode):
         v = fae["command"]
         if not isinstance(v, (int, float)) or isinstance(v, bool) or not (0 < v <= 100):
             raise ValueError("regulation.fresh_air_exchange.command must be 0-100 and > 0")
+
+    watchdog = reg_cfg.get("humidifier_watchdog")
+    if watchdog is not None:
+        if not isinstance(watchdog, dict):
+            raise ValueError("regulation.humidifier_watchdog must be a dict")
+        for key in ("ineffective_window_s", "ineffective_min_rise"):
+            if key not in watchdog:
+                raise ValueError("Missing config key: regulation.humidifier_watchdog.{}".format(key))
+            v = watchdog[key]
+            if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
+                raise ValueError("regulation.humidifier_watchdog.{} must be > 0".format(key))
 
     regulators = reg_cfg.get("regulators")
     if not isinstance(regulators, dict):
@@ -1866,7 +2289,6 @@ def validate_config():
             "buzzer",
             "heater_mosfet",
             "gp2_breakout",
-            "adc_input",
             "sd_detect",
         ],
         "spi": ["id", "baudrate", "sck", "mosi", "miso", "cs", "mount_point"],
@@ -1888,6 +2310,7 @@ def validate_config():
             "invert",
         ],
         "co2_logger": [
+            "enabled",
             "interval_s",
             "warmup_s",
             "max_retries",
@@ -1901,10 +2324,19 @@ def validate_config():
         ],
         "soil_logger": [
             "interval_s",
-            "adc_dry_raw",
-            "adc_wet_raw",
+            "i2c_address",
+            "raw_dry",
+            "raw_wet",
             "warn_pct_below",
+            "root_temp_min_c",
+            "root_temp_max_c",
             "sensor_type",
+        ],
+        "sensor_health": [
+            "warn_after_failures",
+            "backoff_start_s",
+            "backoff_max_s",
+            "unreachable_heartbeat_s",
         ],
         "Service_reminder": [
             "days_interval",
@@ -2055,6 +2487,20 @@ def validate_config():
     if not (0 < DEVICE_CONFIG["buzzer"]["default_duty_pct"] <= 100):
         raise ValueError("buzzer.default_duty_pct must be 1–100")
 
+    # Named patterns are looked up by name at runtime and play_named() answers a
+    # missing one with a debug line, so an absent or malformed pattern is a
+    # silent alarm — exactly the failure an alarm must not have.
+    for name in _BUZZER_PATTERNS:
+        pattern = DEVICE_CONFIG["buzzer"].get(name)
+        if not isinstance(pattern, list) or not pattern:
+            raise ValueError("buzzer.{} must be a non-empty list of (freq, ms, pause) steps".format(name))
+        for step in pattern:
+            if not isinstance(step, (tuple, list)) or len(step) != 3:
+                raise ValueError("buzzer.{} steps must be (freq_hz, duration_ms, pause_ms)".format(name))
+            for value in step:
+                if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                    raise ValueError("buzzer.{} step values must be ints >= 0".format(name))
+
     if DEVICE_CONFIG["buffer_manager"]["max_buffer_entries"] <= 0:
         raise ValueError("buffer_manager.max_buffer_entries must be > 0")
 
@@ -2122,6 +2568,8 @@ def validate_config():
         raise ValueError("pca9685.invert must be a bool")
 
     co2_cfg = DEVICE_CONFIG["co2_logger"]
+    if not isinstance(co2_cfg["enabled"], bool):
+        raise ValueError("co2_logger.enabled must be a bool")
     if co2_cfg["interval_s"] <= 0:
         raise ValueError("co2_logger.interval_s must be > 0")
     if co2_cfg["warmup_s"] < 0:
@@ -2171,16 +2619,44 @@ def validate_config():
     soil_cfg = DEVICE_CONFIG["soil_logger"]
     if soil_cfg["interval_s"] <= 0:
         raise ValueError("soil_logger.interval_s must be > 0")
-    if not isinstance(soil_cfg["adc_dry_raw"], int) or not (0 <= soil_cfg["adc_dry_raw"] <= 1023):
-        raise ValueError("soil_logger.adc_dry_raw must be an int 0-1023")
-    if not isinstance(soil_cfg["adc_wet_raw"], int) or not (0 <= soil_cfg["adc_wet_raw"] <= 1023):
-        raise ValueError("soil_logger.adc_wet_raw must be an int 0-1023")
-    if soil_cfg["adc_dry_raw"] <= soil_cfg["adc_wet_raw"]:
-        raise ValueError("soil_logger.adc_dry_raw must be > adc_wet_raw")
+    if not isinstance(soil_cfg["i2c_address"], int) or not (0x08 <= soil_cfg["i2c_address"] <= 0x77):
+        raise ValueError("soil_logger.i2c_address must be a 7-bit I2C address (0x08-0x77)")
+    # Seesaw touch counts are 12-bit at most; see lib/stemma_soil.py.
+    for key in ("raw_dry", "raw_wet"):
+        value = soil_cfg[key]
+        if not isinstance(value, int) or isinstance(value, bool) or not (0 <= value <= 4095):
+            raise ValueError("soil_logger.{} must be an int 0-4095".format(key))
+    # INVERTED versus the old analog probe on purpose: the capacitive STEMMA
+    # reads HIGHER when wetter, so this direction is the calibration's sanity
+    # check — a swapped pair would report a soaked pot as bone dry.
+    if soil_cfg["raw_wet"] <= soil_cfg["raw_dry"]:
+        raise ValueError("soil_logger.raw_wet must be > raw_dry")
     if not (0 <= soil_cfg["warn_pct_below"] <= 100):
         raise ValueError("soil_logger.warn_pct_below must be 0-100")
+    for key in ("root_temp_min_c", "root_temp_max_c"):
+        value = soil_cfg[key]
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or not (0.0 <= value <= 50.0):
+            raise ValueError("soil_logger.{} must be a number 0-50".format(key))
+    if soil_cfg["root_temp_max_c"] <= soil_cfg["root_temp_min_c"]:
+        raise ValueError("soil_logger.root_temp_max_c must be > root_temp_min_c")
     if not isinstance(soil_cfg["sensor_type"], str) or not soil_cfg["sensor_type"]:
         raise ValueError("soil_logger.sensor_type must be a non-empty string")
+
+    health_cfg = DEVICE_CONFIG["sensor_health"]
+    warn_after = health_cfg["warn_after_failures"]
+    if not isinstance(warn_after, int) or isinstance(warn_after, bool) or warn_after < 1:
+        raise ValueError("sensor_health.warn_after_failures must be an int >= 1")
+    backoff_start = health_cfg["backoff_start_s"]
+    if not isinstance(backoff_start, (int, float)) or isinstance(backoff_start, bool) or backoff_start <= 0:
+        raise ValueError("sensor_health.backoff_start_s must be a number > 0")
+    backoff_max = health_cfg["backoff_max_s"]
+    if not isinstance(backoff_max, (int, float)) or isinstance(backoff_max, bool):
+        raise ValueError("sensor_health.backoff_max_s must be a number")
+    if backoff_max < backoff_start:
+        raise ValueError("sensor_health.backoff_max_s must be >= backoff_start_s")
+    heartbeat = health_cfg["unreachable_heartbeat_s"]
+    if not isinstance(heartbeat, (int, float)) or isinstance(heartbeat, bool) or heartbeat < 0:
+        raise ValueError("sensor_health.unreachable_heartbeat_s must be a number >= 0 (0 = silent)")
 
     sd_detect_cfg = DEVICE_CONFIG["sd_detect"]
     if not isinstance(sd_detect_cfg["enabled"], bool):

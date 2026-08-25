@@ -32,18 +32,46 @@ class FakeCo2:
 
 
 class FakeTime:
-    def __init__(self, seconds=0):
+    def __init__(self, seconds=0, date=(2026, 9, 1)):
         self._seconds = seconds
+        self.date = date
+        self.date_calls = 0
 
     def get_seconds_since_midnight(self):
         return self._seconds
 
+    def now_date_tuple(self):
+        self.date_calls += 1
+        return self.date
 
-def _engine(temp=23.0, hum=92.0, co2=800.0, minutes=0, tick_s=None, alarm=None, logger=None, external_read=None):
+
+def _engine(
+    temp=23.0,
+    hum=92.0,
+    co2=800.0,
+    minutes=0,
+    tick_s=None,
+    alarm=None,
+    logger=None,
+    external_read=None,
+    profile="cubensis",
+):
+    """Build an engine over the shipped config, pinned to one species profile.
+
+    Every scenario below states its inputs in PHYSICAL units (21 C, 95 %RH),
+    so it is only meaningful against the anchors it was authored for — the
+    cubensis ones. The shipped `regulation.profile` now moves with the grow
+    phase (seedling → stretch → bloom), so pinning it here keeps these tests
+    about the pipeline instead of about which week the calendar says it is.
+    The schedule is switched off for the same reason; TestPhaseSchedule
+    exercises it deliberately through `_sched_engine`.
+    """
     import config
     from lib.regulation_engine import RegulationEngine
 
     reg = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+    reg["profile"] = profile
+    reg["phase_schedule"] = dict(reg["phase_schedule"], enabled=False)
     if tick_s is not None:
         reg["tick_s"] = tick_s
     if external_read is not None:
@@ -109,10 +137,21 @@ class TestCalm:
             assert ad.value == 0.0
 
     def test_growlight_follows_daylight(self):
-        # Midday (b=1) → growlight target = 1.0 * light_level_day (80), slew 100.
+        # Midday (b=1) → growlight target = 1.0 * light_level_day, slew 100.
+        # cubensis carries no profile override, so the configured base level is
+        # what lands on the dimmer.
+        import config
+
+        base = config.DEVICE_CONFIG["regulation"]["regulators"]["growlight"]["light_level_day"]
         engine, adapters, names = _engine(temp=24.0, hum=92.0, co2=700.0, minutes=720)
         engine.tick(now_s=0.0)
-        assert abs(_adapter(adapters, names, "growlight").value - 80.0) < 1e-3
+        assert abs(_adapter(adapters, names, "growlight").value - base) < 1e-3
+
+    def test_growlight_dims_for_the_seedling_phase(self):
+        """The shipped profile overrides the base level down to 40 % for weeks 1-2."""
+        engine, adapters, names = _engine(temp=23.0, hum=68.0, co2=700.0, minutes=720, profile="cannabis_seedling")
+        engine.tick(now_s=0.0)
+        assert abs(_adapter(adapters, names, "growlight").value - 40.0) < 1e-3
 
 
 class TestReactions:
@@ -538,3 +577,1090 @@ class TestRunLoop:
         with pytest.raises(asyncio.CancelledError):
             await engine.run()
         assert counter["n"] >= 2
+
+
+# --- humidifier effectiveness watchdog ------------------------------------
+
+
+class FakeStatus:
+    def __init__(self):
+        self.calls = []
+        self.active = set()
+
+    def set_warning(self, key, active):
+        self.calls.append((key, active))
+        if active:
+            self.active.add(key)
+        else:
+            self.active.discard(key)
+
+
+class _HumidifierRig:
+    """Engine plus the handles an effectiveness test needs, on a fake clock.
+
+    Held at cubensis day anchors with the tent dry (RH 60 against a 75 % at_0),
+    which parks the humidifier surface at command 100 — far above the adapter's
+    on_above of 18 — so the command is "on" until a test raises RH enough to
+    push it back down.
+    """
+
+    KEY = "humidifier_ineffective"
+
+    def __init__(self, hum=60.0, temp=21.0, window_s=100.0, min_rise=0.5, dt=30.0):
+        import config
+        from lib.regulation_engine import RegulationEngine
+
+        reg = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        # Pinned to cubensis for the same reason _engine() is: the RH numbers
+        # below are physical and only mean "bone dry" against those anchors.
+        reg["profile"] = "cubensis"
+        reg["phase_schedule"] = dict(reg["phase_schedule"], enabled=False)
+        reg["humidifier_watchdog"]["ineffective_window_s"] = window_s
+        reg["humidifier_watchdog"]["ineffective_min_rise"] = min_rise
+        self.names = config._REG_NAMES
+        self.adapters = [FakeAdapter(n) for n in self.names]
+        self.th = FakeTh(temp, hum)
+        self.status = FakeStatus()
+        self.alarms = []
+        self.logger = pytest.importorskip("unittest.mock").Mock()
+        self.engine = RegulationEngine(
+            reg,
+            self.names,
+            config._REG_DIMENSIONS,
+            self.adapters,
+            self.th,
+            FakeCo2(600.0),
+            FakeTime(720 * 60),
+            logger=self.logger,
+            alarm_cb=self.alarms.append,
+            status_manager=self.status,
+            clock=lambda: 0.0,
+        )
+        self._t = 0.0
+        self._dt = dt
+
+    _KEEP = object()  # "leave the reading alone" — None means a dead sensor
+
+    def tick(self, rh=_KEEP):
+        if rh is not self._KEEP:
+            self.th.last_humidity = rh
+        self.engine.tick(now_s=self._t)
+        self._t += self._dt
+
+    def run(self, seconds, rh=_KEEP):
+        """Tick for at least `seconds` of fake time."""
+        end = self._t + seconds
+        while self._t <= end:
+            self.tick(rh)
+
+    @property
+    def command(self):
+        return _adapter(self.adapters, self.names, "humidifier").value
+
+    @property
+    def warned(self):
+        return self.KEY in self.status.active
+
+    @property
+    def warn_lines(self):
+        return [c for c in self.logger.warning.call_args_list if "humidifier" in str(c)]
+
+
+class TestHumidifierEffectiveness:
+    """The relay switches mains power to a device that reports nothing back.
+
+    At the RH the seedling and stretch phases ask for, the reservoir empties
+    faster than it is refilled, so "commanded on but dead" is the routine state
+    and the controller cannot see it. The only evidence is effect: field
+    episodes with a working humidifier gained 1.1 / 0.97 / 5.0 RH points per
+    hour, the one with an empty tank LOST 1.3 — a half point per hour separates
+    them cleanly. Monitor only: every assertion below is about a warning, never
+    about an actuator.
+    """
+
+    def test_flat_humidity_under_continuous_demand_warns_exactly_once(self):
+        rig = _HumidifierRig()
+        rig.tick()
+        assert rig.command > 18.0  # the relay really is being asked to run
+        rig.run(150.0)  # one full 100 s window of unanswered demand
+        assert rig.warned is True
+        assert rig.status.calls == [(rig.KEY, True)]
+        assert len(rig.warn_lines) == 1
+        assert rig.alarms == ["supply"]
+
+        rig.run(400.0)  # four more windows of the same fault
+        assert rig.status.calls == [(rig.KEY, True)]
+        assert len(rig.warn_lines) == 1
+        assert rig.alarms == ["supply"]
+
+    def test_falling_humidity_under_demand_warns(self):
+        """The empty-tank field episode: commanded on and RH going backwards."""
+        rig = _HumidifierRig()
+        rh = 60.0
+        for _ in range(6):
+            rig.tick(rh)
+            rh -= 0.2
+        assert rig.warned is True
+        assert rig.alarms == ["supply"]
+
+    def test_rising_humidity_never_warns(self):
+        """A working humidifier gains more than the threshold per window."""
+        rig = _HumidifierRig()
+        rh = 60.0
+        for _ in range(40):  # 1200 s = twelve windows
+            rig.tick(rh)
+            rh += 0.3  # 0.9 points per 100 s window, comfortably over 0.5
+        assert rig.warned is False
+        assert rig.status.calls == []
+        assert rig.alarms == []
+
+    def test_interrupted_demand_restarts_the_window(self):
+        """A humidifier that was off for part of the window was never tested."""
+        rig = _HumidifierRig()
+        rig.run(60.0)  # 60 s of the 100 s window accumulated at RH 60
+        # One tick wet enough to push the command under on_above (surface cuts
+        # back hard above dev 55), then straight back to bone dry.
+        rig.tick(97.0)
+        assert rig.command <= 18.0
+        rig.tick(60.0)
+        # 60 s more: past the original window's deadline, but only 60 s into the
+        # restarted one.
+        rig.run(60.0)
+        assert rig.warned is False
+        assert rig.alarms == []
+        # Give the restarted window its full length and it fires normally.
+        rig.run(100.0)
+        assert rig.warned is True
+
+    def test_recovery_clears_the_warning_and_re_arms(self):
+        """A refilled tank clears it, and a second outage can warn again."""
+        rig = _HumidifierRig()
+        rig.run(150.0)
+        assert rig.warned is True
+
+        rig.tick(61.0)  # +1.0 over the RH the warning fired at
+        assert rig.warned is False
+        assert rig.status.calls == [(rig.KEY, True), (rig.KEY, False)]
+
+        rig.run(150.0, rh=61.0)  # flat again for a full window
+        assert rig.warned is True
+        assert rig.status.calls == [(rig.KEY, True), (rig.KEY, False), (rig.KEY, True)]
+        assert rig.alarms == ["supply", "supply"]
+
+    def test_a_missing_reading_disarms_instead_of_accumulating(self):
+        """A blind sensor cannot testify that the humidifier is failing."""
+        rig = _HumidifierRig()
+        rig.run(60.0)
+        rig.tick(None)  # sensor gone: humidity deviation neutralised
+        rig.run(60.0, rh=60.0)
+        assert rig.warned is False
+
+    def test_absent_config_block_makes_the_watchdog_inert(self):
+        """An older config without the block must behave exactly as before."""
+        import config
+        from lib.regulation_engine import RegulationEngine
+
+        reg = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        del reg["humidifier_watchdog"]
+        names = config._REG_NAMES
+        adapters = [FakeAdapter(n) for n in names]
+        status = FakeStatus()
+        engine = RegulationEngine(
+            reg,
+            names,
+            config._REG_DIMENSIONS,
+            adapters,
+            FakeTh(21.0, 60.0),
+            FakeCo2(600.0),
+            FakeTime(720 * 60),
+            status_manager=status,
+            clock=lambda: 0.0,
+        )
+        assert engine._hum_watch is False
+        for i in range(200):
+            engine.tick(now_s=float(i * 30))
+        assert status.calls == []
+
+    def test_no_status_manager_is_a_no_op_not_a_crash(self):
+        """Headless builds pass no sink; the detector must still not blow up."""
+        rig = _HumidifierRig()
+        rig.engine._status = None
+        rig.run(150.0)
+        assert rig.alarms == ["supply"]  # the rest of the side effects still fire
+
+
+# --- week-based phase schedule ------------------------------------------
+
+
+_START = (2026, 9, 1)
+
+
+def _date_at(offset_days, start=_START):
+    """Calendar date `offset_days` after the schedule start (host-only helper)."""
+    import datetime
+
+    d = datetime.date(*start) + datetime.timedelta(days=offset_days)
+    return (d.year, d.month, d.day)
+
+
+def _sched_engine(
+    offset_days=0,
+    minutes=720,
+    logger=None,
+    mutate=None,
+    enabled=True,
+    temp=23.0,
+    hum=60.0,
+    external_read=None,
+    status_manager=None,
+    fallback_phase=None,
+    date=None,
+    time_valid=None,
+):
+    """Engine with the cannabis phase schedule live, clocked `offset_days` in."""
+    import config
+    from lib.regulation_engine import RegulationEngine
+
+    reg = copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+    reg["phase_schedule"]["enabled"] = enabled
+    reg["phase_schedule"]["start_date"] = _START
+    reg["profile"] = reg["phase_schedule"]["phases"][0]["profile"]
+    if external_read is not None:
+        reg["external_sensor"]["enabled"] = True
+    if mutate is not None:
+        mutate(reg)
+    names = config._REG_NAMES
+    adapters = [FakeAdapter(n) for n in names]
+    clock = FakeTime(minutes * 60, date=date if date is not None else _date_at(offset_days))
+    if time_valid is not None:
+        clock.time_valid = time_valid
+    engine = RegulationEngine(
+        reg,
+        names,
+        config._REG_DIMENSIONS,
+        adapters,
+        FakeTh(temp, hum),
+        FakeCo2(800.0),
+        clock,
+        external_read=external_read,
+        logger=logger,
+        status_manager=status_manager,
+        clock=lambda: 0.0,
+        fallback_phase=fallback_phase,
+    )
+    return engine, adapters, names, clock
+
+
+class TestPhaseSchedule:
+    """Absolute, date-driven phase advance (2 weeks seedling, 3 stretch, bloom)."""
+
+    def test_phase_boundaries(self):
+        # The edges, not the middles: day 13 is the last seedling day, day 14
+        # the first stretch day, day 34 the last stretch day, day 35 bloom.
+        for offset, expected in ((0, "seedling"), (13, "seedling"), (14, "stretch"), (34, "stretch"), (35, "bloom")):
+            engine, adapters, names, clock = _sched_engine(offset_days=offset)
+            engine.tick(now_s=0.0)
+            assert engine.get_state()["phase"] == expected, offset
+
+    def test_date_before_start_holds_the_first_phase(self):
+        """A start_date in the future is not a crash and not phase -1."""
+        engine, adapters, names, clock = _sched_engine(offset_days=-40)
+        engine.tick(now_s=0.0)
+        assert engine.get_state()["phase"] == "seedling"
+
+    def test_rtc_failure_holds_the_phase_and_warns_once(self):
+        """(0,0,0) is a dead clock: never derive a phase from it."""
+        logger = pytest.importorskip("unittest.mock").Mock()
+        engine, adapters, names, clock = _sched_engine(offset_days=35, logger=logger)
+        engine.tick(now_s=0.0)
+        assert engine.get_state()["phase"] == "bloom"
+        logger.reset_mock()
+
+        clock.date = (0, 0, 0)
+        for i in range(5):
+            engine.tick(now_s=float(i))
+        assert engine.get_state()["phase"] == "bloom"
+        assert logger.warning.call_count == 1
+
+        # A recovered clock resumes normal advance (the failure did not poison
+        # the cached date).
+        clock.date = _date_at(35)
+        engine.tick(now_s=99.0)
+        assert engine.get_state()["phase"] == "bloom"
+
+    def test_same_day_ticks_do_not_re_derive(self):
+        """Only a date CHANGE does schedule math — 2879 of 2880 ticks are free."""
+        logger = pytest.importorskip("unittest.mock").Mock()
+        engine, adapters, names, clock = _sched_engine(offset_days=13, logger=logger)
+        engine.tick(now_s=0.0)
+        clock.date = _date_at(14)
+        engine.tick(now_s=1.0)
+        assert engine.get_state()["phase"] == "stretch"
+        changes = [c for c in logger.info.call_args_list if "phase" in str(c)]
+        assert len(changes) == 1
+        # Twenty more ticks on the same date must not log or activate again.
+        for i in range(20):
+            engine.tick(now_s=float(2 + i))
+        changes = [c for c in logger.info.call_args_list if "phase" in str(c)]
+        assert len(changes) == 1
+
+    def test_new_day_inside_a_phase_does_not_reactivate(self):
+        """A date change is the trigger, not the event: same phase = no-op."""
+        logger = pytest.importorskip("unittest.mock").Mock()
+        engine, adapters, names, clock = _sched_engine(offset_days=0, logger=logger)
+        engine.tick(now_s=0.0)
+        norm = engine._norm
+        for day in range(1, 13):  # still seedling every one of them
+            clock.date = _date_at(day)
+            engine.tick(now_s=float(day))
+        assert engine.get_state()["phase"] == "seedling"
+        assert engine._norm is norm  # profile state was never rebuilt
+        assert [c for c in logger.info.call_args_list if "phase" in str(c)] == []
+
+    def test_all_phases_elapsed_holds_the_last_one(self):
+        """A schedule with no open-ended phase still has to answer for day 500."""
+
+        def mutate(reg):
+            reg["phase_schedule"]["phases"][-1]["weeks"] = 1
+
+        engine, adapters, names, clock = _sched_engine(offset_days=500, mutate=mutate)
+        assert engine.get_state()["phase"] == "bloom"
+
+    def test_failing_notice_callback_does_not_stop_the_engine(self):
+        """The OLED sink is a notice, not a dependency."""
+        logger = pytest.importorskip("unittest.mock").Mock()
+        engine, adapters, names, clock = _sched_engine(offset_days=13, logger=logger)
+        engine.set_phase_change_callback(lambda *a: 1 / 0)
+        engine.tick(now_s=0.0)
+        clock.date = _date_at(14)
+        engine.tick(now_s=1.0)
+        assert engine.get_state()["phase"] == "stretch"
+        assert logger.warning.call_count == 1
+
+    def test_reboot_lands_in_the_right_phase_at_construction(self):
+        """A controller restarted deep in a grow must not replay week one."""
+        engine, adapters, names, clock = _sched_engine(offset_days=60)
+        assert engine.get_state()["phase"] == "bloom"
+        assert engine.get_state()["profile"] == "cannabis_bloom"
+
+    def test_phase_change_notifies_the_callback(self):
+        seen = []
+        engine, adapters, names, clock = _sched_engine(offset_days=13)
+        engine.set_phase_change_callback(lambda old, new, date, summary: seen.append((old, new, date, summary)))
+        engine.tick(now_s=0.0)
+        assert seen == []  # no change yet
+
+        clock.date = _date_at(14)
+        engine.tick(now_s=1.0)
+        assert len(seen) == 1
+        old, new, date, summary = seen[0]
+        assert old == "seedling"
+        assert new == "stretch"
+        assert date == _date_at(14)
+        assert summary["profile"] == "cannabis_stretch"
+
+    def test_summary_carries_what_the_operator_has_to_act_on(self):
+        """The notice prints the RH target, the light level and the humidifier."""
+        import config
+
+        seen = []
+        engine, adapters, names, clock = _sched_engine(offset_days=13)
+        engine.set_phase_change_callback(lambda old, new, date, summary: seen.append(summary))
+        engine.tick(now_s=0.0)
+        clock.date = _date_at(14)
+        engine.tick(now_s=1.0)
+
+        stretch = config.DEVICE_CONFIG["regulation"]["profiles"]["cannabis_stretch"]
+        base_light = config.DEVICE_CONFIG["regulation"]["regulators"]["growlight"]["light_level_day"]
+        summary = seen[0]
+        assert abs(summary["rh_ideal"] - stretch["day"]["humidity"]["at_50"]) < 1e-3
+        assert abs(summary["light_level_day"] - base_light) < 1e-3
+        assert summary["humidifier_silenced"] is False
+
+    def test_summary_reports_the_bloom_humidifier_as_silenced(self):
+        """Bloom pins the humidifier surface to zero — say so, do not just imply it."""
+        seen = []
+        engine, adapters, names, clock = _sched_engine(offset_days=34)
+        engine.set_phase_change_callback(lambda old, new, date, summary: seen.append(summary))
+        engine.tick(now_s=0.0)
+        clock.date = _date_at(35)
+        engine.tick(now_s=1.0)
+
+        assert seen[0]["profile"] == "cannabis_bloom"
+        assert seen[0]["humidifier_silenced"] is True
+
+    def test_rh_ideal_is_the_day_anchor_not_the_current_blend(self):
+        """The notice is about the phase, not about what time it happens to be."""
+        import config
+
+        seen = []
+        engine, adapters, names, clock = _sched_engine(offset_days=13, minutes=0)  # midnight
+        engine.set_phase_change_callback(lambda old, new, date, summary: seen.append(summary))
+        engine.tick(now_s=0.0)
+        clock.date = _date_at(14)
+        engine.tick(now_s=1.0)
+
+        stretch = config.DEVICE_CONFIG["regulation"]["profiles"]["cannabis_stretch"]
+        assert abs(seen[0]["rh_ideal"] - stretch["day"]["humidity"]["at_50"]) < 1e-3
+
+    def test_phase_summary_matches_the_change_payload(self):
+        """A boot-raised notice must read identically to a live one."""
+        seen = []
+        engine, adapters, names, clock = _sched_engine(offset_days=13)
+        engine.set_phase_change_callback(lambda old, new, date, summary: seen.append(summary))
+        engine.tick(now_s=0.0)
+        clock.date = _date_at(14)
+        engine.tick(now_s=1.0)
+
+        assert engine.phase_summary() == seen[0]
+
+    def test_phase_summary_is_available_without_any_transition(self):
+        """main.py asks a freshly booted engine, which has changed nothing yet."""
+        engine, adapters, names, clock = _sched_engine(offset_days=60)
+        summary = engine.phase_summary()
+        assert summary["profile"] == "cannabis_bloom"
+        assert summary["humidifier_silenced"] is True
+        assert summary["rh_ideal"] > 0.0
+
+    def test_light_level_override_applied_then_dropped(self):
+        """Seedlings run at 40 %; stretch has no override so the base 80 returns."""
+        import config
+
+        base = config.DEVICE_CONFIG["regulation"]["regulators"]["growlight"]["light_level_day"]
+        engine, adapters, names, clock = _sched_engine(offset_days=0, minutes=720)
+        engine.tick(now_s=0.0)
+        assert abs(_adapter(adapters, names, "growlight").value - 40.0) < 1e-3
+
+        clock.date = _date_at(14)
+        for i in range(5):  # slew-limited toward the new level
+            engine.tick(now_s=float(i))
+        assert abs(_adapter(adapters, names, "growlight").value - base) < 1e-3
+
+    def test_surface_override_applied_then_reverted(self):
+        """A phase's surface_overrides are merged on activation and dropped after.
+
+        Readings are held at 23 C / 43 %RH, which parks the exhaust surface at
+        its floor in the seedling and bloom phases, so the stretch phase's
+        override is the only thing that can move the fan. Bloom carries no
+        override, which proves the merge is re-done from the base surface each
+        time rather than accumulating.
+        """
+        from lib.regulation_surface import P_OFFSET
+
+        def mutate(reg):
+            reg["profiles"]["cannabis_stretch"]["surface_overrides"] = {"exhaust": {"offset": 500.0}}
+
+        engine, adapters, names, clock = _sched_engine(offset_days=0, mutate=mutate, temp=23.0, hum=43.0)
+        exhaust = _adapter(adapters, names, "exhaust")
+        floor = engine._regulators["exhaust"]["floor"]
+        i_exhaust = names.index("exhaust")
+
+        engine.tick(now_s=0.0)
+        assert engine._surface_params[i_exhaust][P_OFFSET] == 0.0
+        assert exhaust.value <= floor
+
+        clock.date = _date_at(14)
+        for i in range(10):  # slew-limited climb to the overridden ceiling
+            engine.tick(now_s=float(i))
+        assert engine._surface_params[i_exhaust][P_OFFSET] == 500.0
+        assert exhaust.value == 100.0
+
+        clock.date = _date_at(35)
+        for i in range(10, 40):
+            engine.tick(now_s=float(i))
+        assert engine._surface_params[i_exhaust][P_OFFSET] == 0.0
+        assert exhaust.value <= floor  # back off the ceiling the override held
+
+    def test_bloom_never_humidifies_however_dry_it_gets(self):
+        """Bloom's neutral surface override silences the humidifier for good.
+
+        The relay switches the appliance's 230 V supply, so "off" here means the
+        humidifier is unplugged for the whole phase — which is what bloom wants:
+        with no humidifier the tent settles at 45-49 %RH against a 43 % ideal,
+        and there is no dehumidifier to undo an over-correction. Feed it air far
+        drier than its own at_0 anchor (28 %RH) so the un-overridden surface
+        would be screaming for moisture, and assert nothing moves.
+        """
+        engine, adapters, names, clock = _sched_engine(offset_days=35, temp=23.0, hum=15.0)
+        humidifier = _adapter(adapters, names, "humidifier")
+        assert engine.get_state()["phase"] == "bloom"
+
+        for i in range(20):
+            engine.tick(now_s=float(i * 30))
+            assert humidifier.value == 0.0, i
+            assert humidifier.active is False, i
+        # Bone dry: the deviation confirms the surface was given every reason.
+        assert engine.get_state()["deviations"][1] == 0.0
+
+    def test_seedling_and_stretch_still_humidify(self):
+        """Control: the override is bloom's alone, not a global disable."""
+        for offset, phase in ((0, "seedling"), (14, "stretch")):
+            engine, adapters, names, clock = _sched_engine(offset_days=offset, temp=23.0, hum=15.0)
+            assert engine.get_state()["phase"] == phase
+            for i in range(10):
+                engine.tick(now_s=float(i * 30))
+            humidifier = _adapter(adapters, names, "humidifier")
+            assert humidifier.value > 0.0, phase
+            assert humidifier.active is True, phase
+
+    def test_advancing_into_bloom_drops_a_running_humidifier(self):
+        """The override lands on the phase change, not only on a cold boot."""
+        engine, adapters, names, clock = _sched_engine(offset_days=34, temp=23.0, hum=15.0)
+        humidifier = _adapter(adapters, names, "humidifier")
+        for i in range(5):
+            engine.tick(now_s=float(i * 30))
+        assert humidifier.value > 0.0  # stretch is still humidifying
+
+        clock.date = _date_at(35)
+        engine.tick(now_s=200.0)
+        assert engine.get_state()["phase"] == "bloom"
+        assert humidifier.value == 0.0
+        assert humidifier.active is False
+
+    def test_disabled_schedule_is_inert(self):
+        """enabled: False → the clock is never asked for a date and nothing moves."""
+        engine, adapters, names, clock = _sched_engine(offset_days=60, enabled=False)
+        for i in range(3):
+            engine.tick(now_s=float(i))
+        assert clock.date_calls == 0
+        assert engine.get_state()["phase"] is None
+        # The configured profile stays active — no schedule override.
+        assert engine.get_state()["profile"] == "cannabis_seedling"
+
+    def test_a_disabled_schedule_leaves_the_configured_profile_alone(self):
+        """Turning the schedule off is still a supported state (e.g. a mushroom run)."""
+        import config
+
+        base = config.DEVICE_CONFIG["regulation"]["regulators"]["growlight"]["light_level_day"]
+        engine, adapters, names = _engine(temp=24.0, hum=95.0, co2=700.0, minutes=720)
+        for i in range(5):
+            engine.tick(now_s=float(i))
+        assert engine.get_state()["phase"] is None
+        assert engine.get_state()["profile"] == "cubensis"
+        assert abs(_adapter(adapters, names, "growlight").value - base) < 1e-3
+
+    def test_the_shipped_config_boots_into_the_seedling_phase(self):
+        """Live config + the go-live date: the engine starts the grow in seedling."""
+        import copy as _copy
+
+        import config
+        from lib.regulation_engine import RegulationEngine
+
+        reg = _copy.deepcopy(config.DEVICE_CONFIG["regulation"])
+        names = config._REG_NAMES
+        adapters = [FakeAdapter(n) for n in names]
+        start = reg["phase_schedule"]["start_date"]
+        engine = RegulationEngine(
+            reg,
+            names,
+            config._REG_DIMENSIONS,
+            adapters,
+            FakeTh(23.0, 68.0),
+            FakeCo2(700.0),
+            FakeTime(720 * 60, date=start),
+            clock=lambda: 0.0,
+        )
+        engine.tick(now_s=0.0)
+        state = engine.get_state()
+        assert state["phase"] == "seedling"
+        assert state["profile"] == "cannabis_seedling"
+        assert abs(_adapter(adapters, names, "growlight").value - 40.0) < 1e-3
+
+
+class TestImplausibleRtcDate:
+    """A wrong date is the failure mode that actually happens, not (0,0,0).
+
+    now_date_tuple() only answers (0,0,0) when time.localtime() itself raises,
+    which it does not on-device. A flat DS3231 coin cell powers the chip up at
+    2000-01-01 and an unreadable DS3231 leaves the RP2040 at 2021-01-01 —
+    both perfectly well-formed dates that resolve to week one. Walking a
+    flowering canopy back to the seedling profile un-silences the humidifier
+    and loosens the mould gate, so the schedule must refuse to move on a date
+    it cannot believe.
+    """
+
+    BAD_DATES = ((0, 0, 0), (2000, 1, 1), (2021, 1, 1))
+
+    def test_implausible_dates_hold_the_phase_and_warn(self):
+        for bad in self.BAD_DATES:
+            logger = pytest.importorskip("unittest.mock").Mock()
+            status = FakeStatus()
+            engine, adapters, names, clock = _sched_engine(offset_days=35, logger=logger, status_manager=status)
+            engine.tick(now_s=0.0)
+            assert engine.get_state()["phase"] == "bloom", bad
+            logger.reset_mock()
+
+            clock.date = bad
+            for i in range(5):
+                engine.tick(now_s=float(i))
+            assert engine.get_state()["phase"] == "bloom", bad
+            assert engine.get_state()["profile"] == "cannabis_bloom", bad
+            assert logger.warning.call_count == 1, bad
+            assert status.calls == [("rtc_phase_held", True)], bad
+
+    def test_a_provider_that_disowns_its_clock_holds_too(self):
+        """time_valid is the provider's own verdict; believe it over the digits."""
+        status = FakeStatus()
+        engine, adapters, names, clock = _sched_engine(offset_days=35, status_manager=status)
+        engine.tick(now_s=0.0)
+        assert engine.get_state()["phase"] == "bloom"
+
+        clock.time_valid = False
+        clock.date = _date_at(500)  # would be bloom anyway; the point is it never asks
+        engine.tick(now_s=1.0)
+        assert status.active == {"rtc_phase_held"}
+
+    def test_recovery_clears_the_key_and_re_arms_the_warning(self):
+        """A second clock failure must warn again, not be swallowed by a one-shot."""
+        logger = pytest.importorskip("unittest.mock").Mock()
+        status = FakeStatus()
+        engine, adapters, names, clock = _sched_engine(offset_days=13, logger=logger, status_manager=status)
+        engine.tick(now_s=0.0)
+
+        clock.date = (2000, 1, 1)
+        engine.tick(now_s=1.0)
+        assert status.active == {"rtc_phase_held"}
+        assert logger.warning.call_count == 1
+
+        clock.date = _date_at(14)  # clock back: hold released AND the phase advances
+        engine.tick(now_s=2.0)
+        assert status.active == set()
+        assert engine.get_state()["phase"] == "stretch"
+
+        clock.date = (2000, 1, 1)  # and a second failure is reported, not muted
+        engine.tick(now_s=3.0)
+        assert status.active == {"rtc_phase_held"}
+        assert logger.warning.call_count == 2
+        assert status.calls == [
+            ("rtc_phase_held", True),
+            ("rtc_phase_held", False),
+            ("rtc_phase_held", True),
+        ]
+
+    def test_cold_boot_with_a_bad_clock_adopts_the_acknowledged_phase(self):
+        """The operator only ever acknowledges a phase the controller was in."""
+        status = FakeStatus()
+        engine, adapters, names, clock = _sched_engine(date=(2000, 1, 1), fallback_phase="bloom", status_manager=status)
+        state = engine.get_state()
+        assert state["phase"] == "bloom"
+        assert state["profile"] == "cannabis_bloom"
+        assert status.active == {"rtc_phase_held"}
+
+    def test_cold_boot_without_a_fallback_stays_at_phase_zero_and_warns(self):
+        """No stored phase: week one is all there is, but say so loudly."""
+        logger = pytest.importorskip("unittest.mock").Mock()
+        status = FakeStatus()
+        engine, adapters, names, clock = _sched_engine(date=(2021, 1, 1), logger=logger, status_manager=status)
+        assert engine.get_state()["phase"] is None  # never resolved
+        assert engine.get_state()["profile"] == "cannabis_seedling"  # the configured one
+        assert status.active == {"rtc_phase_held"}
+        assert logger.warning.call_count == 1
+
+    def test_an_unknown_fallback_phase_is_reported_not_guessed(self):
+        status = FakeStatus()
+        logger = pytest.importorskip("unittest.mock").Mock()
+        engine, adapters, names, clock = _sched_engine(
+            date=(2000, 1, 1), fallback_phase="harvest", logger=logger, status_manager=status
+        )
+        assert engine.get_state()["phase"] is None
+        assert logger.warning.call_count == 2  # the hold, and the unknown name
+
+    def test_the_clock_recovering_after_a_cold_boot_fallback_resolves_normally(self):
+        engine, adapters, names, clock = _sched_engine(date=(2000, 1, 1), fallback_phase="bloom")
+        assert engine.get_state()["phase"] == "bloom"
+
+        clock.date = _date_at(0)  # a real clock says day one after all
+        engine.tick(now_s=0.0)
+        assert engine.get_state()["phase"] == "seedling"
+
+    def test_a_failed_activation_leaves_the_old_phase_and_is_retried(self):
+        """_activate_profile allocates; a MemoryError must not half-commit."""
+        engine, adapters, names, clock = _sched_engine(offset_days=13)
+        engine.tick(now_s=0.0)
+        assert engine.get_state()["phase"] == "seedling"
+        norm = engine._norm
+
+        real = engine._activate_profile
+        calls = {"n": 0}
+
+        def flaky(name):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise MemoryError("no heap for a new normalizer")
+            return real(name)
+
+        engine._activate_profile = flaky
+        clock.date = _date_at(14)
+        with pytest.raises(MemoryError):
+            engine.tick(now_s=1.0)  # tick() does not catch; run() does
+        assert engine.get_state()["phase"] == "seedling"
+        assert engine.get_state()["profile"] == "cannabis_seedling"
+        assert engine._norm is norm  # nothing was swapped in
+
+        engine.tick(now_s=2.0)  # same date, but the cache was never committed
+        assert calls["n"] == 2
+        assert engine.get_state()["phase"] == "stretch"
+
+
+class _StubRelay:
+    """Stand-in for RelayHysteresisAdapter with a directly settable state."""
+
+    def __init__(self):
+        self.active = False
+
+
+class _StubHealth:
+    def __init__(self, unreachable=False):
+        self.unreachable = unreachable
+
+    def is_unreachable(self):
+        return self.unreachable
+
+
+def _watchdog_rig(window_s=100.0, min_rise=0.5):
+    """Humidifier rig whose relay state and sensor health the test controls.
+
+    The detector is driven through _check_humidifier directly: the states that
+    matter here (a command wobbling across the hysteresis band, a frozen
+    reading behind a dead sensor) cannot be produced by feeding physical
+    numbers into the surface, and steering the surface into them would test
+    the surface rather than the watchdog.
+    """
+    rig = _HumidifierRig(window_s=window_s, min_rise=min_rise)
+    relay = _StubRelay()
+    rig.engine._hum_adapter = relay
+    rig.engine._hum_use_adapter = True
+    return rig, relay
+
+
+class TestHumidifierWatchdogRelease:
+    """The warning has to be able to end, and it has to judge the right signal.
+
+    A warning that can never clear is not a conservative choice: StatusManager
+    sounds the buzzer only on the empty→non-empty edge of the warning set, so
+    one stuck key silences the audible alert for every warning raised after it
+    — soil_low, root_temp_*, rh_target_unreachable, the lot.
+    """
+
+    KEY = "humidifier_ineffective"
+
+    def test_advancing_into_bloom_clears_a_raised_warning(self):
+        """Bloom unplugs the humidifier; the RH-rise edge can never come."""
+        status = FakeStatus()
+
+        def mutate(reg):
+            reg["humidifier_watchdog"]["ineffective_window_s"] = 100.0
+
+        engine, adapters, names, clock = _sched_engine(
+            offset_days=34, temp=23.0, hum=15.0, mutate=mutate, status_manager=status
+        )
+        for i in range(10):  # a full window of unanswered demand in stretch
+            engine.tick(now_s=float(i * 30))
+        assert self.KEY in status.active
+
+        clock.date = _date_at(35)
+        engine.tick(now_s=400.0)
+        assert engine.get_state()["phase"] == "bloom"
+        assert self.KEY not in status.active
+
+    def test_a_window_with_the_relay_open_releases_the_warning(self):
+        """'Runs without effect' stops being true once it stops running."""
+        rig, relay = _watchdog_rig()
+        relay.active = True
+        for t in range(0, 160, 30):
+            rig.engine._check_humidifier(100.0, 60.0, float(t))
+        assert self.KEY in rig.status.active
+
+        relay.active = False
+        for t in range(180, 330, 30):  # a full window with the relay open
+            rig.engine._check_humidifier(0.0, 60.0, float(t))
+        assert self.KEY not in rig.status.active
+        assert rig.status.calls == [(self.KEY, True), (self.KEY, False)]
+
+    def test_a_short_off_spell_does_not_release_it(self):
+        rig, relay = _watchdog_rig()
+        relay.active = True
+        for t in range(0, 160, 30):
+            rig.engine._check_humidifier(100.0, 60.0, float(t))
+        assert self.KEY in rig.status.active
+
+        relay.active = False
+        for t in (180.0, 210.0, 240.0):  # 60 s of a 100 s window
+            rig.engine._check_humidifier(0.0, 60.0, t)
+        assert self.KEY in rig.status.active
+
+    def test_a_command_oscillating_inside_the_hysteresis_band_still_fires(self):
+        """The relay closes above 18 and only opens below 7.
+
+        A command bouncing 10-25 therefore holds the appliance CONTINUOUSLY
+        energised while a command-threshold window restarts on every dip — a
+        dry tank under a wobbling command was invisible. Judge the relay.
+        """
+        rig, relay = _watchdog_rig()
+        relay.active = True  # never opens: every command stays above off_below
+        commands = (25.0, 10.0, 25.0, 10.0, 25.0, 10.0)
+        for i, command in enumerate(commands):
+            rig.engine._check_humidifier(command, 60.0, float(i * 30))
+        assert self.KEY in rig.status.active
+        assert rig.alarms == ["supply"]
+
+    def test_a_dead_sensor_disarms_instead_of_convicting_a_full_tank(self):
+        """last_humidity FREEZES on failure, so a dead SHT31 reads as flat RH."""
+        rig, relay = _watchdog_rig()
+        rig.engine._th_health = _StubHealth(unreachable=True)
+        relay.active = True
+        for t in range(0, 400, 30):
+            rig.engine._check_humidifier(100.0, 60.0, float(t))
+        assert rig.status.calls == []
+        assert rig.alarms == []
+
+    def test_the_sensor_coming_back_re_arms_the_watchdog(self):
+        rig, relay = _watchdog_rig()
+        health = _StubHealth(unreachable=True)
+        rig.engine._th_health = health
+        relay.active = True
+        for t in range(0, 400, 30):
+            rig.engine._check_humidifier(100.0, 60.0, float(t))
+        assert rig.status.calls == []
+
+        health.unreachable = False
+        for t in range(400, 560, 30):
+            rig.engine._check_humidifier(100.0, 60.0, float(t))
+        assert self.KEY in rig.status.active
+
+    def test_a_sensor_dying_does_not_clear_a_standing_warning(self):
+        """Loss of evidence is not evidence of recovery — the tank is still dry."""
+        rig, relay = _watchdog_rig()
+        health = _StubHealth()
+        rig.engine._th_health = health
+        relay.active = True
+        for t in range(0, 160, 30):
+            rig.engine._check_humidifier(100.0, 60.0, float(t))
+        assert self.KEY in rig.status.active
+
+        health.unreachable = True
+        for t in range(180, 600, 30):
+            rig.engine._check_humidifier(100.0, 60.0, float(t))
+        assert self.KEY in rig.status.active
+
+
+# --- RH-target reachability monitor --------------------------------------
+
+
+class _RoomRig:
+    """Schedule engine with a settable room (intake) sensor on a fake clock."""
+
+    KEY = "rh_target_unreachable"
+
+    def __init__(self, offset_days=35, room=(21.0, 55.0), window_s=100.0, margin=None, dt=30.0):
+        self.room = room
+        self.reads = 0
+
+        def external_read():
+            self.reads += 1
+            return self.room
+
+        def mutate(reg):
+            ext = reg["external_sensor"]
+            ext["rh_unreachable_window_s"] = window_s
+            if margin is not None:
+                ext["rh_unreachable_margin"] = margin
+
+        self.status = FakeStatus()
+        self.logger = pytest.importorskip("unittest.mock").Mock()
+        self.engine, self.adapters, self.names, self.clock = _sched_engine(
+            offset_days=offset_days,
+            temp=23.0,
+            hum=45.0,
+            mutate=mutate,
+            external_read=external_read,
+            status_manager=self.status,
+            logger=self.logger,
+        )
+        self._t = 0.0
+        self._dt = dt
+
+    def tick(self):
+        self.engine.tick(now_s=self._t)
+        self._t += self._dt
+
+    def run(self, seconds):
+        end = self._t + seconds
+        while self._t <= end:
+            self.tick()
+
+    @property
+    def warned(self):
+        return self.KEY in self.status.active
+
+    @property
+    def warn_lines(self):
+        return [c for c in self.logger.warning.call_args_list if "unreachable" in str(c)]
+
+
+class TestRhTargetUnreachable:
+    """The tent cannot get below the room it stands in.
+
+    Exhaust dilutes toward room air and there is no dehumidifier, so an RH ideal
+    well under the room's own humidity is not a setpoint the actuators can miss
+    — it is one they cannot reach. The operator decision is to hold the setpoint
+    and raise a warning rather than slide the target to whatever is achievable
+    today. Monitor only: no actuator, no buzzer.
+    """
+
+    def test_sustained_excess_warns_once(self):
+        # Bloom ideal 43 %RH against a 55 % room: 12 points over a 5-point margin.
+        rig = _RoomRig(offset_days=35, room=(21.0, 55.0))
+        assert rig.engine.get_state()["phase"] == "bloom"
+        rig.tick()
+        assert rig.warned is False  # the window has to be sustained
+        rig.run(150.0)
+        assert rig.warned is True
+        assert rig.status.calls == [(rig.KEY, True)]
+        assert len(rig.warn_lines) == 1
+
+        rig.run(400.0)  # still over, still one warning
+        assert rig.status.calls == [(rig.KEY, True)]
+        assert len(rig.warn_lines) == 1
+
+    def test_same_room_never_warns_for_seedling(self):
+        """The verdict follows the ACTIVE profile, not a config constant.
+
+        Seedling wants 68 %RH — a 55 % room is drier than the target, which is
+        the humidifier's problem and not this detector's.
+        """
+        rig = _RoomRig(offset_days=0, room=(21.0, 55.0))
+        assert rig.engine.get_state()["phase"] == "seedling"
+        rig.run(600.0)
+        assert rig.warned is False
+        assert rig.status.calls == []
+
+    def test_advancing_into_bloom_flips_the_verdict(self):
+        """One room, one sensor: only the phase change makes it unreachable."""
+        rig = _RoomRig(offset_days=34, room=(21.0, 55.0))
+        rig.run(600.0)
+        assert rig.warned is False  # stretch wants 50 %RH: 5 points, not over
+
+        rig.clock.date = _date_at(35)
+        rig.run(300.0)
+        assert rig.engine.get_state()["phase"] == "bloom"
+        assert rig.warned is True
+
+    def test_within_the_margin_never_warns(self):
+        """Exactly at the margin is reachable enough — the check is strict."""
+        rig = _RoomRig(offset_days=35, room=(21.0, 48.0))  # 43 + 5.0 exactly
+        rig.run(600.0)
+        assert rig.warned is False
+
+    def test_recovery_clears_the_warning(self):
+        rig = _RoomRig(offset_days=35, room=(21.0, 55.0))
+        rig.run(150.0)
+        assert rig.warned is True
+
+        rig.room = (21.0, 44.0)  # window opened, room dried out
+        rig.tick()
+        assert rig.warned is False
+        assert rig.status.calls == [(rig.KEY, True), (rig.KEY, False)]
+
+        rig.room = (21.0, 55.0)  # and it can arm again
+        rig.run(150.0)
+        assert rig.warned is True
+        assert rig.status.calls == [(rig.KEY, True), (rig.KEY, False), (rig.KEY, True)]
+
+    def test_transient_excess_does_not_warn(self):
+        """A shower next door is not an unreachable target."""
+        rig = _RoomRig(offset_days=35, room=(21.0, 55.0))
+        rig.run(60.0)  # 60 s of a 100 s window
+        rig.room = (21.0, 44.0)
+        rig.tick()  # back under: the window is discarded
+        rig.room = (21.0, 55.0)
+        rig.run(60.0)
+        assert rig.warned is False
+
+    def test_sensor_returning_nothing_is_silent(self):
+        """A failed read is not evidence; the detector must simply do nothing."""
+        rig = _RoomRig(offset_days=35, room=None)
+        rig.run(600.0)
+        assert rig.reads > 0
+        assert rig.warned is False
+        assert rig.status.calls == []
+
+    def test_a_sensor_gap_discards_the_accumulated_window(self):
+        """Otherwise the first reading after an outage trips it on one sample."""
+        rig = _RoomRig(offset_days=35, room=(21.0, 55.0))
+        rig.run(60.0)  # 60 s of a 100 s window banked
+        rig.room = None
+        rig.tick()  # the sensor goes quiet
+        rig.room = (21.0, 55.0)
+        rig.run(60.0)  # 60 s more: enough only if the gap kept the bank
+        assert rig.warned is False
+        rig.run(100.0)  # a full fresh window does fire it
+        assert rig.warned is True
+
+    def test_a_silent_sensor_releases_a_raised_warning(self):
+        """A warning that can only clear from a dead sensor's readings never clears."""
+        rig = _RoomRig(offset_days=35, room=(21.0, 55.0))
+        rig.run(150.0)
+        assert rig.warned is True
+
+        rig.room = None
+        rig.tick()
+        assert rig.warned is False
+        assert rig.status.calls == [(rig.KEY, True), (rig.KEY, False)]
+
+        rig.room = (21.0, 55.0)  # and it re-establishes within one window
+        rig.run(150.0)
+        assert rig.warned is True
+
+    def test_disabled_sensor_is_never_even_read(self):
+        """enabled: False (the shipped default) → no I2C read, no verdict."""
+        status = FakeStatus()
+        reads = {"n": 0}
+
+        def external_read():
+            reads["n"] += 1
+            return (21.0, 55.0)
+
+        def mutate(reg):
+            reg["external_sensor"]["enabled"] = False
+            reg["external_sensor"]["rh_unreachable_window_s"] = 100.0
+
+        engine, adapters, names, clock = _sched_engine(
+            offset_days=35,
+            temp=23.0,
+            hum=45.0,
+            mutate=mutate,
+            external_read=external_read,
+            status_manager=status,
+        )
+        for i in range(40):
+            engine.tick(now_s=float(i * 30))
+        assert reads["n"] == 0
+        assert status.calls == []
+
+    def test_no_external_callable_is_inert(self):
+        """The sensor can be enabled in config and still fail to construct."""
+        status = FakeStatus()
+
+        def mutate(reg):
+            reg["external_sensor"]["enabled"] = True
+            reg["external_sensor"]["rh_unreachable_window_s"] = 100.0
+
+        engine, adapters, names, clock = _sched_engine(
+            offset_days=35, temp=23.0, hum=45.0, mutate=mutate, status_manager=status
+        )
+        for i in range(40):
+            engine.tick(now_s=float(i * 30))
+        assert status.calls == []
+
+    def test_one_read_serves_both_consumers(self):
+        """The exhaust multiplier and the monitor share a single I2C sample.
+
+        The sample moved out of _external_mult so both can see it; the exhaust
+        gate itself is still pinned by TestExternalGate.
+        """
+        rig = _RoomRig(offset_days=35, room=(35.0, 55.0))
+        for _ in range(5):
+            rig.tick()
+        assert rig.reads == 5
+        assert rig.engine._ext_h == 55.0

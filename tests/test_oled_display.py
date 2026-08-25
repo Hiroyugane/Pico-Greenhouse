@@ -574,6 +574,7 @@ class TestOLEDDisplayAdditionalCoverage:
         sl = Mock()
         sl.last_percent = None
         sl.last_raw = None
+        sl.last_root_temp_c = None
         sl.warn_pct_below = 20
         oled_display._soil_logger = sl
         oled_display._render_soil()
@@ -583,13 +584,28 @@ class TestOLEDDisplayAdditionalCoverage:
         oled_display._row = Mock()
         sl = Mock()
         sl.last_percent = 10
-        sl.last_raw = 800
+        sl.last_raw = 400
+        sl.last_root_temp_c = 21.4
         sl.warn_pct_below = 20
         oled_display._soil_logger = sl
         oled_display._render_soil()
         oled_display._row.assert_any_call("Moist: 10%", 0)
-        oled_display._row.assert_any_call("Raw:   800", 1)
-        oled_display._row.assert_any_call("LOW!", 3)
+        oled_display._row.assert_any_call("Raw:   400", 1)
+        oled_display._row.assert_any_call("Root:  21.4C", 2)
+        oled_display._row.assert_any_call("Warn<20%", 3)
+        oled_display._row.assert_any_call("LOW!", 4)
+
+    def test_render_soil_without_root_temperature(self, oled_display):
+        """A probe that has not answered yet shows the placeholder, not a crash."""
+        oled_display._row = Mock()
+        sl = Mock()
+        sl.last_percent = 55
+        sl.last_raw = 1200
+        sl.last_root_temp_c = None
+        sl.warn_pct_below = 20
+        oled_display._soil_logger = sl
+        oled_display._render_soil()
+        oled_display._row.assert_any_call("Root:  --C", 2)
 
     def test_render_co2_no_logger(self, oled_display):
         oled_display._row = Mock()
@@ -1150,3 +1166,308 @@ class TestDebugMenuLoggerSignature:
         oled_display.long_press_action()  # arm confirm
         oled_display.long_press_action()  # confirm → dispatch
         assert oled_display._debug_confirm_pending is False
+
+
+# ---------------------------------------------------------------------------
+# TestOLEDPhaseNotice — the acknowledge-required grow-phase notice
+# ---------------------------------------------------------------------------
+
+
+class TestOLEDPhaseNotice:
+    SUMMARY = {
+        "profile": "cannabis_bloom",
+        "light_level_day": 100.0,
+        "rh_ideal": 43.0,
+        "humidifier_silenced": True,
+    }
+
+    @staticmethod
+    def _wire(display):
+        """Attach recording raise/ack sinks, as main.py attaches the real ones."""
+        raises = []
+        acks = []
+        display._notice_raise_cb = lambda: raises.append(1)
+        display._notice_ack_cb = acks.append
+        return raises, acks
+
+    def _raise(self, display, old="stretch", new="bloom", date=(2026, 10, 6), summary=None):
+        display.show_phase_notice(old, new, date, self.SUMMARY if summary is None else summary)
+
+    # -- raising -----------------------------------------------------------
+
+    def test_notice_starts_empty(self, oled_display):
+        assert oled_display.has_pending_notice() is False
+
+    def test_raise_sets_the_slot(self, oled_display):
+        self._raise(oled_display)
+        assert oled_display.has_pending_notice() is True
+
+    def test_raise_fires_the_side_effect_callback_exactly_once(self, oled_display):
+        """One melody + one LED per raise — the notice does the waiting, not the buzzer."""
+        raises, _ = self._wire(oled_display)
+        self._raise(oled_display)
+        assert raises == [1]
+
+    def test_each_raise_fires_its_own_side_effect(self, oled_display):
+        raises, _ = self._wire(oled_display)
+        self._raise(oled_display, new="stretch")
+        self._raise(oled_display, new="bloom")
+        assert len(raises) == 2
+
+    def test_a_failing_side_effect_still_leaves_the_notice_up(self, oled_display, mock_event_logger):
+        """A dead buzzer must not cost the operator the notice itself."""
+
+        def _boom():
+            raise RuntimeError("no buzzer")
+
+        oled_display._notice_raise_cb = _boom
+        self._raise(oled_display)
+        assert oled_display.has_pending_notice() is True
+        assert mock_event_logger.warning.call_count == 1
+
+    # -- rendering ---------------------------------------------------------
+
+    def test_notice_renders_instead_of_the_current_menu(self, oled_display):
+        oled_display.current_menu = MENUS.index("system")
+        self._raise(oled_display)
+        oled_display._row = Mock()
+        oled_display._render_system = Mock()
+        oled_display.render()
+        oled_display._render_system.assert_not_called()
+        oled_display._row.assert_any_call("stretch -> bloom", 0)
+
+    def test_notice_lines_carry_what_actually_changed(self, oled_display):
+        """RH target, light level and humidifier state — not just the phase name."""
+        self._raise(oled_display)
+        oled_display._row = Mock()
+        oled_display.render()
+        oled_display._row.assert_any_call("stretch -> bloom", 0)
+        oled_display._row.assert_any_call("ab 2026-10-06", 1)
+        oled_display._row.assert_any_call("rF 43% Licht100%", 2)
+        oled_display._row.assert_any_call("Befeuchter AUS", 3)
+        oled_display._row.assert_any_call("Taste=verstanden", 4)
+
+    def test_notice_lines_fit_the_panel_width(self, oled_display):
+        """16 characters is the whole line; _row() would silently truncate."""
+        self._raise(oled_display)
+        for line in oled_display._pending_notice[0]:
+            assert len(line) <= 16, line
+
+    def test_running_humidifier_is_said_so(self, oled_display):
+        self._raise(oled_display, summary={"rh_ideal": 68.0, "light_level_day": 40.0})
+        oled_display._row = Mock()
+        oled_display.render()
+        oled_display._row.assert_any_call("Befeuchter AN", 3)
+        oled_display._row.assert_any_call("rF 68% Licht40%", 2)
+
+    def test_missing_summary_values_render_as_dashes(self, oled_display):
+        self._raise(oled_display, summary={})
+        oled_display._row = Mock()
+        oled_display.render()
+        oled_display._row.assert_any_call("rF --% Licht--%", 2)
+
+    def test_unknown_previous_phase_renders_a_placeholder(self, oled_display):
+        """A boot-raised notice may not know what the phase was before."""
+        self._raise(oled_display, old=None)
+        oled_display._row = Mock()
+        oled_display.render()
+        oled_display._row.assert_any_call("? -> bloom", 0)
+
+    def test_a_broken_date_does_not_break_the_notice(self, oled_display):
+        self._raise(oled_display, date=None)
+        oled_display._row = Mock()
+        oled_display.render()
+        oled_display._row.assert_any_call("ab sofort", 1)
+
+    # -- acknowledging -----------------------------------------------------
+
+    def test_short_press_acknowledges_instead_of_navigating(self, oled_display):
+        oled_display.current_menu = 2
+        self._raise(oled_display)
+        oled_display.next_menu()
+        assert oled_display.has_pending_notice() is False
+        assert oled_display.current_menu == 2  # the press did NOT move the menu
+
+    def test_only_the_next_press_navigates(self, oled_display):
+        oled_display.current_menu = 2
+        self._raise(oled_display)
+        oled_display.next_menu()  # acknowledges
+        oled_display.next_menu()  # navigates
+        assert oled_display.current_menu == 3
+
+    def test_acknowledge_hands_the_phase_to_the_callback(self, oled_display):
+        _, acks = self._wire(oled_display)
+        self._raise(oled_display)
+        oled_display.next_menu()
+        assert acks == ["bloom"]
+
+    def test_acknowledge_fires_the_callback_exactly_once(self, oled_display):
+        _, acks = self._wire(oled_display)
+        self._raise(oled_display)
+        oled_display.next_menu()
+        oled_display.next_menu()
+        oled_display.next_menu()
+        assert acks == ["bloom"]
+
+    def test_a_failing_ack_callback_still_clears_the_notice(self, oled_display, mock_event_logger):
+        """A failed write must not trap the operator on the notice screen."""
+
+        def _boom(_phase):
+            raise OSError("read-only fs")
+
+        oled_display._notice_ack_cb = _boom
+        self._raise(oled_display)
+        oled_display.next_menu()
+        assert oled_display.has_pending_notice() is False
+        assert mock_event_logger.warning.call_count == 1
+
+    def test_long_press_acknowledges_and_runs_no_page_action(self, oled_display, mock_reminder):
+        """The operator is looking at the notice, not at the page underneath it."""
+        oled_display.current_menu = MENUS.index("service")
+        self._raise(oled_display)
+        oled_display.long_press_action()
+        assert oled_display.has_pending_notice() is False
+        mock_reminder.reset.assert_not_called()
+
+    def test_long_press_after_acknowledge_runs_the_page_action(self, oled_display, mock_reminder):
+        oled_display.current_menu = MENUS.index("service")
+        self._raise(oled_display)
+        oled_display.long_press_action()  # acknowledges
+        oled_display.long_press_action()  # the page action, as usual
+        mock_reminder.reset.assert_called_once()
+
+    # -- timeouts and sleep ------------------------------------------------
+
+    async def test_menu_timeout_does_not_clear_the_notice(self, oled_display):
+        """A notice is not a menu page: only a press clears it."""
+        self._raise(oled_display)
+        oled_display.current_menu = 2
+        oled_display._menu_timeout_s = 1
+        oled_display._last_interaction_ms = 0
+
+        async def _fake_sleep(_s):
+            raise RuntimeError("stop")
+
+        with patch("lib.oled_display.asyncio.sleep", side_effect=_fake_sleep):
+            with pytest.raises(RuntimeError, match="stop"):
+                await oled_display.refresh_loop()
+
+        assert oled_display.has_pending_notice() is True
+
+    async def test_the_refresh_loop_keeps_drawing_the_notice(self, oled_display):
+        """It reappears by itself — no special-casing outside render()."""
+        self._raise(oled_display)
+        oled_display._render_notice = Mock()
+
+        async def _fake_sleep(_s):
+            raise RuntimeError("stop")
+
+        with patch("lib.oled_display.asyncio.sleep", side_effect=_fake_sleep):
+            with pytest.raises(RuntimeError, match="stop"):
+                await oled_display.refresh_loop()
+
+        assert oled_display._render_notice.called
+
+    def test_raising_a_notice_does_not_wake_a_sleeping_display(self, oled_display):
+        """The buzzer and the LED reach an absent operator; the panel need not burn."""
+        oled_display._display_active = False
+        self._raise(oled_display)
+        assert oled_display._display_active is False
+        assert oled_display.has_pending_notice() is True
+
+    def test_the_wake_press_shows_the_notice_without_acknowledging_it(self, oled_display):
+        """Nobody can confirm a screen they have not seen yet."""
+        self._raise(oled_display)
+        oled_display._display_active = False
+        oled_display.next_menu()
+        assert oled_display._display_active is True
+        assert oled_display.has_pending_notice() is True
+
+    def test_the_press_after_the_wake_acknowledges(self, oled_display):
+        self._raise(oled_display)
+        oled_display._display_active = False
+        oled_display.next_menu()  # wakes, shows
+        oled_display.next_menu()  # acknowledges
+        assert oled_display.has_pending_notice() is False
+
+    def test_a_dead_panel_can_still_be_acknowledged(self, oled_display):
+        """With no display there is no wake, so the press must not be swallowed."""
+        oled_display._oled = None
+        oled_display._display_active = False
+        self._raise(oled_display)
+        oled_display.next_menu()
+        assert oled_display.has_pending_notice() is False
+
+    def test_notice_renders_on_wake_from_sleep(self, oled_display):
+        self._raise(oled_display)
+        oled_display._display_active = False
+        oled_display._render_notice = Mock()
+        oled_display.next_menu()  # wake press
+        assert oled_display._render_notice.called
+
+
+# ---------------------------------------------------------------------------
+# TestOLEDRegPagePhase — the grow phase on the REGULATION page
+# ---------------------------------------------------------------------------
+
+
+class TestOLEDRegPagePhase:
+    @staticmethod
+    def _state(phase=None):
+        return {
+            "blend": 1.0,
+            "global_severity": 12.0,
+            "band": 2,
+            "latched": False,
+            "emergency": False,
+            "deviations": [64.0, 50.0, 48.0],
+            "severities": [14.0, 0.0, 2.0],
+            "profile": "cannabis_bloom",
+            "phase": phase,
+            "commanded": {
+                "heater": 0.0,
+                "heater_follower": 0.0,
+                "cooler": 60.0,
+                "humidifier": 0.0,
+                "exhaust": 40.0,
+                "circulation": 30.0,
+                "growlight": 80.0,
+            },
+        }
+
+    def test_active_phase_rides_in_the_title(self, oled_display):
+        """All five rows are spoken for, and the phase is what makes them readable."""
+        oled_display._header = Mock()
+        engine = Mock()
+        engine.get_state = Mock(return_value=self._state("bloom"))
+        oled_display._regulation = engine
+        oled_display._render_reg()
+        oled_display._header.assert_called_once_with("REG bloom")
+
+    def test_no_schedule_keeps_the_plain_title(self, oled_display):
+        """A mushroom build has no phase; the page must not print 'REG None'."""
+        oled_display._header = Mock()
+        engine = Mock()
+        engine.get_state = Mock(return_value=self._state(None))
+        oled_display._regulation = engine
+        oled_display._render_reg()
+        oled_display._header.assert_called_once_with("REGULATION")
+
+    def test_title_stays_inside_the_panel_width(self, oled_display):
+        oled_display._header = Mock()
+        engine = Mock()
+        engine.get_state = Mock(return_value=self._state("a-very-long-phase-name"))
+        oled_display._regulation = engine
+        oled_display._render_reg()
+        title = oled_display._header.call_args[0][0]
+        assert len(title) <= 16
+
+    def test_state_error_still_titles_the_page(self, oled_display):
+        oled_display._header = Mock()
+        oled_display._row = Mock()
+        engine = Mock()
+        engine.get_state = Mock(side_effect=RuntimeError("boom"))
+        oled_display._regulation = engine
+        oled_display._render_reg()
+        oled_display._header.assert_called_once_with("REGULATION")
+        oled_display._row.assert_any_call("State error", 0)

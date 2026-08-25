@@ -21,8 +21,8 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install Ruff
-        run: pip install ruff
+      - name: Install Ruff (same pin as the local venv)
+        run: pip install "$(grep -E '^ruff==' requirements.txt)"
 
       - name: Ruff check
         run: ruff check .

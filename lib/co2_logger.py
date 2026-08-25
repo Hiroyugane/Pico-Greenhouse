@@ -116,6 +116,10 @@ class CO2Logger:
         plausible_min_ppm: int = 0,
         plausible_max_ppm: int = _MAX_PLAUSIBLE_PPM,
         stale_after_s: int = 0,
+        warn_after_failures: int = 3,
+        backoff_start_s: int = 60,
+        backoff_max_s: int = 300,
+        unreachable_heartbeat_s: int = 0,
     ):
         self.uart = uart
         self.time_provider = time_provider
@@ -134,13 +138,31 @@ class CO2Logger:
         self.plausible_max_ppm = plausible_max_ppm
         self.stale_after_s = stale_after_s
 
+        try:
+            from lib.sensor_health import SensorHealth
+        except ImportError:  # frozen into the firmware as a top-level module
+            from sensor_health import SensorHealth
+
+        self.health = SensorHealth(
+            normal_interval_s=interval_s,
+            warn_after_failures=warn_after_failures,
+            backoff_start_s=backoff_start_s,
+            backoff_max_s=backoff_max_s,
+            unreachable_heartbeat_s=unreachable_heartbeat_s,
+        )
+
         # State
         self._last_ppm = None
         self._last_ok_ms = None
         self._stale_flagged = False
+        self._unreachable_flagged = False
         self.override_active = False
         self.read_failures = 0
         self.write_failures = 0
+        # Cause of the most recent failed read, so the single edge WARN can
+        # name it. Set only on the failure path; never cleared, because a
+        # recovery message has no use for it.
+        self._last_read_error = "unknown"
         self._started_ms = _ticks_ms()
         self._sensor_root = sensor_root
         self._sensor_type = sensor_type
@@ -205,6 +227,69 @@ class CO2Logger:
             self.status_manager.set_warning("co2_stale", stale)
         except Exception as exc:
             self.logger.debug("CO2Logger", f"stale alert failed: {exc}")
+
+    # -------------------------------------------------------------- reachability
+
+    def _update_unreachable_alert(self, active) -> None:
+        """Raise/clear the operator-visible co2_unreachable warning on edges only.
+
+        Mirrors _update_stale_alert: the StatusManager is the DURABLE channel
+        for "this sensor is dead", so the log only has to say it once.
+        """
+        if self.status_manager is None:
+            return
+        if active == self._unreachable_flagged:
+            return
+        self._unreachable_flagged = active
+        try:
+            self.status_manager.set_warning("co2_unreachable", active)
+        except Exception as exc:
+            self.logger.debug("CO2Logger", f"unreachable alert failed: {exc}")
+
+    def _note_read_failure(self) -> None:
+        """Report a missed reading per the edge-triggered policy.
+
+        A dead S8 produced 20 533 identical WARN lines over the 2026-07-31..08-07
+        field run — 100 % of every warning logged. Only the transition into
+        "unreachable" is worth a WARN; the state itself lives on the StatusManager.
+        """
+        if self.health.record_failure():
+            self.logger.warning(
+                "CO2Logger",
+                # The per-attempt detail is DEBUG by design, so this one line
+                # has to carry the cause or nobody ever sees it.
+                "sensor unreachable after {} failed reads; polling backed off to {}s ({})".format(
+                    self.health.consecutive_failures, self.health.interval_s(), self._last_read_error
+                ),
+            )
+            self._update_unreachable_alert(True)
+            return
+        if self.health.is_unreachable():
+            if self.health.heartbeat_due():
+                self.logger.warning(
+                    "CO2Logger",
+                    "sensor still unreachable ({} failed reads)".format(self.health.consecutive_failures),
+                )
+            else:
+                self.logger.debug("CO2Logger", "no reading (unreachable)")
+            return
+        self.logger.debug(
+            "CO2Logger",
+            "no reading",
+            consecutive=self.health.consecutive_failures,
+            failures=self.read_failures,
+        )
+
+    def _note_read_success(self) -> None:
+        """Report the end of an outage exactly once."""
+        if self.health.record_success():
+            self.logger.info(
+                "CO2Logger",
+                "sensor recovered after {}s unreachable ({} failed reads total)".format(
+                    self.health.last_outage_s, self.health.total_failures
+                ),
+            )
+        self._update_unreachable_alert(False)
 
     # ------------------------------------------------------------------ filename
 
@@ -295,6 +380,7 @@ class CO2Logger:
         # await between attempts gives the sensor time to respond
         # (~50-200 ms typical) without burning watchdog cycles.
         frame = None
+        read_error = None
         for attempt in range(self.max_retries):
             try:
                 if self.uart.any():
@@ -302,6 +388,7 @@ class CO2Logger:
                     if frame:
                         break
             except Exception as exc:
+                read_error = str(exc)[:80]
                 self.logger.debug("CO2Logger", f"uart read attempt failed: {exc}")
             if attempt < self.max_retries - 1:
                 await asyncio.sleep_ms(self.retry_delay_ms)
@@ -314,18 +401,28 @@ class CO2Logger:
         )
         if ppm is None:
             self.read_failures += 1
+            # No exception on this path when the sensor simply says nothing, so
+            # spell that out rather than leaving the edge WARN cause-less.
+            # Allocates only on the failure path.
+            if read_error is not None:
+                self._last_read_error = read_error
+            elif frame is None:
+                self._last_read_error = "no reply frame on the UART"
+            else:
+                self._last_read_error = "reply rejected (checksum or range)"
             in_warmup = (_ticks_ms() - self._started_ms) < self.warmup_s * 1000
             if in_warmup:
+                # Warm-up misses are expected, so they neither escalate nor
+                # feed the health machine — a sensor that answers as soon as
+                # it is warm must not start life one failure into an outage.
                 self.logger.debug("CO2Logger", "no reading (warmup)")
             else:
-                self.logger.warning(
-                    "CO2Logger",
-                    f"no reading (failures={self.read_failures})",
-                )
+                self._note_read_failure()
             self._update_stale_alert()
             return
 
         self.last_ppm = ppm
+        self._note_read_success()
         self._update_stale_alert()
         self._update_override(ppm)
 
@@ -342,11 +439,19 @@ class CO2Logger:
             self.logger.error("CO2Logger", f"write failed: {exc}")
 
     async def log_loop(self) -> None:
-        """Async poll loop. Yields between polls so the watchdog stays fed."""
+        """Async poll loop. Yields between polls so the watchdog stays fed.
+
+        The sleep is the health machine's *effective* interval, so an
+        unreachable sensor is polled on the backoff ladder (60/120/240/300 s)
+        instead of every interval_s. poll_due() is the second guard: the
+        error path below retries after 1 s, and without it a wedged UART
+        would be hammered once a second.
+        """
         while True:
             try:
-                await self._poll_once()
-                await asyncio.sleep(self.interval_s)
+                if self.health.poll_due():
+                    await self._poll_once()
+                await asyncio.sleep(self.health.interval_s())
             except asyncio.CancelledError:
                 self.logger.warning("CO2Logger", "log loop cancelled")
                 raise
